@@ -1,19 +1,21 @@
-"""Settings shared by the FIRMS ingest and dbt DAGs.
+"""Settings shared by the FIRMS ingest, dbt and maintenance DAGs.
 
-Everything lives in the Parquet lake; DuckDB is only the engine dbt runs on.
-- bronze (dlt): immutable, append-only.
-  {FIRMS_LAKE_PATH}/firms_raw/{table}/load_date=YYYY-MM-DD/{load_id}.{file_id}.parquet
-  Every load is kept, so this is the versioned history; `_dlt_loads` in the
-  same folder records each load.
-- silver / gold (dbt, `materialized: external`): rebuilt on each dbt run.
-  {FIRMS_LAKE_PATH}/silver/{table}/data_N.parquet
-  {FIRMS_LAKE_PATH}/gold/{table}/data_N.parquet
-- firms.duckdb: views over silver/gold, so dbt tests and ad-hoc queries work.
-Any engine (DuckDB, Spark, Trino, a warehouse...) can read the lake directly.
+All layers live in one DuckLake: Parquet files plus a catalog that records which
+files make up each table and each version (snapshot). That gives atomic writes
+(readers never see half-written tables), incremental updates and time travel.
 
-Gotcha: when a silver/gold table has no rows, dbt-duckdb writes one all-NULL
-row so the Parquet keeps its schema (its DuckDB view filters it out). Engines
-reading the Parquet directly should filter `_dlt_load_id is not null`.
+    {FIRMS_LAKE_PATH}/catalog.sqlite      DuckLake catalog (SQLite, WAL mode)
+    {FIRMS_LAKE_PATH}/files/              Parquet files managed by DuckLake
+        firms_raw/<table>/...             bronze (dlt): append-only, every load kept
+        silver/<table>/acq_month=.../     silver (dbt): incremental by acquisition month
+    gold                                  views over silver (dbt), no files of their own
+
+Attached as `lake`, so tables are `lake.firms_raw.*`, `lake.silver.*`, `lake.gold.*`.
+
+Concurrency: the SQLite catalog takes one writer at a time (two concurrent
+commits fail with "database is locked"), so every task that writes to the lake
+(dlt loads, dbt models, maintenance) uses the 1-slot LAKE_WRITER_POOL. Readers
+(the backend) never block writers thanks to WAL mode.
 """
 
 import os
@@ -27,20 +29,15 @@ AIRFLOW_HOME = Path(os.getenv("AIRFLOW_HOME", "/usr/local/airflow"))
 # etl/docker-compose.override.yml so the backend and other services share it.
 DATA_DIR = AIRFLOW_HOME / "data"
 
-# Local folder by default; can be a bucket URL (s3://..., gs://...) later.
-# dbt's sources.yml reads the same env var with the same default.
-LAKE_PATH = os.getenv("FIRMS_LAKE_PATH", str(DATA_DIR / "lake"))
-RAW_DATASET = "firms_raw"
-LAKE_LAYOUT = "{table_name}/load_date={YYYY}-{MM}-{DD}/{load_id}.{file_id}.{ext}"
-# Folders dbt writes into (its schema names, see dbt_project.yml).
-DBT_LAYERS = ("silver", "gold")
-
 # dbt's profiles.yml reads the same env var with the same default.
-DUCKDB_PATH = os.getenv("FIRMS_DUCKDB_PATH", str(DATA_DIR / "firms.duckdb"))
+LAKE_PATH = os.getenv("FIRMS_LAKE_PATH", str(DATA_DIR / "lake"))
+CATALOG_PATH = f"{LAKE_PATH}/catalog.sqlite"
+LAKE_DATA_PATH = f"{LAKE_PATH}/files/"
+LAKE_ALIAS = "lake"
+RAW_DATASET = "firms_raw"
 
-# DuckDB allows a single writer: every dbt task uses this 1-slot pool
-# (defined in airflow_settings.yaml for local dev).
-DUCKDB_POOL = "duckdb"
+# Single writer for the DuckLake catalog (defined in airflow_settings.yaml for local dev).
+LAKE_WRITER_POOL = "ducklake"
 
 # HTTP connection whose password is the FIRMS MAP_KEY.
 FIRMS_CONN_ID = "firms_default"
@@ -62,46 +59,71 @@ def get_map_key() -> str:
     return map_key
 
 
-def ensure_lake_layout() -> None:
-    """Create the lake's layer folders on local disk (no-op for bucket URLs).
+def ensure_catalog() -> None:
+    """Create the lake folder and put the SQLite catalog in WAL mode (idempotent).
 
-    DuckDB's COPY doesn't create parent folders, so dbt's external models need
-    lake/silver and lake/gold to exist before they write their table folders.
-
-    The raw dataset folder (firms_raw) is NOT created here: dlt creates it on
-    its first load, and fails if the folder exists without its `init` marker.
+    WAL lets readers (the backend) keep the catalog open while a writer commits;
+    with SQLite's default journal a reader blocks commits. The setting is stored
+    in the file, so it only has to happen once; DuckLake initializes its tables
+    in this (possibly empty) SQLite file on first attach.
     """
-    if "://" in LAKE_PATH:
-        return
-    for layer in DBT_LAYERS:
-        os.makedirs(os.path.join(LAKE_PATH, layer), exist_ok=True)
+    import sqlite3
+
+    os.makedirs(LAKE_DATA_PATH, exist_ok=True)
+    con = sqlite3.connect(CATALOG_PATH)
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+    finally:
+        con.close()
+    # Airflow (uid 50000) and the backend (host user) both open the catalog, and
+    # in WAL mode every opener writes to the -shm file. SQLite creates -wal/-shm
+    # with the same permissions as the catalog, so make it writable for both.
+    try:
+        os.chmod(CATALOG_PATH, 0o666)
+    except PermissionError:
+        pass  # not the owner: whoever created it already set the mode
+
+
+def attach_sql(read_only: bool = False) -> str:
+    """ATTACH statement for the lake (needs the ducklake and sqlite extensions)."""
+    options = f"DATA_PATH '{LAKE_DATA_PATH}'" + (", READ_ONLY" if read_only else "")
+    return f"ATTACH 'ducklake:sqlite:{CATALOG_PATH}' AS {LAKE_ALIAS} ({options})"
 
 
 def raw_pipeline(name: str):
-    """dlt pipeline that appends Parquet files to the raw lake."""
+    """dlt pipeline that appends to the bronze tables of the lake."""
     import dlt
+    from dlt.destinations.impl.ducklake.configuration import DuckLakeCredentials
 
-    ensure_lake_layout()
+    ensure_catalog()
+    credentials = DuckLakeCredentials(LAKE_ALIAS, catalog=f"sqlite:///{CATALOG_PATH}", storage=LAKE_DATA_PATH)
     return dlt.pipeline(
         pipeline_name=name,
-        destination=dlt.destinations.filesystem(bucket_url=LAKE_PATH, layout=LAKE_LAYOUT),
+        destination=dlt.destinations.ducklake(credentials=credentials),
         dataset_name=RAW_DATASET,
     )
 
 
 def last_loaded_dates(tables: list[str]) -> dict[str, "date"]:  # noqa: F821
-    """table -> max(acq_date) found in the lake, for tables that have files."""
-    import glob
-
+    """table -> max(acq_date) in the bronze tables that exist and have rows."""
     import duckdb
 
+    if not os.path.exists(CATALOG_PATH):
+        return {}
     out = {}
-    with duckdb.connect() as con:  # in-memory: reads Parquet, no lock on the warehouse
+    with duckdb.connect() as con:
+        con.execute(attach_sql(read_only=True))
+        existing = {
+            row[0]
+            for row in con.execute(
+                "select table_name from information_schema.tables where table_catalog = ? and table_schema = ?",
+                [LAKE_ALIAS, RAW_DATASET],
+            ).fetchall()
+        }
         for table in tables:
-            pattern = f"{LAKE_PATH}/{RAW_DATASET}/{table}/*/*.parquet"
-            if "://" not in LAKE_PATH and not glob.glob(pattern):
+            if table not in existing:
                 continue
-            last = con.execute(f"select max(acq_date) from read_parquet('{pattern}')").fetchone()[0]
+            last = con.execute(f'select max(acq_date) from {LAKE_ALIAS}.{RAW_DATASET}."{table}"').fetchone()[0]
             if last is not None:
                 out[table] = last
     return out

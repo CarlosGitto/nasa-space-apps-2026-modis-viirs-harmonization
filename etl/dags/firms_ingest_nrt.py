@@ -2,8 +2,8 @@
 ## FIRMS ingest — NRT (dlt)
 
 Lands MODIS and VIIRS **near-real-time** active fire detections from the
-[FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/) in the raw
-Parquet lake (`firms_raw/*_nrt/load_date=.../*.parquet`, one table per product).
+[FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/) in the bronze
+tables of the DuckLake (`lake.firms_raw.*_nrt`, one table per product).
 Append-only: every load is kept as a new version; dbt silver deduplicates.
 
 Each run covers the day of its data interval plus the `day_range - 1` days
@@ -20,7 +20,7 @@ from datetime import timedelta
 import pendulum
 from airflow.sdk import Param, dag, task
 
-from include.firms.config import FIRMS_RAW_NRT
+from include.firms.config import FIRMS_RAW_NRT, LAKE_WRITER_POOL
 
 
 @dag(
@@ -37,7 +37,8 @@ from include.firms.config import FIRMS_RAW_NRT
     tags=["firms", "nrt", "dlt", "ingest"],
 )
 def firms_ingest_nrt():
-    @task(outlets=[FIRMS_RAW_NRT])
+    # The load writes to the DuckLake catalog: one writer at a time.
+    @task(outlets=[FIRMS_RAW_NRT], pool=LAKE_WRITER_POOL)
     def load_firms_nrt(params=None, data_interval_start=None):
         from include.firms.config import get_map_key, raw_pipeline
         from include.firms.source import NRT_PRODUCTS, firms_nrt_source
@@ -52,7 +53,6 @@ def firms_ingest_nrt():
                 ranges={product: (start, end) for product in NRT_PRODUCTS},
                 area=params["area"],
             ),
-            loader_file_format="parquet",
         )
         print(load_info)
         print(pipeline.last_trace.last_normalize_info)

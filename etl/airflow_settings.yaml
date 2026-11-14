@@ -17,9 +17,9 @@ airflow:
       conn_extra:
         example_extra_field: example-value
   pools:
-    - pool_name: duckdb
+    - pool_name: ducklake
       pool_slot: 1
-      pool_description: Single writer for the FIRMS DuckDB warehouse (dbt tasks)
+      pool_description: Single writer for the FIRMS DuckLake catalog (dlt loads, dbt models, maintenance)
   variables:
     - variable_name:
       variable_value:

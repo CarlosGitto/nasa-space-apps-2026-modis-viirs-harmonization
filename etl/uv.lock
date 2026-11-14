@@ -679,8 +679,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
-duckdb = [
+ducklake = [
     { name = "duckdb" },
+    { name = "pyarrow" },
 ]
 parquet = [
     { name = "pyarrow" },
@@ -729,7 +730,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "astronomer-cosmos" },
-    { name = "dlt", extra = ["duckdb", "parquet"] },
+    { name = "dlt", extra = ["ducklake", "parquet"] },
 ]
 
 [package.dev-dependencies]
@@ -741,7 +742,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "astronomer-cosmos", specifier = "==1.15.1" },
-    { name = "dlt", extras = ["duckdb", "parquet"], specifier = "==1.32.0" },
+    { name = "dlt", extras = ["ducklake", "parquet"], specifier = "==1.32.0" },
 ]
 
 [package.metadata.requires-dev]

@@ -3,11 +3,11 @@ version: 2
 sources:
   - name: firms_raw
     description: >
-      Raw FIRMS detections landed by dlt in the Parquet lake (bronze).
-      Append-only: one file per load, partitioned by load_date, so every
-      version is kept. Same path as FIRMS_LAKE_PATH in include/firms/config.py.
-    meta:
-      external_location: "read_parquet('{{ env_var('FIRMS_LAKE_PATH', '/usr/local/airflow/data/lake') }}/firms_raw/{name}/*/*.parquet', hive_partitioning = true, union_by_name = true)"
+      Raw FIRMS detections landed by dlt in the DuckLake (bronze). Append-only:
+      every load is kept as new rows with its own _dlt_load_id, so every version
+      of a detection is there; silver keeps the latest one.
+    database: lake
+    schema: firms_raw
     tables:
       # NRT
       - name: modis_nrt

@@ -27,13 +27,14 @@ models:
     description: VIIRS Standard Processing detections, same rules as silver_modis_nrt.
     columns: *silver_columns
 
-  # ---------------- gold: only clean rows, original columns + lineage ----------------
+  # ---------------- gold: views over silver, only clean rows + lineage ----------------
   - name: gold_modis_nrt
     description: Clean MODIS NRT detections (silver rows with no dq_issue).
     data_tests: &gold_key_test
       - unique_combination:
           arguments:
             columns: [latitude, longitude, acq_date, acq_time, satellite]
+            recent_only: true  # months touched by the latest load
     columns: &gold_modis_columns
       - name: acq_datetime_utc
         data_tests: [not_null]
