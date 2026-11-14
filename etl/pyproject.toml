@@ -7,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.14,<3.15"
 # Keep in sync with requirements.txt: that file is what the Astro image installs.
 dependencies = [
-    "dlt[duckdb,parquet]==1.32.0",
+    "dlt[ducklake,parquet]==1.32.0",
     "astronomer-cosmos==1.15.1",
 ]
 

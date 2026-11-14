@@ -3,7 +3,7 @@
 
 Loads MODIS and VIIRS **standard (science-quality)** active fire detections
 from the [FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/) in
-the raw Parquet lake (`firms_raw/*_sp/load_date=.../*.parquet`, one table per
+the bronze tables of the DuckLake (`lake.firms_raw.*_sp`, one table per
 product). SP data is published with a lag of a few months and replaces NRT as
 the reference record. Append-only: every load is kept as a new version; dbt
 silver deduplicates.
@@ -28,7 +28,7 @@ from datetime import date, timedelta
 import pendulum
 from airflow.sdk import Param, dag, task
 
-from include.firms.config import FIRMS_RAW_SP
+from include.firms.config import FIRMS_RAW_SP, LAKE_WRITER_POOL
 
 # First day loaded when a product has nothing in the lake yet.
 SP_DEFAULT_START = date(2025, 1, 1)
@@ -53,7 +53,8 @@ SP_DEFAULT_START = date(2025, 1, 1)
     tags=["firms", "sp", "dlt", "ingest"],
 )
 def firms_ingest_sp():
-    @task(outlets=[FIRMS_RAW_SP])
+    # The load writes to the DuckLake catalog: one writer at a time.
+    @task(outlets=[FIRMS_RAW_SP], pool=LAKE_WRITER_POOL)
     def load_firms_sp(params=None):
         from include.firms.config import get_map_key, last_loaded_dates, raw_pipeline
         from include.firms.source import SP_PRODUCTS, fetch_availability, firms_sp_source
@@ -99,7 +100,6 @@ def firms_ingest_sp():
         pipeline = raw_pipeline("firms_sp")
         load_info = pipeline.run(
             firms_sp_source(map_key=map_key, ranges=ranges, area=params["area"]),
-            loader_file_format="parquet",
         )
         print(load_info)
         print(pipeline.last_trace.last_normalize_info)

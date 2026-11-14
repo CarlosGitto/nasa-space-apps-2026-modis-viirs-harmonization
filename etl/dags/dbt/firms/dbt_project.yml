@@ -6,29 +6,30 @@ model-paths: ["models"]
 macro-paths: ["macros"]
 
 # Two independent paths, selected by tag from Airflow (Cosmos):
-#   nrt: lake firms_raw/*_nrt -> silver.*_nrt -> gold.*_nrt   (firms_dbt_nrt)
-#   sp:  lake firms_raw/*_sp  -> silver.*_sp  -> gold.*_sp    (firms_dbt_sp)
+#   nrt: lake.firms_raw.*_nrt -> lake.silver.*_nrt -> lake.gold.*_nrt   (firms_dbt_nrt)
+#   sp:  lake.firms_raw.*_sp  -> lake.silver.*_sp  -> lake.gold.*_sp    (firms_dbt_sp)
 #
-# Every model is `external`: the data is written as Parquet in the lake, one
-# folder per table (see macros/external_location.sql), and DuckDB only keeps a
-# view over it. DuckDB is just the engine, so another engine/warehouse can read
-# or replace it. On local disk the layer folders (lake/silver, lake/gold) must
-# exist first: Airflow creates them (include/firms/config.py:ensure_lake_layout).
+# Everything lives in the DuckLake attached as `lake` (profiles.yml):
+# - silver: incremental. Each run recomputes only the acquisition months that
+#   received new loads in bronze (see macros/firms_silver.sql) and replaces
+#   them atomically (delete+insert on acq_month, partitioned by acq_month).
+#   `dbt run --full-refresh` rebuilds everything from bronze.
+# - gold: views over silver (clean rows only), so they never need rebuilding.
 models:
   firms:
-    +materialized: external
-    +options:
-      per_thread_output: true   # write a folder (<table>/data_N.parquet), not a single file
-      overwrite: true           # replace the folder's contents on every run
+    +database: lake
     nrt:
       +tags: [nrt]
-      silver:
+      silver: &silver
         +schema: silver
-      gold:
+        +materialized: incremental
+        +incremental_strategy: delete+insert
+        +unique_key: acq_month
+        +partitioned_by: [acq_month]
+      gold: &gold
         +schema: gold
+        +materialized: view
     sp:
       +tags: [sp]
-      silver:
-        +schema: silver
-      gold:
-        +schema: gold
+      silver: *silver
+      gold: *gold

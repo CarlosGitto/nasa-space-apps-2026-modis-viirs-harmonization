@@ -5,3 +5,7 @@ FROM astrocrpublic.azurecr.io/runtime:3.3-12
 # duckdb is pinned to the same version dlt uses, so both read/write the same file format.
 RUN python -m venv dbt_venv && \
     dbt_venv/bin/pip install --no-cache-dir dbt-core==1.12.6 dbt-duckdb==1.11.1 duckdb==1.5.6
+
+# DuckLake + SQLite catalog extensions, preinstalled so tasks don't download them
+# at runtime. Both venvs use DuckDB 1.5.6 and share ~/.duckdb/extensions.
+RUN python -c "import duckdb; duckdb.execute('INSTALL ducklake; INSTALL sqlite')"

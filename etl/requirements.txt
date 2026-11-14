@@ -1,2 +1,2 @@
-dlt[duckdb,parquet]==1.32.0
+dlt[ducklake,parquet]==1.32.0
 astronomer-cosmos==1.15.1
