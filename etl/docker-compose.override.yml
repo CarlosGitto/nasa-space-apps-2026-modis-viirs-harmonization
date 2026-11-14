@@ -1,0 +1,17 @@
+# Read automatically by `astro dev start/restart` (local dev only).
+# Mounts the repo-level data/ folder (outside etl/) into every Airflow
+# container, so the lake and the DuckDB file are shared with the rest of the
+# repo (backend, notebooks...). Paths are relative to this etl/ folder.
+services:
+  scheduler:
+    volumes:
+      - ../data:/usr/local/airflow/data
+  dag-processor:
+    volumes:
+      - ../data:/usr/local/airflow/data
+  triggerer:
+    volumes:
+      - ../data:/usr/local/airflow/data
+  api-server:
+    volumes:
+      - ../data:/usr/local/airflow/data
