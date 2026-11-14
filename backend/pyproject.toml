@@ -1,0 +1,23 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Minimal API over the FIRMS gold lake (FastAPI + DuckDB spatial)"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "fastapi[standard]==0.162.0",
+    # Same DuckDB as the ETL (etl/Dockerfile).
+    "duckdb==1.5.6",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.uv]
+required-version = ">=0.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
