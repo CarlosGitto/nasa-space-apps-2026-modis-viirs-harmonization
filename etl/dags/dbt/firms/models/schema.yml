@@ -1,0 +1,78 @@
+version: 2
+
+# Tests are shared between NRT and SP through YAML anchors (&name / *name).
+
+models:
+  # ---------------- silver: light normalization, invalid rows flagged ----------------
+  - name: silver_modis_nrt
+    description: >
+      MODIS NRT detections from the lake, normalized, latest version per
+      detection. Invalid rows are kept with the reason in dq_issue (null = valid).
+    columns: &silver_columns
+      - name: dq_issue
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [missing_key, invalid_coordinates, invalid_brightness, invalid_frp, invalid_confidence, invalid_daynight]
+
+  - name: silver_viirs_nrt
+    description: VIIRS NRT detections (all VIIRS satellites), same rules as silver_modis_nrt.
+    columns: *silver_columns
+
+  - name: silver_modis_sp
+    description: MODIS Standard Processing detections, same rules as silver_modis_nrt.
+    columns: *silver_columns
+
+  - name: silver_viirs_sp
+    description: VIIRS Standard Processing detections, same rules as silver_modis_nrt.
+    columns: *silver_columns
+
+  # ---------------- gold: only clean rows, original columns + lineage ----------------
+  - name: gold_modis_nrt
+    description: Clean MODIS NRT detections (silver rows with no dq_issue).
+    data_tests: &gold_key_test
+      - unique_combination:
+          arguments:
+            columns: [latitude, longitude, acq_date, acq_time, satellite]
+    columns: &gold_modis_columns
+      - name: acq_datetime_utc
+        data_tests: [not_null]
+      - name: confidence
+        description: 0-100.
+        data_tests: [not_null]
+      - name: daynight
+        data_tests: &daynight_test
+          - accepted_values:
+              arguments:
+                values: [D, N]
+      - name: _dlt_load_id
+        description: Load that produced this version (see _dlt_loads in the lake).
+        data_tests: [not_null]
+
+  - name: gold_viirs_nrt
+    description: Clean VIIRS NRT detections (silver rows with no dq_issue).
+    data_tests: *gold_key_test
+    columns: &gold_viirs_columns
+      - name: acq_datetime_utc
+        data_tests: [not_null]
+      - name: confidence
+        description: l (low) / n (nominal) / h (high).
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [l, n, h]
+      - name: daynight
+        data_tests: *daynight_test
+      - name: _dlt_load_id
+        description: Load that produced this version (see _dlt_loads in the lake).
+        data_tests: [not_null]
+
+  - name: gold_modis_sp
+    description: Clean MODIS Standard Processing detections.
+    data_tests: *gold_key_test
+    columns: *gold_modis_columns
+
+  - name: gold_viirs_sp
+    description: Clean VIIRS Standard Processing detections.
+    data_tests: *gold_key_test
+    columns: *gold_viirs_columns

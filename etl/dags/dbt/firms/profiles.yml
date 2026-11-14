@@ -1,0 +1,8 @@
+firms:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # Engine file: only holds views over the Parquet lake (see include/firms/config.py).
+      path: "{{ env_var('FIRMS_DUCKDB_PATH', '/usr/local/airflow/data/firms.duckdb') }}"
+      threads: 1

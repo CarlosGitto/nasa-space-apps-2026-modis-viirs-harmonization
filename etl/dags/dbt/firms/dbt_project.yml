@@ -1,0 +1,34 @@
+name: firms
+version: "1.0.0"
+profile: firms
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+
+# Two independent paths, selected by tag from Airflow (Cosmos):
+#   nrt: lake firms_raw/*_nrt -> silver.*_nrt -> gold.*_nrt   (firms_dbt_nrt)
+#   sp:  lake firms_raw/*_sp  -> silver.*_sp  -> gold.*_sp    (firms_dbt_sp)
+#
+# Every model is `external`: the data is written as Parquet in the lake, one
+# folder per table (see macros/external_location.sql), and DuckDB only keeps a
+# view over it. DuckDB is just the engine, so another engine/warehouse can read
+# or replace it. On local disk the layer folders (lake/silver, lake/gold) must
+# exist first: Airflow creates them (include/firms/config.py:ensure_lake_layout).
+models:
+  firms:
+    +materialized: external
+    +options:
+      per_thread_output: true   # write a folder (<table>/data_N.parquet), not a single file
+      overwrite: true           # replace the folder's contents on every run
+    nrt:
+      +tags: [nrt]
+      silver:
+        +schema: silver
+      gold:
+        +schema: gold
+    sp:
+      +tags: [sp]
+      silver:
+        +schema: silver
+      gold:
+        +schema: gold

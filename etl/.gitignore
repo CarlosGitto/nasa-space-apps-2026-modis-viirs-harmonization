@@ -12,3 +12,8 @@ airflow.cfg
 airflow.db
 .astro/*.local.yml
 .astro/*.local.yaml
+
+# dbt artifacts
+dags/dbt/**/target/
+dags/dbt/**/logs/
+dags/dbt/**/dbt_packages/
