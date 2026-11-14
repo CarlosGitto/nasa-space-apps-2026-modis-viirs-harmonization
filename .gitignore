@@ -1,0 +1,3 @@
+# Local data (see data/README.md)
+data/*
+!data/README.md

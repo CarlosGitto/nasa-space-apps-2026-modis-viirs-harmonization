@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: firms_raw
+    description: >
+      Raw FIRMS detections landed by dlt in the Parquet lake (bronze).
+      Append-only: one file per load, partitioned by load_date, so every
+      version is kept. Same path as FIRMS_LAKE_PATH in include/firms/config.py.
+    meta:
+      external_location: "read_parquet('{{ env_var('FIRMS_LAKE_PATH', '/usr/local/airflow/data/lake') }}/firms_raw/{name}/*/*.parquet', hive_partitioning = true, union_by_name = true)"
+    tables:
+      # NRT
+      - name: modis_nrt
+      - name: viirs_snpp_nrt
+      - name: viirs_noaa20_nrt
+      - name: viirs_noaa21_nrt
+      # Standard Processing
+      - name: modis_sp
+      - name: viirs_snpp_sp
+      - name: viirs_noaa20_sp
+      - name: viirs_noaa21_sp

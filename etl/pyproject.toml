@@ -1,0 +1,23 @@
+[project]
+name = "etl"
+version = "0.1.0"
+description = "FIRMS ingestion (dlt) and transformation (dbt + Cosmos) on Astro/Airflow"
+readme = "README.md"
+# Same Python as the Astro Runtime image (runtime:3.3-12).
+requires-python = ">=3.14,<3.15"
+# Keep in sync with requirements.txt: that file is what the Astro image installs.
+dependencies = [
+    "dlt[duckdb,parquet]==1.32.0",
+    "astronomer-cosmos==1.15.1",
+]
+
+[dependency-groups]
+# Local-only: editor autocompletion and tests. The image already ships Airflow.
+# dbt is not here: in the image it lives in its own venv (see Dockerfile).
+dev = [
+    "apache-airflow==3.3.2",
+    "pytest",
+]
+
+[tool.uv]
+required-version = ">=0.9"
