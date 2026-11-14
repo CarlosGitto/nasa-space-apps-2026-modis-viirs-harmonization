@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FIRMS · MODIS vs VIIRS v4 — armonización de series temporales</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--line:#e7e6e2;--modis:#eb6834;--viirs:#2a78d6;--match:#1baf7a;--terra:#eda100;--neutral:#f0efec}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;background:var(--page);color:var(--ink);line-height:1.45}
+header{background:#111;color:#fff;padding:20px 24px}
+header h1{margin:0 0 4px;font-size:21px}
+header p{margin:0;color:#c3c2b7;max-width:950px}
+.toc{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;margin-top:10px}.toc a{color:#c3c2b7}
+main{max-width:1400px;margin:auto;padding:16px}
+section.step{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+.step h2{margin:0 0 6px;font-size:18px;display:flex;gap:10px;align-items:center}
+.badge{background:#111;color:#fff;border-radius:50%;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.q{color:var(--ink2);margin:0 0 10px}
+.read{border-left:3px solid var(--viirs);background:#f1f6fd;padding:8px 12px;margin:10px 0;font-size:13.5px;border-radius:0 6px 6px 0}.read b{color:#184f95}
+.insight{border-left:3px solid var(--terra);background:#fdf8ec;padding:8px 12px;margin:10px 0;font-size:13.5px;border-radius:0 6px 6px 0}.insight:empty{display:none}
+.concl{border:2px solid #111;border-radius:8px;padding:12px 16px;background:#fff}.concl li{margin:6px 0}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px}
+.control{display:flex;flex-direction:column;gap:4px}
+label{font-size:12px;font-weight:600;color:var(--ink2)}
+input,select,button{padding:8px;border:1px solid #cfcdc6;border-radius:6px;font:inherit;font-size:13px;background:#fff}
+button{background:#111;color:#fff;border:none;cursor:pointer;font-weight:600}
+button.secondary{background:#fff;color:#111;border:1px solid #111}
+button:disabled{opacity:.45;cursor:default}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center}
+#status{padding:9px 12px;background:var(--neutral);border-radius:6px;margin-top:12px;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fff}
+.stat span{display:block;color:var(--ink2);font-size:12px}.stat strong{display:block;font-size:21px;margin-top:4px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:950px){.grid2,.grid3,.maps{grid-template-columns:1fr!important}}
+canvas.chart{display:block;width:100%;height:290px}
+.chart-title{font-size:13px;font-weight:600;margin:8px 0 2px}
+.chart-sub{font-size:12px;color:var(--ink2);margin:0 0 4px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2);margin:6px 0}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+.legend i.sq{border-radius:2px}.legend i.dash{width:18px;height:0;border-top:2px dashed;border-radius:0;vertical-align:3px}
+.maps{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.mapbox{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.mapbar{display:flex;gap:8px;align-items:center;padding:6px 8px;background:#f4f3f0;font-size:12px;flex-wrap:wrap}
+.mapbar select{padding:4px;font-size:12px}
+.map{height:460px}
+.swipewrap{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.swipewrap .map{height:560px}
+.swipe{position:absolute;left:0;top:50%;width:100%;margin:0;padding:0;z-index:1000;-webkit-appearance:none;appearance:none;background:transparent;pointer-events:none;border:none;height:0}
+.swipe::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;width:28px;height:46px;border-radius:6px;background:#111;border:2px solid #fff;cursor:ew-resize}
+.swipe::-moz-range-thumb{pointer-events:auto;width:28px;height:46px;border-radius:6px;background:#111;border:2px solid #fff;cursor:ew-resize}
+.swipe-line{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px #111;z-index:999;pointer-events:none}
+.swipe-lab{position:absolute;top:8px;z-index:999;background:#111c;color:#fff;font-size:12px;padding:3px 8px;border-radius:4px;pointer-events:none}.swipe-lab.l{left:56px}.swipe-lab.r{right:8px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{background:#f4f3f0;position:sticky;top:0}
+td:first-child,th:first-child{text-align:left}
+.ref td,.ref th{text-align:left;white-space:normal;vertical-align:top}
+tr.best td{background:#e9f7f1;font-weight:600}
+.ok{color:#0e7a54;font-weight:700}.mid{color:#9a6a00;font-weight:700}.bad{color:#b42318;font-weight:700}
+tr.current td:first-child::after{content:" ← actual";color:var(--ink2);font-weight:400}
+#tableBody tr{cursor:pointer}#tableBody tr:hover{background:#f1f6fd}
+.table-container{overflow:auto;max-height:420px;border:1px solid var(--line);border-radius:6px}
+.s-MATCHED{color:#0e7a54;font-weight:700}.s-MODIS_ONLY{color:#b8461b;font-weight:700}.s-VIIRS_ONLY{color:#1c5cab;font-weight:700}
+pre{overflow:auto;max-height:300px;background:#111;color:#eee;padding:10px;font-size:11px}
+#tip{position:fixed;pointer-events:none;background:#111;color:#fff;font-size:12px;padding:6px 8px;border-radius:5px;display:none;z-index:9999;max-width:320px;white-space:pre-line}
+.muted{color:var(--ink2);font-size:12.5px}
+code{background:#f0efec;padding:1px 4px;border-radius:3px;font-size:12px}
+.sathead{font-weight:700;font-size:15px;margin:4px 0}
+</style>
+</head>
+<body>
+<div id="tip"></div>
+<header>
+  <h1>MODIS vs VIIRS v4 · ¿se pueden armonizar las series temporales?</h1>
+  <p>Seguí los pasos en orden. Cada uno responde una pregunta. Los recuadros azules explican cómo leer cada gráfico. Los amarillos se escriben solos con tus datos. Al final, el paso 9 junta las conclusiones.</p>
+  <nav class="toc">
+    <a href="#p0">0 · Datos</a><a href="#p1">1 · Sensores</a><a href="#p2">2 · Serie temporal</a><a href="#p3">3 · Imágenes</a>
+    <a href="#p4">4 · Matcheo y huella rotada</a><a href="#p4b">4b · ¿Clusterizar MODIS?</a><a href="#p5">5 · Cómo detecta cada uno</a><a href="#p6">6 · Correlaciones</a>
+    <a href="#p7">7 · Armonización Aqua / Terra</a><a href="#p8">8 · Totales y omisión</a><a href="#p8b">8b · Series temporales</a><a href="#p8c">8c · ¿Se puede?</a><a href="#p9">9 · Conclusiones</a>
+  </nav>
+</header>
+<main>
+
+<!-- ============ 0 ============ -->
+<section class="step" id="p0">
+  <h2><span class="badge">0</span>Datos y reglas</h2>
+  <p class="q">Elegí un rango de días (máximo 180; una temporada completa de incendios). FIRMS se consulta en bloques de 5 días (el máximo que acepta su API). Guardá lo descargado con <b>Exportar datos</b> así podés iterar sin volver a consultar la API.</p>
+  <div class="controls">
+    <div class="control"><label>FIRMS MAP_KEY</label><input id="mapKey" type="password" value="edd74e8956fdea5761182787ad36a0fb"></div>
+    <div class="control"><label>Desde</label><input type="date" id="dateFrom" value="2025-01-06"></div>
+    <div class="control"><label>Hasta</label><input type="date" id="dateTo" value="2025-01-25"></div>
+    <div class="control"><label>Latitud</label><input type="number" id="latitude" value="-32.8895" step="0.0001"></div>
+    <div class="control"><label>Longitud</label><input type="number" id="longitude" value="-68.8458" step="0.0001"></div>
+    <div class="control"><label>Radio (km)</label><input type="number" id="radius" value="250" min="1"></div>
+    <div class="control"><label>Fuente MODIS</label><select id="modisSource"><option value="MODIS_SP">MODIS SP</option><option value="MODIS_NRT">MODIS NRT</option></select></div>
+    <div class="control"><label>Fuente VIIRS</label><select id="viirsSource">
+      <option value="VIIRS_SNPP_SP">VIIRS SNPP SP</option><option value="VIIRS_NOAA20_SP">VIIRS NOAA20 SP</option><option value="VIIRS_NOAA21_SP">VIIRS NOAA21 SP</option>
+      <option value="VIIRS_SNPP_NRT">VIIRS SNPP NRT</option><option value="VIIRS_NOAA20_NRT">VIIRS NOAA20 NRT</option><option value="VIIRS_NOAA21_NRT">VIIRS NOAA21 NRT</option></select></div>
+    <div class="control"><label>VIIRS adicional (opcional)</label><select id="viirsSource2"><option value="">Ninguna</option>
+      <option value="VIIRS_NOAA20_SP">VIIRS NOAA20 SP</option><option value="VIIRS_NOAA21_SP">VIIRS NOAA21 SP</option><option value="VIIRS_SNPP_SP">VIIRS SNPP SP</option>
+      <option value="VIIRS_NOAA20_NRT">VIIRS NOAA20 NRT</option><option value="VIIRS_NOAA21_NRT">VIIRS NOAA21 NRT</option></select></div>
+    <div class="control"><label>Pasadas</label><select id="pass" class="rematch"><option value="D">Solo diurnas</option><option value="N">Solo nocturnas</option><option value="ALL">Ambas</option></select></div>
+    <div class="control"><label>Tipo de detección (campo type)</label><select id="typeFilter" class="rematch"><option value="veg">Solo vegetación (type 0) — excluye fuentes fijas</option><option value="all">Todas (incluye industrias, volcanes)</option></select></div>
+    <div class="control"><label>Cobertura VIIRS</label><select id="cover" class="rematch"><option value="1">Solo MODIS con pasada VIIRS en ±tolerancia</option><option value="0">Todos los MODIS</option></select></div>
+    <div class="control"><label>Satélite en foco (pasos 3‑6)</label><select id="focus" class="rematch"><option value="A">Aqua</option><option value="T">Terra</option></select></div>
+    <div class="control"><label>Modo de matcheo</label><select id="matchMode" class="rematch">
+      <option value="fprot">Huella rotada con la órbita</option><option value="fp">Huella N‑S / E‑O</option><option value="fixed">Distancia fija</option></select></div>
+    <div class="control"><label>Distancia fija (km)</label><input type="number" id="matchDistance" class="rematch" value="1" min="0.1" step="0.1"></div>
+    <div class="control"><label>Margen de huella (km)</label><input type="number" id="margin" class="rematch" value="0.1" min="0" step="0.05"></div>
+    <div class="control"><label>Tolerancia Aqua ↔ VIIRS (min)</label><input type="number" id="tolA" class="rematch" value="90" min="0" max="1440" step="5"></div>
+    <div class="control"><label>Tolerancia Terra ↔ VIIRS (min)</label><input type="number" id="tolT" class="rematch" value="330" min="0" max="1440" step="10"></div>
+    <div class="control"><label>Unidad MODIS (cluster)</label><select id="clusterRule" class="rematch">
+      <option value="pixel">Píxel solo (sin cluster)</option><option value="touch" selected>Píxeles que se tocan</option>
+      <option value="r2">Radio 2 km</option><option value="r5">Radio 5 km</option><option value="r10">Radio 10 km</option></select></div>
+  </div>
+  <div class="chart-title" style="margin-top:12px">Área de búsqueda</div>
+  <div class="btnrow" style="margin-top:4px"><button id="drawBtn" class="secondary">✏️ Dibujar área en el mapa</button>
+    <span class="muted" id="selInfo">Clic en el mapa = mover el centro. "Dibujar área": apretá en el centro y arrastrá hasta el borde del radio. También podés arrastrar el marcador.</span></div>
+  <div id="mapSel" style="height:340px;border:1px solid var(--line);border-radius:8px;margin-top:8px"></div>
+  <div class="btnrow">
+    <button id="searchButton">Buscar en FIRMS</button>
+    <button id="demoButton" class="secondary">Datos demo (multi‑día)</button>
+    <button id="exportButton" class="secondary" disabled>Exportar datos (JSON)</button>
+    <button id="importButton" class="secondary">Importar datos (JSON)</button><input type="file" id="importFile" accept=".json" hidden>
+    <button id="csvButton" class="secondary">Importar CSV de archivo FIRMS</button><input type="file" id="csvFile" accept=".csv,.txt" multiple hidden>
+    <button id="downloadButton" class="secondary" disabled>Descargar CSV</button>
+  </div>
+  <p class="muted">Para varios años (por ejemplo 2012–2021, cuando Aqua y SNPP pasaban casi a la misma hora), usá FIRMS "Archive Download" y cargá los CSV con <b>Importar CSV</b>. Podés seleccionar los de MODIS y VIIRS juntos. Se recortan al círculo y a las fechas elegidas arriba.</p>
+  <div id="status">Listo.</div>
+  <div class="stats">
+    <div class="stat"><span>Días con datos</span><strong id="sDays">0</strong></div>
+    <div class="stat"><span>MODIS Aqua / Terra</span><strong id="sM">0</strong></div>
+    <div class="stat"><span>VIIRS</span><strong id="sV">0</strong></div>
+    <div class="stat"><span>Unidades matcheadas Aqua / Terra</span><strong id="sG">0</strong></div>
+    <div class="stat"><span>Azar (foco)</span><strong id="sFP">–</strong></div>
+    <div class="stat"><span>FRP50 MODIS (foco)</span><strong id="sF50">–</strong></div>
+  </div>
+</section>
+
+<!-- ============ 1 ============ -->
+<section class="step" id="p1">
+  <h2><span class="badge">1</span>¿Qué estamos comparando?</h2>
+  <table class="ref">
+    <thead><tr><th></th><th>MODIS (Terra / Aqua)</th><th>VIIRS banda I</th><th>Consecuencia</th></tr></thead>
+    <tbody>
+      <tr><td><b>Píxel</b></td><td>1 km en nadir → ≈2 × 4.8 km en el borde del barrido</td><td>375 m → ≈0.8 km</td><td>Comparamos <b>grupo VIIRS vs píxel MODIS</b>.</td></tr>
+      <tr><td><b>Orientación</b></td><td colspan="2">El píxel es rectangular: <code>scan</code> va a través de la órbita y <code>track</code> a lo largo. La órbita (≈98°) no va exactamente N‑S: se inclina 10–15° según la latitud y la rotación de la Tierra.</td><td>Con píxeles largos (scan alto), un rectángulo N‑S mal orientado pierde o inventa matches. Por eso rotamos la huella.</td></tr>
+      <tr><td><b>Hora</b></td><td>Diseño: Terra 10:30, Aqua 13:30. <b>Desde 2021–2022 ambos derivan</b>: Aqua pasa cada vez más tarde y Terra cada vez más temprano.</td><td>≈13:30 (ascendente)</td><td>Aqua‑VIIRS ya no es simultáneo: en 2025 Aqua pasa hasta 1,5 h después que SNPP, y Terra 4–5 h antes. Por eso las tolerancias por defecto son 90 y 330 min. Mirá el histograma de Δt (paso 4).</td></tr>
+      <tr><td><b>BT</b></td><td>≈4 µm a 1 km+</td><td>I4 3.74 µm a 375 m; satura ≈367 K</td><td>La BT depende del píxel: solo sirve como indicador.</td></tr>
+      <tr><td><b>FRP</b></td><td>MW por píxel</td><td>MW por píxel (de M13)</td><td>Es energía: la suma VIIRS dentro del píxel MODIS es comparable.</td></tr>
+      <tr><td><b>Fuentes fijas</b></td><td colspan="2">FIRMS marca con <code>type</code> 2 las fuentes de calor persistentes (fundiciones, refinerías, industrias) y con 1 los volcanes.</td><td>No son incendios y tienen otra relación MODIS/VIIRS. Se excluyen por defecto para no contaminar la armonización.</td></tr>
+      <tr><td><b>Un fuego, varios píxeles</b></td><td colspan="2">Un frente grande ocupa varios píxeles MODIS contiguos. Un VIIRS en el borde entre dos píxeles se asigna a uno solo, y eso parte el fuego.</td><td>Juntar píxeles MODIS vecinos en un <b>cluster</b> compara fuego contra fuego (paso 4b).</td></tr>
+      <tr><td><b>Umbral</b></td><td>≈1000 m² de llama; peor con píxel grande</td><td>Fuegos varias veces más chicos</td><td>MODIS <b>omite</b> fuegos chicos. Lo medimos en el paso 5.</td></tr>
+    </tbody>
+  </table>
+  <div class="insight" id="i1"></div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="step" id="p2">
+  <h2><span class="badge">2</span>¿Cómo se comporta en el tiempo?</h2>
+  <p class="q">Antes de juntar días, mirá si todos se parecen. Un día raro (nubes, pasada de borde, incendio grande) puede dominar el ajuste.</p>
+  <div class="grid2">
+    <div><div class="chart-title">A · Detecciones por día</div><canvas id="cTsCount" class="chart"></canvas>
+      <div class="legend"><span><i style="background:var(--viirs)"></i>VIIRS</span><span><i style="background:var(--modis)"></i>MODIS Aqua</span><span><i style="background:var(--terra)"></i>MODIS Terra</span><span><i style="background:var(--match)"></i>Grupos Aqua matcheados</span></div></div>
+    <div><div class="chart-title">B · Diferencia de FRP por día: log10(ΣFRP VIIRS / FRP MODIS)</div><canvas id="cTsRatio" class="chart"></canvas>
+      <div class="legend"><span><i style="background:var(--modis)"></i>Aqua (mediana y rango intercuartil)</span><span><i style="background:var(--terra)"></i>Terra</span></div></div>
+  </div>
+  <div class="read"><b>Cómo leer B:</b> 0 significa que coinciden; +0.1 ≈ VIIRS 26 % más alto; −0.1 ≈ 21 % más bajo. Si la mediana diaria salta mucho de un día a otro, un factor fijo no va a transferirse bien. Eso lo medimos con validación cruzada en el paso 7. Si Terra queda sistemáticamente por debajo o por encima de Aqua, es el ciclo diurno.</div>
+  <div class="insight" id="i2"></div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="step" id="p3">
+  <h2><span class="badge">3</span>Imagen MODIS vs VIIRS con cortina</h2>
+  <p class="q">Un solo mapa: a la izquierda de la línea, la imagen MODIS; a la derecha, la VIIRS del mismo día. Arrastrá el control negro y pasalo sobre un frente para ver qué cambia.</p>
+  <div class="legend">
+    <label>Día <select id="mapDay"></select></label>
+    <label>Izquierda <select id="imgA">
+      <option value="MODIS_Aqua_CorrectedReflectance_Bands721">MODIS Aqua 7‑2‑1 (fuego)</option><option value="MODIS_Aqua_CorrectedReflectance_TrueColor">MODIS Aqua color real</option>
+      <option value="MODIS_Terra_CorrectedReflectance_Bands721">MODIS Terra 7‑2‑1 (fuego)</option><option value="MODIS_Terra_CorrectedReflectance_TrueColor">MODIS Terra color real</option><option value="OSM">Mapa base (OSM)</option></select></label>
+    <label>Derecha <select id="imgB">
+      <option value="VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1">VIIRS SNPP M11‑I2‑I1 (fuego)</option><option value="VIIRS_SNPP_CorrectedReflectance_TrueColor">VIIRS SNPP color real</option>
+      <option value="VIIRS_NOAA20_CorrectedReflectance_BandsM11-I2-I1">VIIRS NOAA‑20 M11‑I2‑I1</option><option value="VIIRS_NOAA20_CorrectedReflectance_TrueColor">VIIRS NOAA‑20 color real</option>
+      <option value="VIIRS_NOAA21_CorrectedReflectance_BandsM11-I2-I1">VIIRS NOAA‑21 M11‑I2‑I1</option><option value="VIIRS_NOAA21_CorrectedReflectance_TrueColor">VIIRS NOAA‑21 color real</option><option value="OSM">Mapa base (OSM)</option></select></label>
+    <label>Detecciones <select id="swipeDet"><option value="side">Cada sensor de su lado</option><option value="both">Ambos en todo el mapa</option></select></label>
+  </div>
+  <div class="legend">
+    <span><i class="sq" style="background:#ff2bd6;outline:2px solid #000"></i>Matcheado</span><span><i class="sq" style="background:#ffe600;outline:2px solid #000"></i>Solo MODIS</span><span><i class="sq" style="background:#00e5ff;outline:2px solid #000"></i>Solo VIIRS</span>
+    <span><i class="dash" style="border-color:#888"></i>Contorno del cluster MODIS (blanco)</span>
+    <label>Dibujo <select id="mapStyle"><option value="auto">Automático (puntos lejos, huellas cerca)</option><option value="dot">Siempre puntos</option><option value="fp">Siempre huellas reales</option></select></label>
+    <label style="font-weight:400"><input type="checkbox" id="showM" checked> MODIS</label><label style="font-weight:400"><input type="checkbox" id="showV" checked> VIIRS</label>
+  </div>
+  <div class="swipewrap">
+    <div id="mapS" class="map"></div>
+    <div class="swipe-line" id="swipeLine"></div>
+    <input type="range" id="swipe" class="swipe" min="0" max="100" value="50" step="0.2" aria-label="Posición de la cortina">
+    <div class="swipe-lab l">◀ MODIS</div><div class="swipe-lab r">VIIRS ▶</div>
+  </div>
+  <div class="read"><b>Cómo leer:</b> con la combinación de bandas de fuego, los frentes activos se ven naranja o rojo y las cicatrices marrón oscuro. Mové la cortina sobre un frente:
+    <b>(1)</b> si el frente "salta" de lugar, hay desplazamiento entre imágenes (geolocalización, o relieve visto en ángulo);
+    <b>(2)</b> si en VIIRS el frente es más fino y nítido, es la resolución (375 m contra 1 km);
+    <b>(3)</b> si el humo cambia mucho, el fuego evolucionó entre pasadas (sobre todo con Terra a la izquierda).
+    Los anillos amarillos o magenta son MODIS y los puntos cian o magenta son VIIRS. Desde zoom 11 se dibujan las huellas reales. El contorno punteado blanco marca qué píxeles MODIS se juntaron en un cluster. Así ves si la regla de agrupamiento une un mismo frente o mezcla fuegos distintos.</div>
+  <details id="sbs"><summary>Ver también los dos mapas lado a lado</summary>
+    <div class="maps" style="margin-top:8px"><div class="mapbox"><div id="mapA" class="map"></div></div><div class="mapbox"><div id="mapB" class="map"></div></div></div></details>
+  <p class="muted">Imágenes: NASA GIBS / Worldview, reflectancia corregida diaria (pasada diurna). Clic en una fila de la tabla final para ir a esa detección.</p>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="step" id="p4">
+  <h2><span class="badge">4</span>¿Qué regla de matcheo funciona mejor? ¿La rotación ayuda?</h2>
+  <p class="q">Probamos 5 reglas sobre los mismos datos (satélite en foco). Una regla buena junta muchos pares reales, pocos por azar, y deja un modelo de FRP que predice bien días que no vio.</p>
+  <div class="table-container" style="max-height:none"><table id="cfgTable"></table></div>
+  <div class="read"><b>Cómo leer:</b> <b>Netos</b> = VIIRS asignados − los que se asignarían por azar (VIIRS corrido 20 km). Es la mejor medida de pares reales. <b>Error CV</b> = error del modelo de FRP (log10, modelo "+ scan") prediciendo cada día con los demás. Más bajo es mejor. La fila verde es la mejor configuración. Si la huella rotada gana sobre la N‑S, la diferencia aparece sobre todo con scan alto (borde del barrido).</div>
+  <div class="insight" id="i4a"></div>
+  <div class="grid2">
+    <div><div class="chart-title">A · Fracción matcheada vs distancia fija</div><p class="chart-sub">Línea llena: real. Punteada: azar.</p><canvas id="cSens" class="chart"></canvas>
+      <div class="legend"><span><i style="background:var(--modis)"></i>% MODIS con VIIRS</span><span><i style="background:var(--viirs)"></i>% VIIRS asignados</span><span><i class="dash" style="border-color:var(--ink2)"></i>azar</span></div></div>
+    <div><div class="chart-title">B · Desplazamiento VIIRS − MODIS en el marco de la órbita (km)</div><p class="chart-sub">x = a través de la órbita (scan), y = a lo largo (track). Rectángulo: media huella mediana.</p><canvas id="cOffset" class="chart"></canvas></div>
+  </div>
+  <div class="read"><b>Cómo leer B:</b> en el marco de la órbita, la nube debería ser más ancha en x (el scan es el lado largo del píxel) y quedar dentro del rectángulo. Si la nube está corrida en y, hay un desfase a lo largo de la órbita. Si está corrida en x, hay un desfase lateral, por ejemplo por relieve visto en ángulo.</div>
+  <div class="grid2">
+    <div><div class="chart-title">C · Distancia al VIIRS más cercano (km)</div><canvas id="cDist" class="chart"></canvas></div>
+    <div><div class="chart-title">D · Hora VIIRS − MODIS (min)</div><canvas id="cDt" class="chart"></canvas></div>
+  </div>
+  <div class="insight" id="i4"></div>
+</section>
+
+<!-- ============ 4b ============ -->
+<section class="step" id="p4b">
+  <h2><span class="badge">4b</span>¿Clusterizar MODIS mejora la comparación?</h2>
+  <p class="q">Probamos 5 reglas para definir la unidad MODIS: píxel solo, píxeles que se tocan (huellas rotadas que se superponen), y radios de 2, 5 y 10 km dentro de la misma pasada. Del lado VIIRS se suman todos los píxeles que caen en cualquier píxel del cluster.</p>
+  <div class="table-container" style="max-height:none"><table id="clTable"></table></div>
+  <div class="read"><b>Cómo leer:</b> las columnas <b>r</b> y <b>ρ</b> miden cuánto se parecen log FRP MODIS y log ΣFRP VIIRS. <b>Error CV</b> mide el error del modelo "+ scan" por unidad. <b>Ojo:</b> unidades más grandes promedian errores y siempre "mejoran" r y el error por unidad, pero pierden detalle espacial. Por eso la columna clave es <b>Error total diario</b>: compara todas las reglas a la misma escala (el día completo). Si clusterizar mejora esa columna, la ganancia es real y no solo un promedio.</div>
+  <div class="grid3">
+    <div><div class="chart-title">A · Correlación por regla</div><canvas id="cClR" class="chart"></canvas>
+      <div class="legend"><span><i class="sq" style="background:var(--viirs)"></i>Pearson r (log)</span><span><i class="sq" style="background:var(--match)"></i>Spearman ρ</span></div></div>
+    <div><div class="chart-title">B · Error por regla (log10)</div><canvas id="cClCv" class="chart"></canvas>
+      <div class="legend"><span><i class="sq" style="background:#c9c7c0"></i>CV por unidad</span><span><i class="sq" style="background:var(--modis)"></i>Total diario</span></div></div>
+    <div><div class="chart-title">C · FRP: píxel vs regla actual</div><canvas id="cClSc" class="chart"></canvas>
+      <div class="legend"><span><i style="background:#c9c7c0"></i>Píxel solo</span><span><i style="background:var(--match)"></i>Regla actual</span></div></div>
+  </div>
+  <div class="insight" id="i4b"></div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="step" id="p5">
+  <h2><span class="badge">5</span>¿Cómo detecta cada uno?</h2>
+  <p class="q">Para cada píxel VIIRS sumamos el FRP de todos los VIIRS que caerían dentro de un píxel MODIS centrado ahí, con el scan y la rotación locales. Eso es lo que "vería" MODIS. Después preguntamos con qué probabilidad MODIS lo detecta.</p>
+  <div class="grid2">
+    <div><div class="chart-title">A · Probabilidad de que MODIS detecte lo que ve VIIRS</div><p class="chart-sub">Puntos: fracción observada por clase de FRP (tamaño = n). Curvas: ajuste logístico por tamaño de píxel MODIS.</p>
+      <canvas id="cDetProb" class="chart"></canvas>
+      <div class="legend"><span><i style="background:#86b6ef"></i>scan &lt; 1.5 km</span><span><i style="background:#2a78d6"></i>1.5–3 km</span><span><i style="background:#104281"></i>&gt; 3 km</span><span><i style="background:var(--ink2)"></i>observado</span></div></div>
+    <div><div class="chart-title">B · Probabilidad de que VIIRS confirme un píxel MODIS</div><p class="chart-sub">Fracción de píxeles MODIS con ≥1 VIIRS, por clase de FRP MODIS.</p>
+      <canvas id="cDetRev" class="chart"></canvas></div>
+  </div>
+  <div class="read"><b>Cómo leer A:</b> la curva sube de 0 a 1 con el FRP del fuego. El punto donde cruza el 50 % (<b>FRP50</b>) es el umbral práctico de detección de MODIS. Si la curva de scan grande está corrida a la derecha, MODIS necesita fuegos más fuertes en el borde del barrido: esa es la omisión que hay que modelar. Solo cuentan los píxeles VIIRS con una detección MODIS del mismo satélite a menos de 50 km y en tiempo compatible. Así no penalizamos días sin pasada.</div>
+  <div class="read"><b>Cómo leer B:</b> si los píxeles MODIS débiles casi nunca tienen VIIRS, pueden ser falsas alarmas de MODIS o fuegos que se apagaron entre pasadas (Terra).</div>
+  <div class="insight" id="i5"></div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="step" id="p6">
+  <h2><span class="badge">6</span>¿Qué variables explican las diferencias?</h2>
+  <p class="q">Spearman ρ entre todas las variables de los grupos matcheados (satélite en foco, todos los días). Clic en una celda para ver el par.</p>
+  <canvas id="cCorr" class="chart"></canvas>
+  <div class="read"><b>Cómo leer:</b> mirá las filas <b>logRatioFRP</b> y <b>ΔBT</b> (las diferencias). Lo que correlaciona fuerte con ellas es candidato a explicarlas. Ojo con las variables "solo VIIRS" (V n, V conf): explican, pero no sirven para corregir MODIS cuando no hay VIIRS.</div>
+  <div class="insight" id="i6"></div>
+  <div class="grid2">
+    <div><div class="chart-title">Explorador</div>
+      <div class="btnrow" style="margin-top:2px"><label>X <select id="exX"></select></label><label>Y <select id="exY"></select></label></div>
+      <canvas id="cExp" class="chart"></canvas><p class="chart-sub" id="exStat"></p></div>
+    <div><div class="chart-title">N° de VIIRS por grupo vs área del píxel MODIS</div><canvas id="cN" class="chart"></canvas>
+      <div class="read"><b>Cómo leer:</b> la línea punteada es el máximo teórico (área MODIS / área VIIRS nominal). Si N crece con el área, el píxel grande junta varios fuegos.</div></div>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="step" id="p7">
+  <h2><span class="badge">7</span>Armonización: Aqua y Terra por separado, validada por día</h2>
+  <p class="q">Probamos 5 modelos para log10(ΣFRP VIIRS / FRP MODIS): M0 sin corregir, M1 factor fijo, M2 + logFRP, M3 + scan, M4 + Δt. Cada día se predice con un modelo ajustado <b>sin ese día</b>. Así se mide si el factor se transfiere a fechas nuevas.</p>
+  <div class="read"><b>Cómo leer:</b> barras grises = error dentro de la muestra (optimista); barras de color = error en días no vistos (realista). Elegimos el modelo más simple cuyo error CV quede a menos de 2 % del mejor. Si la barra de color es mucho más alta que la gris, el modelo memoriza días y no generaliza. Δt casi no varía en Aqua, pero en Terra representa el ciclo diurno: el FRP cambia entre las 10:30 y las 13:30.</div>
+  <div class="grid2">
+    <div><div class="sathead" style="color:#b8461b">Aqua</div>
+      <div class="chart-title">FRP: ΣVIIRS vs MODIS</div><canvas id="cFrp_A" class="chart"></canvas>
+      <div class="chart-title">Error por modelo (log10)</div><canvas id="cCv_A" class="chart"></canvas>
+      <div class="insight" id="i7_A"></div></div>
+    <div><div class="sathead" style="color:#9a6a00">Terra</div>
+      <div class="chart-title">FRP: ΣVIIRS vs MODIS</div><canvas id="cFrp_T" class="chart"></canvas>
+      <div class="chart-title">Error por modelo (log10)</div><canvas id="cCv_T" class="chart"></canvas>
+      <div class="insight" id="i7_T"></div></div>
+  </div>
+  <div class="legend"><span><i style="background:var(--match)"></i>Grupo matcheado</span><span><i class="dash" style="border-color:var(--ink2)"></i>1:1</span><span><i class="dash" style="border-color:var(--modis)"></i>Modelo elegido (scan mediano)</span><span><i class="sq" style="background:#c9c7c0"></i>Error en muestra</span><span><i class="sq" style="background:var(--viirs)"></i>Error CV por día</span></div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="step" id="p8">
+  <h2><span class="badge">8</span>Totales regionales: armonización + omisión</h2>
+  <p class="q">Para estudios regionales importa el total diario de FRP. Corregimos cada píxel MODIS con el modelo y después agregamos lo que MODIS no ve, según el scan.</p>
+  <div class="grid2">
+    <div><div class="chart-title">A · Fracción del FRP VIIRS que MODIS no detecta, por scan MODIS</div><canvas id="cOmit" class="chart"></canvas>
+      <div class="legend"><span><i class="sq" style="background:var(--modis)"></i>Aqua</span><span><i class="sq" style="background:var(--terra)"></i>Terra</span></div></div>
+    <div><div class="chart-title">B · FRP total diario (Aqua, MW, escala log)</div><canvas id="cTot_A" class="chart"></canvas>
+      <div class="legend"><span><i style="background:var(--viirs)"></i>VIIRS (referencia)</span><span><i style="background:var(--modis)"></i>MODIS crudo</span><span><i style="background:var(--match)"></i>MODIS armonizado</span><span><i style="background:var(--terra)"></i>Armonizado + omisión</span></div></div>
+  </div>
+  <div class="read"><b>Cómo leer B:</b> la línea amarilla debería pegarse a la azul. El error diario se resume en el recuadro amarillo. Si la amarilla queda arriba, la corrección de omisión sobrestima, porque varios fuegos omitidos caen en zonas sin ningún píxel MODIS.</div>
+  <div class="insight" id="i8"></div>
+</section>
+
+<!-- ============ 8b ============ -->
+<section class="step" id="p8b">
+  <h2><span class="badge">8b</span>Series temporales: armonizar energía agregada</h2>
+  <p class="q">En lugar de pares de píxeles, sumamos el FRP de cada sensor por <b>celda</b> de grilla y <b>ventana</b> de tiempo. Así se compensan el desfase horario, los fuegos partidos y las pasadas de borde. El modelo se valida dejando afuera ventanas enteras.</p>
+  <div class="grid2">
+    <div><div class="chart-title">A · Error de la serie armonizada según la escala</div><p class="chart-sub">Mediana de |log10(MODIS armonizado / VIIRS)| por ventana, a nivel región, con validación cruzada. Más claro = mejor. Clic para ver esa escala.</p><canvas id="cScale" class="chart"></canvas></div>
+    <div><div class="chart-title">B · Correlación de la serie (log) según la escala</div><p class="chart-sub">r entre la serie VIIRS y la MODIS armonizada. n = ventanas con datos.</p><canvas id="cScaleR" class="chart"></canvas></div>
+  </div>
+  <div class="read"><b>Cómo leer:</b> las filas son el tamaño de celda y las columnas la ventana de tiempo. Buscá la escala más fina donde el error ya es bajo: esa es la <b>resolución mínima armonizable</b> con tus datos. Si ni la región entera con ventanas de 15 días funciona, faltan datos o hay un problema de fondo (cobertura, horario).</div>
+  <div class="btnrow"><label>Celda <select id="tsCell"><option value="0.1">0.1°</option><option value="0.25">0.25°</option><option value="0.5">0.5°</option><option value="1">1°</option><option value="R">Región</option></select></label>
+    <label>Ventana <select id="tsWin"><option value="1">1 día</option><option value="3">3 días</option><option value="7">7 días</option><option value="15">15 días</option></select></label></div>
+  <div class="grid3">
+    <div><div class="chart-title">C · Serie regional por ventana (MW, log)</div><canvas id="cTsH" class="chart"></canvas></div>
+    <div><div class="chart-title">D · Energía acumulada (ΣFRP acumulado, MW·ventana)</div><canvas id="cCum" class="chart"></canvas></div>
+    <div><div class="chart-title">E · Celdas × ventanas: ΣVIIRS vs ΣMODIS</div><canvas id="cRec" class="chart"></canvas></div>
+  </div>
+  <div class="legend"><span><i style="background:var(--viirs)"></i>VIIRS (referencia)</span><span><i style="background:var(--modis)"></i>MODIS crudo</span><span><i style="background:var(--match)"></i>MODIS armonizado + omisión (CV)</span></div>
+  <div class="read"><b>Cómo leer C y D:</b> la línea verde usa predicciones de un modelo que no vio esa ventana. Si sigue a la azul en subidas y bajadas, la serie armonizada reproduce la dinámica. En D, si la verde termina cerca de la azul, el total de la temporada no tiene sesgo. <b>E</b> muestra la nube de celdas: la dispersión alrededor de la 1:1 es el error a esa escala.</div>
+  <div class="insight" id="i8b"></div>
+</section>
+
+<!-- ============ 8c ============ -->
+<section class="step" id="p8c">
+  <h2><span class="badge">8c</span>¿Se puede armonizar? ¿Qué falta?</h2>
+  <p class="q">Diagnóstico calculado con tus datos. Cada fila es un requisito. Verde = cumple, amarillo = parcial, rojo = falta.</p>
+  <div class="table-container" style="max-height:none"><table id="feasTable"></table></div>
+  <div class="insight" id="i8c"></div>
+</section>
+
+<!-- ============ 9 ============ -->
+<section class="step" id="p9">
+  <h2><span class="badge">9</span>Conclusiones (automáticas)</h2>
+  <div class="concl"><ul id="conclusions"><li>Cargá datos para generar conclusiones.</li></ul></div>
+  <p class="muted" style="margin-top:10px">Las conclusiones dependen de la región y la temporada. Repetí con otra temporada para ver si los coeficientes se mantienen. Ese es el test final de armonización.</p>
+</section>
+
+<section class="step">
+  <h2><span class="badge">≡</span>Resultados por grupo (satélite en foco)</h2>
+  <div class="table-container"><table>
+    <thead><tr><th>Estado</th><th>N M</th><th>Día</th><th>Lat</th><th>Lon</th><th>Hora M</th><th>N V</th><th>Δt</th><th>Dist</th><th>Scan M</th><th>Rumbo°</th><th>FRP M</th><th>ΣFRP V</th><th>FRP M armon.</th><th>BT M</th><th>BT V</th></tr></thead>
+    <tbody id="tableBody"></tbody></table></div>
+  <details style="margin-top:10px"><summary>Respuestas crudas (primeras 100 filas)</summary><pre id="raw"></pre></details>
+</section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const C = { modis: "#eb6834", viirs: "#2a78d6", match: "#1baf7a", terra: "#eda100", ink: "#0b0b0b", ink2: "#52514e", line: "#e7e6e2", surface: "#fcfcfb", neutral: "#f0efec", grey: "#c9c7c0" };
+const KM = 111.32, D2R = Math.PI / 180, I4_SAT = 367;
+const SATN = { A: "Aqua", T: "Terra" };
+const S = { rawM: [], rawV: [], V: [], days: [], by: {}, cache: new Map() };
+
+/* ============ utilidades ============ */
+const isF = v => typeof v === "number" && Number.isFinite(v);
+const num = v => { if (v === undefined || v === null || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
+const sum = a => a.reduce((s, v) => s + v, 0);
+const mean = a => a.length ? sum(a) / a.length : null;
+const quant = (a, q) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const p = (s.length - 1) * q, i = Math.floor(p); return s[i] + (s[Math.min(i + 1, s.length - 1)] - s[i]) * (p - i); };
+const median = a => quant(a, 0.5);
+const sd = a => { const m = mean(a); return a.length > 1 ? Math.sqrt(sum(a.map(v => (v - m) ** 2)) / (a.length - 1)) : null; };
+const fmt = (v, d = 2) => isF(v) ? v.toFixed(d) : "–";
+const pct = (v, d = 0) => isF(v) ? (100 * v).toFixed(d) + " %" : "–";
+const dayNum = d => Date.parse(d + "T00:00:00Z") / 864e5;
+const dayLabel = n => { const s = new Date(n * 864e5).toISOString(); return s.slice(8, 10) + "/" + s.slice(5, 7); };
+function pearson(x, y) { const n = x.length; if (n < 3) return null; const mx = mean(x), my = mean(y); let c = 0, vx = 0, vy = 0;
+  for (let i = 0; i < n; i++) { const a = x[i] - mx, b = y[i] - my; c += a * b; vx += a * a; vy += b * b; } const d = Math.sqrt(vx * vy); return d ? c / d : null; }
+function ranks(a) { const idx = a.map((v, i) => [v, i]).sort((p, q) => p[0] - q[0]); const r = new Array(a.length);
+  for (let i = 0; i < idx.length;) { let j = i; while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++; for (let k = i; k <= j; k++) r[idx[k][1]] = (i + j) / 2 + 1; i = j + 1; } return r; }
+const spearman = (x, y) => pearson(ranks(x), ranks(y));
+function ols(x, y) { const n = x.length; if (n < 3) return null; const mx = mean(x), my = mean(y); let sxy = 0, sxx = 0;
+  for (let i = 0; i < n; i++) { sxy += (x[i] - mx) * (y[i] - my); sxx += (x[i] - mx) ** 2; } if (!sxx) return null; const b = sxy / sxx; return { a: my - b * mx, b, r: pearson(x, y) }; }
+function solve(A, b) { const n = b.length; const M = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < n; c++) { let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r; [M[c], M[p]] = [M[p], M[c]];
+    if (Math.abs(M[c][c]) < 1e-12) return null; for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; } }
+  return M.map((r, i) => r[n] / r[i]); }
+function lstsq(X, y) { if (!X.length) return null; const p = X[0].length; if (X.length < p + 2) return null;
+  const A = Array.from({ length: p }, () => new Array(p).fill(0)), b = new Array(p).fill(0);
+  X.forEach((r, i) => { for (let j = 0; j < p; j++) { b[j] += r[j] * y[i]; for (let k = 0; k < p; k++) A[j][k] += r[j] * r[k]; } }); return solve(A, b); }
+function logistic(X, y) { const p = X[0].length; let w = new Array(p).fill(0);
+  for (let it = 0; it < 40; it++) { const H = Array.from({ length: p }, () => new Array(p).fill(0)), g = new Array(p).fill(0);
+    X.forEach((r, i) => { const z = r.reduce((s, v, j) => s + v * w[j], 0), mu = 1 / (1 + Math.exp(-z)), W = Math.max(mu * (1 - mu), 1e-6);
+      for (let j = 0; j < p; j++) { g[j] += r[j] * (y[i] - mu); for (let k = 0; k < p; k++) H[j][k] += W * r[j] * r[k]; } });
+    for (let j = 0; j < p; j++) H[j][j] += 1e-3; const d = solve(H, g); if (!d) break; w = w.map((v, j) => v + d[j]); if (Math.max(...d.map(Math.abs)) < 1e-7) break; }
+  return w; }
+const sigmoid = z => 1 / (1 + Math.exp(-z));
+function seeded(seed) { let s = seed % 2147483647 || 1; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+
+/* ============ tooltip y gráficos ============ */
+const tip = $("tip");
+function attachHover(c) { if (c._hv) return; c._hv = true;
+  const find = e => { const r = c.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; let best = null, bd = 12;
+    for (const h of c._hits || []) { const d = h.w ? (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h ? 0 : 99) : Math.hypot(h.x - x, h.y - y); if (d < bd) { bd = d; best = h; } } return best; };
+  c.addEventListener("mousemove", e => { const h = find(e); if (h) { tip.style.display = "block"; tip.textContent = h.tip; tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 12 + "px"; c.style.cursor = h.click ? "pointer" : "default"; } else { tip.style.display = "none"; c.style.cursor = "default"; } });
+  c.addEventListener("mouseleave", () => tip.style.display = "none");
+  c.addEventListener("click", e => { const h = find(e); if (h && h.click) h.click(); }); }
+function setupCanvas(id) { const c = $(id), w = c.clientWidth, h = c.clientHeight, pr = window.devicePixelRatio || 1; c.width = w * pr; c.height = h * pr;
+  const ctx = c.getContext("2d"); ctx.setTransform(pr, 0, 0, pr, 0, 0); ctx.clearRect(0, 0, w, h); c._hits = []; attachHover(c); return { c, ctx, w, h }; }
+function emptyChart(id, msg) { const { ctx, w, h } = setupCanvas(id); ctx.fillStyle = C.ink2; ctx.font = "13px system-ui,Arial"; ctx.textAlign = "center"; ctx.fillText(msg || "Sin datos todavía", w / 2, h / 2); }
+function niceTicks(a, b, n = 5) { const s0 = (b - a || 1) / n, mag = 10 ** Math.floor(Math.log10(s0)), f = s0 / mag, st = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag, t = [];
+  for (let v = Math.ceil(a / st) * st; v <= b + st * 1e-6; v += st) t.push(Math.abs(v) < st * 1e-6 ? 0 : +v.toPrecision(10)); return t; }
+function logTicks(a, b) { const t = []; for (let e = Math.floor(a); e <= Math.ceil(b); e++) for (const m of (b - a) < 2.5 ? [1, 2, 5] : [1]) { const v = Math.log10(m) + e; if (v >= a - 1e-9 && v <= b + 1e-9) t.push(v); } return t; }
+const tl = v => { const a = Math.abs(v); return a >= 1000 ? +(v / 1000).toPrecision(3) + "k" : a >= 1 || a === 0 ? String(+v.toPrecision(3)) : String(+v.toPrecision(2)); };
+
+/* series: scatter | line | bar (x0,x1,y) | range (x,y0,y1). Opciones: logX, logY, identity, square, fits, hLines, vLines, rects, xDom, yDom, bars0, xTicks:[{v,label}] */
+function plot(id, cfg) {
+  const tx = v => cfg.logX ? Math.log10(v) : v, ty = v => cfg.logY ? Math.log10(v) : v;
+  const okx = v => isF(v) && (!cfg.logX || v > 0), oky = v => isF(v) && (!cfg.logY || v > 0);
+  const xs = [], ys = [];
+  for (const s of cfg.series) for (const p of s.points) {
+    if (s.type === "bar") { if (okx(p.x0) && okx(p.x1) && oky(p.y)) { xs.push(tx(p.x0), tx(p.x1)); ys.push(ty(p.y)); } }
+    else if (s.type === "range") { if (okx(p.x) && oky(p.y0) && oky(p.y1)) { xs.push(tx(p.x)); ys.push(ty(p.y0), ty(p.y1)); } }
+    else if (okx(p.x) && oky(p.y)) { xs.push(tx(p.x)); ys.push(ty(p.y)); } }
+  if (!xs.length) return emptyChart(id, cfg.empty);
+  const { c, ctx, w, h } = setupCanvas(id);
+  (cfg.hLines || []).forEach(v => ys.push(ty(v))); (cfg.vLines || []).forEach(v => xs.push(tx(v)));
+  let [x0, x1] = cfg.xDom ? cfg.xDom.map(tx) : [Math.min(...xs), Math.max(...xs)];
+  let [y0, y1] = cfg.yDom ? cfg.yDom.map(ty) : [Math.min(...ys), Math.max(...ys)];
+  if (cfg.bars0 && !cfg.logY) y0 = Math.min(0, y0);
+  if (cfg.identity) { const lo = Math.min(x0, y0), hi = Math.max(x1, y1); x0 = y0 = lo; x1 = y1 = hi; }
+  if (cfg.square) { const m = Math.max(Math.abs(x0), Math.abs(x1), Math.abs(y0), Math.abs(y1)) || 1; x0 = y0 = -m; x1 = y1 = m; }
+  if (!cfg.xDom) { const p = (x1 - x0 || 1) * 0.05; x0 -= p; x1 += p; }
+  if (!cfg.yDom) { const p = (y1 - y0 || 1) * 0.07; y1 += p; if (!(cfg.bars0 && !cfg.logY && y0 === 0)) y0 -= p; }
+  if (x0 === x1) { x0 -= 1; x1 += 1; } if (y0 === y1) { y0 -= 1; y1 += 1; }
+  const L = 56, R = 14, T = 12, B = 42, pw = w - L - R, ph = h - T - B;
+  const Xt = t => L + (t - x0) / (x1 - x0) * pw, Yt = t => T + ph - (t - y0) / (y1 - y0) * ph, X = v => Xt(tx(v)), Y = v => Yt(ty(v));
+  ctx.font = "11px system-ui,Arial"; ctx.lineWidth = 1; ctx.strokeStyle = C.line; ctx.fillStyle = C.ink2;
+  const xt = cfg.xTicks ? cfg.xTicks.map(t => ({ t: tx(t.v), l: t.label })) : (cfg.logX ? logTicks(x0, x1) : niceTicks(x0, x1)).map(t => ({ t, l: tl(cfg.logX ? 10 ** t : t) }));
+  const yt = (cfg.logY ? logTicks(y0, y1) : niceTicks(y0, y1)).map(t => ({ t, l: tl(cfg.logY ? 10 ** t : t) }));
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const k of xt) { if (k.t < x0 - 1e-9 || k.t > x1 + 1e-9) continue; const x = Xt(k.t); ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, T + ph); ctx.stroke(); ctx.fillText(k.l, x, T + ph + 5); }
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const k of yt) { const y = Yt(k.t); ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke(); ctx.fillText(k.l, L - 6, y); }
+  ctx.save(); ctx.beginPath(); ctx.rect(L, T, pw, ph); ctx.clip();
+  for (const r of cfg.rects || []) { ctx.strokeStyle = r.color; ctx.setLineDash([4, 3]); ctx.strokeRect(X(r.x0), Y(r.y1), X(r.x1) - X(r.x0), Y(r.y0) - Y(r.y1)); ctx.setLineDash([]); }
+  ctx.strokeStyle = C.ink2;
+  (cfg.hLines || []).forEach(v => { ctx.beginPath(); ctx.moveTo(L, Y(v)); ctx.lineTo(L + pw, Y(v)); ctx.stroke(); });
+  (cfg.vLines || []).forEach(v => { ctx.beginPath(); ctx.moveTo(X(v), T); ctx.lineTo(X(v), T + ph); ctx.stroke(); });
+  if (cfg.identity) { ctx.setLineDash([6, 5]); ctx.beginPath(); ctx.moveTo(Xt(x0), Yt(x0)); ctx.lineTo(Xt(x1), Yt(x1)); ctx.stroke(); ctx.setLineDash([]); }
+  for (const f of cfg.fits || []) { ctx.strokeStyle = f.color; ctx.lineWidth = 2; ctx.setLineDash(f.dash ? [6, 4] : []); ctx.beginPath(); let st = false;
+    for (let i = 0; i <= 100; i++) { const t = x0 + (x1 - x0) * i / 100, xv = cfg.logX ? 10 ** t : t, yv = f.f(xv); if (!oky(yv)) continue; st ? ctx.lineTo(Xt(t), Y(yv)) : ctx.moveTo(Xt(t), Y(yv)); st = true; }
+    ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; }
+  for (const s of cfg.series) {
+    if (s.type === "bar") { for (const p of s.points) { if (!(okx(p.x0) && okx(p.x1) && oky(p.y))) continue; const xa = X(p.x0), xb = X(p.x1), y = Y(p.y), yb = cfg.logY ? T + ph : Yt(Math.max(y0, 0));
+        ctx.fillStyle = p.color || s.color; ctx.globalAlpha = s.alpha || 0.9; ctx.fillRect(xa + 1, Math.min(y, yb), Math.max(1, xb - xa - 2), Math.abs(yb - y)); ctx.globalAlpha = 1;
+        c._hits.push({ x: xa, y: Math.min(y, yb), w: xb - xa, h: Math.abs(yb - y) + 4, tip: p.tip }); } }
+    else if (s.type === "range") { ctx.strokeStyle = s.color; ctx.lineWidth = 2; for (const p of s.points) { if (!okx(p.x) || !oky(p.y0) || !oky(p.y1)) continue; ctx.beginPath(); ctx.moveTo(X(p.x) + (s.off || 0), Y(p.y0)); ctx.lineTo(X(p.x) + (s.off || 0), Y(p.y1)); ctx.stroke(); } ctx.lineWidth = 1; }
+    else if (s.type === "line") { const pts = s.points.filter(p => okx(p.x) && oky(p.y)); ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.setLineDash(s.dash ? [6, 4] : []); ctx.beginPath();
+      pts.forEach((p, i) => i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1;
+      for (const p of pts) { ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), s.dash ? 2.5 : 3.5, 0, 7); ctx.fill(); if (p.tip) c._hits.push({ x: X(p.x), y: Y(p.y), tip: p.tip }); } }
+    else { for (const p of s.points) { if (!okx(p.x) || !oky(p.y)) continue; const px = X(p.x) + (s.off || 0), py = Y(p.y); ctx.globalAlpha = s.alpha || 0.75; ctx.fillStyle = p.color || s.color;
+        ctx.beginPath(); ctx.arc(px, py, p.r || 4, 0, 7); ctx.fill(); ctx.globalAlpha = 1; ctx.strokeStyle = C.surface; ctx.stroke(); if (p.tip) c._hits.push({ x: px, y: py, tip: p.tip }); } } }
+  ctx.restore();
+  ctx.fillStyle = C.ink; ctx.font = "12px system-ui,Arial"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.fillText(cfg.xLabel || "", L + pw / 2, h - 6);
+  ctx.save(); ctx.translate(13, T + ph / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(cfg.yLabel || "", 0, 0); ctx.restore();
+}
+function hist(values, edges) { const n = new Array(edges.length - 1).fill(0);
+  for (const v of values) for (let i = 0; i < n.length; i++) if (v >= edges[i] && (v < edges[i + 1] || (i === n.length - 1 && v === edges[i + 1]))) { n[i]++; break; }
+  return n.map((k, i) => ({ x0: edges[i], x1: edges[i + 1], y: k, tip: `${tl(edges[i])} – ${tl(edges[i + 1])}: ${k}` })); }
+const linEdges = (a, b, n) => Array.from({ length: n + 1 }, (_, i) => a + (b - a) * i / n);
+function lerp(a, b, t) { const h = s => [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16)); const A = h(a), B = h(b); return "rgb(" + A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(",") + ")"; }
+function heatmap(id, labels, M, onClick) { const n = labels.length, L = 96, T = 8, B = 76, el = $(id);
+  const cell = Math.max(18, Math.min(50, (el.clientWidth - L - 10) / n)); el.style.height = (T + B + n * cell) + "px";
+  const { c, ctx } = setupCanvas(id); ctx.font = "10.5px system-ui,Arial";
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const v = M[i][j], x = L + j * cell, y = T + i * cell;
+    ctx.fillStyle = v === null ? "#f7f7f5" : v >= 0 ? lerp(C.neutral, C.modis, Math.min(1, v)) : lerp(C.neutral, C.viirs, Math.min(1, -v)); ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+    if (v !== null && cell > 26) { ctx.fillStyle = Math.abs(v) > 0.6 ? "#fff" : C.ink; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(v.toFixed(2).replace("0.", "."), x + cell / 2, y + cell / 2); }
+    c._hits.push({ x, y, w: cell, h: cell, tip: `${labels[i]} × ${labels[j]}\nρ = ${v === null ? "n/d" : v.toFixed(3)}`, click: () => onClick(i, j) }); }
+  ctx.fillStyle = C.ink2; ctx.textAlign = "right"; ctx.textBaseline = "middle"; labels.forEach((l, i) => ctx.fillText(l, L - 6, T + i * cell + cell / 2));
+  labels.forEach((l, j) => { ctx.save(); ctx.translate(L + j * cell + cell / 2, T + n * cell + 6); ctx.rotate(-Math.PI / 3); ctx.textAlign = "right"; ctx.fillText(l, 0, 0); ctx.restore(); }); }
+function dayTicks(days) { if (!days.length) return []; const step = Math.max(1, Math.ceil(days.length / 8)); return days.filter((_, i) => i % step === 0).map(d => ({ v: dayNum(d), label: dayLabel(dayNum(d)) })); }
+
+/* ============ geometría orbital ============ */
+// Rumbo de la traza (rad, horario desde el norte). Órbita heliosincrónica i≈98.2°, velocidad de suelo ≈6.76 km/s, con rotación terrestre.
+function heading(lat, asc) { const c = Math.cos(lat * D2R), e = Math.max(-0.99, Math.min(0.99, Math.cos(98.2 * D2R) / c)), nrt = Math.sqrt(1 - e * e) * (asc ? 1 : -1);
+  return Math.atan2(6.76 * e - 0.4651 * c, 6.76 * nrt); }
+function toFrame(m, lat, lon) { const dx = (lon - m.lon) * KM * Math.cos(m.lat * D2R), dy = (lat - m.lat) * KM, h = m.h;
+  return { dx, dy, ac: dx * Math.cos(h) - dy * Math.sin(h), al: dx * Math.sin(h) + dy * Math.cos(h) }; }
+function footprint(d, rot) { const hs = d.scan / 2, ht = d.track / 2, h = rot ? d.h : 0, k = KM * Math.cos(d.lat * D2R);
+  return [[-hs, -ht], [hs, -ht], [hs, ht], [-hs, ht]].map(([ac, al]) => { const dx = ac * Math.cos(h) + al * Math.sin(h), dy = -ac * Math.sin(h) + al * Math.cos(h); return [d.lat + dy / KM, d.lon + dx / k]; }); }
+
+/* ============ FIRMS ============ */
+function bboxStr(lat, lon, km) { const a = km / KM, b = km / (KM * Math.cos(lat * D2R)); return [Math.max(-180, lon - b), Math.max(-90, lat - a), Math.min(180, lon + b), Math.min(90, lat + a)].map(v => v.toFixed(4)).join(","); }
+function addDays(d, n) { return new Date(Date.parse(d + "T00:00:00Z") + n * 864e5).toISOString().slice(0, 10); }
+async function fetchFirms(source, bbox, range, date) {
+  const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${$("mapKey").value.trim()}/${source}/${bbox}/${range}/${date}`;
+  if (S.cache.has(url)) return S.cache.get(url);
+  const r = await fetch(url); if (!r.ok) { const body = (await r.text().catch(() => "")).replace(/<[^>]+>/g, " ").trim().slice(0, 200); throw new Error(`${source} devolvió HTTP ${r.status}${body ? " — " + body : ""}`); }
+  const csv = await r.text(); if (!csv.slice(0, 300).toLowerCase().includes("latitude")) throw new Error("FIRMS no devolvió CSV para " + source + ": " + csv.slice(0, 120));
+  const rows = parseCSV(csv); S.cache.set(url, rows); return rows; }
+function parseCSV(csv) { const lines = csv.replace(/^﻿/, "").trim().split(/\r?\n/); if (lines.length <= 1) return [];
+  const H = parseLine(lines[0]).map(s => s.trim().toLowerCase()); return lines.slice(1).filter(l => l.trim()).map(l => { const v = parseLine(l), o = {}; H.forEach((k, j) => o[k] = (v[j] || "").trim()); return o; }); }
+function parseLine(line) { const r = []; let cur = "", q = false; for (let i = 0; i < line.length; i++) { const ch = line[i];
+  if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (ch === "," && !q) { r.push(cur); cur = ""; } else cur += ch; } r.push(cur); return r; }
+function absMin(date, time) { const t = String(time || "").trim(); if (!/^\d{1,4}$/.test(t) || !date) return null; const p = t.padStart(4, "0"), hh = +p.slice(0, 2), mm = +p.slice(2);
+  if (hh > 23 || mm > 59) return null; const d = Date.parse(date + "T00:00:00Z"); return isF(d) ? d / 6e4 + hh * 60 + mm : null; }
+const hhmm = r => { const t = String(r && r.acq_time || "").padStart(4, "0"); return /^\d{4}$/.test(t) ? t.slice(0, 2) + ":" + t.slice(2) : "–"; };
+function normalize(r, sensor) {
+  const lat = num(r.latitude), lon = num(r.longitude); if (!isF(lat) || !isF(lon)) return null; const isM = sensor === "MODIS";
+  const sat = (r.satellite || "").trim().charAt(0).toUpperCase(), dn = (r.daynight || "D").trim().toUpperCase() || "D";
+  const asc = isM && sat === "T" ? dn === "N" : dn !== "N"; // Terra diurna desciende; Aqua y VIIRS diurnos ascienden
+  const t = absMin(r.acq_date, r.acq_time), conf = (r.confidence || "").trim();
+  return { sensor, lat, lon, raw: r, day: r.acq_date, t, sat: isM ? sat : "V", vsat: isM ? null : (r._src || ("VIIRS_" + (r.satellite || "?"))), dn, asc, h: heading(lat, asc),
+    lst: isF(t) ? (((t % 1440) / 60 + lon / 15) % 24 + 24) % 24 : null,
+    bt: num(isM ? r.brightness : r.bright_ti4), bt11: num(isM ? r.bright_t31 : r.bright_ti5), frp: num(r.frp),
+    scan: num(r.scan) || (isM ? 1 : 0.375), track: num(r.track) || (isM ? 1 : 0.375),
+    conf: ({ l: 10, n: 50, h: 90 })[conf.toLowerCase().charAt(0)] ?? num(conf), confRaw: conf }; }
+
+/* ============ matcheo ============ */
+const CELL = 0.05;
+function buildIndex(M) { const idx = new Map(); M.forEach((m, i) => { const k = Math.floor(m.lat / CELL) + "|" + Math.floor(m.lon / CELL); if (!idx.has(k)) idx.set(k, []); idx.get(k).push(i); }); return idx; }
+function forNear(idx, lat, lon, reach, fn) { const cs = Math.cos(lat * D2R), ci = Math.floor(lat / CELL), cj = Math.floor(lon / CELL), ka = Math.ceil(reach / (CELL * KM)), kb = Math.ceil(reach / (CELL * KM * cs));
+  for (let a = ci - ka; a <= ci + ka; a++) for (let b = cj - kb; b <= cj + kb; b++) { const l = idx.get(a + "|" + b); if (l) for (const i of l) fn(i); } }
+function matchAll(M, V, p, idx, shift) {
+  const assign = new Int32Array(V.length).fill(-1), info = new Array(V.length);
+  const maxHalf = M.reduce((a, m) => Math.max(a, Math.hypot(m.scan, m.track) / 2), 0.5);
+  const reach = p.mode === "fixed" ? p.dist : maxHalf + 0.5 + p.margin, sdx = shift ? shift.dx : 0, sdy = shift ? shift.dy : 0;
+  for (let vi = 0; vi < V.length; vi++) {
+    const v = V[vi]; if (v.t === null) continue; const lat = v.lat + sdy / KM, lon = v.lon + sdx / (KM * Math.cos(v.lat * D2R));
+    let best = -1, bs = Infinity, bi = null;
+    forNear(idx, lat, lon, reach, mi => { const m = M[mi]; if (m.t === null || m.dn !== v.dn) return;
+      const dtS = v.t - m.t; if (Math.abs(dtS) > (m.sat === "T" ? p.tolT : p.tolA)) return;
+      const f = toFrame(m, lat, lon), d = Math.hypot(f.dx, f.dy); let sc;
+      if (p.mode === "fixed") { if (d > p.dist) return; sc = d; }
+      else { const ax = (m.scan + v.scan) / 2 + p.margin, ay = (m.track + v.track) / 2 + p.margin, u = p.mode === "fprot" ? f.ac : f.dx, w = p.mode === "fprot" ? f.al : f.dy;
+        if (Math.abs(u) > ax || Math.abs(w) > ay) return; sc = Math.max(Math.abs(u) / ax, Math.abs(w) / ay) + d * 1e-6; }
+      if (sc < bs) { bs = sc; best = mi; bi = { d, dx: f.dx, dy: f.dy, ac: f.ac, al: f.al, dtS, dt: Math.abs(dtS) }; } });
+    assign[vi] = best; info[vi] = bi; }
+  return { assign, info }; }
+function mStats(M, V, mr) { let nv = 0; const ms = new Set(); mr.assign.forEach(mi => { if (mi >= 0) { nv++; ms.add(mi); } }); return { fM: M.length ? ms.size / M.length : 0, fV: V.length ? nv / V.length : 0, nM: ms.size, nV: nv }; }
+const SHIFTS = [0, 90, 180, 270].map(a => ({ dx: 20 * Math.cos(a * D2R), dy: 20 * Math.sin(a * D2R) }));
+function chance(M, V, p, idx) { const st = SHIFTS.map(s => mStats(M, V, matchAll(M, V, p, idx, s))); return { fM: mean(st.map(s => s.fM)), fV: mean(st.map(s => s.fV)), nV: mean(st.map(s => s.nV)), nM: mean(st.map(s => s.nM)) }; }
+/* ---- clusters MODIS ---- */
+const RULES = [{ k: "pixel", name: "Píxel solo" }, { k: "touch", name: "Píxeles que se tocan" }, { k: "r2", name: "Radio 2 km" }, { k: "r5", name: "Radio 5 km" }, { k: "r10", name: "Radio 10 km" }];
+function clusterM(M, idx, rule) {
+  const n = M.length, par = Int32Array.from({ length: n }, (_, i) => i), find = i => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+  if (rule !== "pixel") { const R = rule === "touch" ? 6 : +rule.slice(1);
+    M.forEach((m, i) => forNear(idx, m.lat, m.lon, R, j => { if (j <= i) return; const o = M[j];
+      if (o.sat !== m.sat || o.dn !== m.dn || m.t === null || o.t === null || Math.abs(o.t - m.t) > 10) return;  // misma pasada
+      const f = toFrame(m, o.lat, o.lon);
+      const ok = rule === "touch" ? (Math.abs(f.ac) <= (m.scan + o.scan) / 2 + 0.1 && Math.abs(f.al) <= (m.track + o.track) / 2 + 0.1) : Math.hypot(f.dx, f.dy) <= R;
+      if (ok) par[find(i)] = find(j); })); }
+  const g = new Map(); for (let i = 0; i < n; i++) { const r = find(i); if (!g.has(r)) g.set(r, []); g.get(r).push(i); } return [...g.values()]; }
+function aggUnit(ms) {
+  if (ms.length === 1) return { ...ms[0], members: ms, n: 1 };
+  const w = ms.map(m => m.frp > 0 ? m.frp : 0.01), wm = k => { let a = 0, b = 0; ms.forEach((m, i) => { if (isF(m[k])) { a += m[k] * w[i]; b += w[i]; } }); return b ? a / b : null; };
+  const frps = ms.map(m => m.frp).filter(isF), confs = ms.map(m => m.conf).filter(isF);
+  return { ...ms[0], lat: wm("lat"), lon: wm("lon"), t: mean(ms.map(m => m.t).filter(isF)), scan: wm("scan"), track: wm("track"), frp: frps.length ? sum(frps) : null,
+    bt: wm("bt"), bt11: wm("bt11"), conf: confs.length ? Math.max(...confs) : null, lst: wm("lst"), members: ms, n: ms.length }; }
+function buildResults(M, V, mr, clusters) {
+  clusters = clusters || M.map((_, i) => [i]);
+  const unitOf = new Int32Array(M.length); clusters.forEach((c, u) => c.forEach(i => unitOf[i] = u));
+  const groups = clusters.map(() => []); mr.assign.forEach((mi, vi) => { if (mi >= 0) groups[unitOf[mi]].push({ v: V[vi], vi, ...mr.info[vi] }); });
+  const res = [], other = new Set();
+  clusters.forEach((c, u) => { const m = aggUnit(c.map(i => M[i])); let g = groups[u];
+    // con varias fuentes/pasadas VIIRS, se usa solo la pasada más cercana en hora (evita contar dos veces la energía)
+    if (g.length > 1) { const b = g.reduce((a, x) => x.dt < a.dt ? x : a); const keep = g.filter(x => x.v.vsat === b.v.vsat && Math.abs(x.dtS - b.dtS) <= 10); g.filter(x => !keep.includes(x)).forEach(x => other.add(x.vi)); g = keep; }
+    if (!g.length) { res.push({ status: "MODIS_ONLY", m, g: [], vn: 0, day: m.day }); return; }
+    const near = g.reduce((a, b) => b.d < a.d ? b : a), bts = g.map(x => x.v.bt).filter(isF), frps = g.map(x => x.v.frp).filter(isF), vfrp = frps.length ? sum(frps) : null;
+    res.push({ status: "MATCHED", m, g, near, day: m.day, vn: g.length, vbt: mean(bts), vbtmax: bts.length ? Math.max(...bts) : null, vbt11: mean(g.map(x => x.v.bt11).filter(isF)), vfrp,
+      vscan: mean(g.map(x => x.v.scan)), vconf: mean(g.map(x => x.v.conf).filter(isF)), vsat: bts.length ? bts.filter(b => b >= I4_SAT - 0.5).length / bts.length : null,
+      dt: near.dt, dtS: near.dtS, dist: near.d, dbt: isF(m.bt) && bts.length ? mean(bts) - m.bt : null, lr: vfrp > 0 && m.frp > 0 ? Math.log10(vfrp / m.frp) : null }); });
+  V.forEach((v, vi) => { if (mr.assign[vi] < 0 && !other.has(vi)) res.push({ status: "VIIRS_ONLY", v, g: [{ v, d: null }], vn: 1, day: v.day }); });
+  return res; }
+const VARS = [["m_n", "M n", "N° píxeles MODIS en la unidad"], ["m_bt", "M BT4", "MODIS BT 4 µm (K)"], ["m_bt11", "M BT11", "MODIS BT 11 µm (K)"], ["m_logfrp", "M logFRP", "log10 FRP MODIS"], ["m_scan", "M scan", "MODIS scan (km)"],
+  ["m_track", "M track", "MODIS track (km)"], ["m_conf", "M conf", "Confianza MODIS"], ["m_lst", "M hora loc", "Hora solar local MODIS"], ["v_n", "V n", "N° VIIRS en el grupo"],
+  ["v_bt", "V I4", "VIIRS I4 media (K)"], ["v_btmax", "V I4max", "VIIRS I4 máx (K)"], ["v_logfrp", "V logFRP", "log10 ΣFRP VIIRS"], ["v_scan", "V scan", "VIIRS scan medio (km)"],
+  ["v_conf", "V conf", "Confianza VIIRS media"], ["v_sat", "V sat", "Fracción I4 saturada"], ["dtS", "Δt", "Δt VIIRS−MODIS (min)"], ["dist", "dist", "Distancia (km)"],
+  ["doy", "día", "Día (n°)"], ["d_bt", "ΔBT", "ΔBT VIIRS − MODIS (K)"], ["lr_frp", "logRatioFRP", "log10(ΣFRP V / FRP M)"]];
+function featureRows(res) { return res.filter(r => r.status === "MATCHED").map(r => ({ day: r.day, doy: dayNum(r.day),
+  m_n: r.m.n || 1, m_bt: r.m.bt, m_bt11: r.m.bt11, m_logfrp: r.m.frp > 0 ? Math.log10(r.m.frp) : null, m_scan: r.m.scan, m_track: r.m.track, m_conf: r.m.conf, m_lst: r.m.lst,
+  v_n: r.vn, v_bt: r.vbt, v_btmax: r.vbtmax, v_logfrp: r.vfrp > 0 ? Math.log10(r.vfrp) : null, v_scan: r.vscan, v_conf: r.vconf, v_sat: r.vsat,
+  dtS: r.dtS, dist: r.dist, d_bt: r.dbt, lr_frp: r.lr, _r: r })); }
+function pairs(rows, a, b) { const x = [], y = [], rr = []; for (const r of rows) if (isF(r[a]) && isF(r[b])) { x.push(r[a]); y.push(r[b]); rr.push(r); } return { x, y, rr }; }
+
+/* ============ modelos y validación cruzada ============ */
+const MODELS = [
+  { k: "M0", name: "Sin corregir", cols: null }, { k: "M1", name: "Factor fijo", cols: r => [1] }, { k: "M2", name: "log‑lineal", cols: r => [1, r.m_logfrp] },
+  { k: "M3", name: "+ scan", cols: r => [1, r.m_logfrp, r.m_scan] }, { k: "M4", name: "+ scan + Δt", cols: r => [1, r.m_logfrp, r.m_scan, r.dtS] }];
+const modelRows = rows => rows.filter(r => isF(r.m_logfrp) && isF(r.v_logfrp) && isF(r.m_scan) && isF(r.dtS));
+// Todos los modelos predicen log10(ΣFRP_V / FRP_M); la predicción de log10(FRP_V) es log10(FRP_M) + ese término.
+function fitModel(mod, rows) { if (!mod.cols) return []; return lstsq(rows.map(mod.cols), rows.map(r => r.v_logfrp - r.m_logfrp)); }
+function predict(mod, coef, r) { if (!mod.cols) return r.m_logfrp; return r.m_logfrp + mod.cols(r).reduce((s, v, i) => s + v * coef[i], 0); }
+function crossValidate(rows, onlyModel) {
+  const days = [...new Set(rows.map(r => r.day))]; let folds;
+  if (days.length >= 3) folds = days.map(d => rows.filter(r => r.day === d));
+  else { const rnd = seeded(7), k = Math.min(5, rows.length), lab = rows.map(() => Math.floor(rnd() * k)); folds = Array.from({ length: k }, (_, i) => rows.filter((_, j) => lab[j] === i)); }
+  const byDay = days.length >= 3;
+  return MODELS.filter(m => !onlyModel || m.k === onlyModel).map(mod => {
+    const res = [], preds = new Map(); for (const test of folds) { if (!test.length) continue; const ts = new Set(test), train = rows.filter(r => !ts.has(r)); const coef = fitModel(mod, train); if (mod.cols && !coef) continue;
+      for (const r of test) { const pr = predict(mod, coef, r); preds.set(r, pr); res.push(r.v_logfrp - pr); } }
+    const all = fitModel(mod, rows), ins = rows.map(r => r.v_logfrp - predict(mod, all, r));
+    return { mod, coef: all, cv: res.length ? Math.sqrt(mean(res.map(v => v * v))) : null, ins: (mod.cols && !all) ? null : Math.sqrt(mean(ins.map(v => v * v))), bias: mean(res), n: res.length, byDay, preds }; }); }
+// Error del total diario (misma escala para cualquier regla): mediana sobre días de |log10(Σ pred / Σ VIIRS)|
+function dayError(rows, preds) { const m = new Map(); for (const r of rows) { if (!preds.has(r)) continue; if (!m.has(r.day)) m.set(r.day, [0, 0]); const a = m.get(r.day); a[0] += 10 ** preds.get(r); a[1] += 10 ** r.v_logfrp; }
+  const e = [...m.values()].filter(a => a[0] > 0 && a[1] > 0).map(a => Math.abs(Math.log10(a[0] / a[1]))); return e.length >= 2 ? median(e) : null; }
+function chooseModel(cv) { const ok = cv.filter(c => isF(c.cv)); if (!ok.length) return null; const min = Math.min(...ok.map(c => c.cv)); return ok.find(c => c.cv <= min * 1.02); }
+
+/* ============ detección / omisión ============ */
+// Para cada píxel VIIRS: busca el MODIS más cercano compatible (≤50 km) como referencia de geometría local,
+// y suma el FRP VIIRS que cabría en un píxel MODIS (scan × track rotado) centrado en ese píxel.
+function detection(V, vIdx, M, idx, assign, p) {
+  const out = [];
+  V.forEach((v, vi) => { if (!(v.frp > 0) || v.t === null) return;
+    let near = null, nd = 50;
+    forNear(idx, v.lat, v.lon, 50, mi => { const m = M[mi]; if (m.dn !== v.dn || m.t === null || Math.abs(v.t - m.t) > (m.sat === "T" ? p.tolT : p.tolA)) return; const f = toFrame(m, v.lat, v.lon), d = Math.hypot(f.dx, f.dy); if (d < nd) { nd = d; near = m; } });
+    if (!near) return;
+    const ref = { lat: v.lat, lon: v.lon, h: near.h }; let fs = 0;
+    forNear(vIdx, v.lat, v.lon, Math.hypot(near.scan, near.track) / 2 + 0.2, j => { const w = V[j]; if (!(w.frp > 0) || w.dn !== v.dn || w.t === null || Math.abs(w.t - v.t) > 15) return;
+      const f = toFrame(ref, w.lat, w.lon); if (Math.abs(f.ac) <= near.scan / 2 && Math.abs(f.al) <= near.track / 2) fs += w.frp; });
+    out.push({ frp: v.frp, nfrp: fs, lf: Math.log10(fs), det: assign[vi] >= 0 ? 1 : 0, scan: near.scan, day: v.day }); });
+  return out; }
+const SCAN_GROUPS = [{ name: "scan < 1.5 km", lo: 0, hi: 1.5, color: "#86b6ef" }, { name: "1.5–3 km", lo: 1.5, hi: 3, color: "#2a78d6" }, { name: "> 3 km", lo: 3, hi: 99, color: "#104281" }];
+function fitDetection(det) { const fit = d => { if (d.length < 8 || !d.some(x => x.det) || d.every(x => x.det)) return null; const w = logistic(d.map(x => [1, x.lf]), d.map(x => x.det)); return { w, f50: w[1] > 0 ? 10 ** (-w[0] / w[1]) : null, n: d.length }; };
+  return { all: fit(det), groups: SCAN_GROUPS.map(g => ({ ...g, fit: fit(det.filter(x => x.scan >= g.lo && x.scan < g.hi)) })) }; }
+const OMIT_EDGES = [1, 1.5, 2.5, 3.5, 5];
+function omission(det) { const tot = sum(det.map(x => x.frp)), miss = sum(det.filter(x => !x.det).map(x => x.frp)), overall = tot ? miss / tot : 0;
+  const bins = OMIT_EDGES.slice(0, -1).map((lo, i) => { const hi = OMIT_EDGES[i + 1], d = det.filter(x => x.scan >= lo && (x.scan < hi || (i === OMIT_EDGES.length - 2 && x.scan <= hi + 1)));
+    const t = sum(d.map(x => x.frp)), m = sum(d.filter(x => !x.det).map(x => x.frp)); return { lo, hi, n: d.length, f: d.length >= 5 && t ? m / t : null }; });
+  return { overall, bins, f: scan => { const b = bins.find((b, i) => scan >= b.lo && (scan < b.hi || i === bins.length - 1)); return Math.min(0.9, b && isF(b.f) ? b.f : overall); } }; }
+
+/* ============ análisis ============ */
+function params() { return { mode: $("matchMode").value, dist: +$("matchDistance").value || 1, margin: Math.max(0, +$("margin").value || 0),
+  tolA: Math.min(1440, Math.max(0, +$("tolA").value || 0)), tolT: Math.min(1440, Math.max(0, +$("tolT").value || 0)), pass: $("pass").value, type: $("typeFilter").value, focus: $("focus").value, rule: $("clusterRule").value, cover: $("cover").value === "1" }; }
+function setStatus(m, err) { const e = $("status"); e.textContent = m; e.style.background = err ? "#fde8e8" : C.neutral; e.style.color = err ? "#8a1c1c" : C.ink; }
+
+function analyzeSat(sat, M, V, vIdx, p) {
+  const idx = buildIndex(M), mr = matchAll(M, V, p, idx), clCache = {}, getCl = rule => clCache[rule] || (clCache[rule] = clusterM(M, idx, rule));
+  const res = buildResults(M, V, mr, getCl(p.rule)), rows = featureRows(res);
+  const real = mStats(M, V, mr), ch = chance(M, V, p, idx);
+  const det = detection(V, vIdx, M, idx, mr.assign, p), dfit = fitDetection(det), om = omission(det);
+  const mrows = modelRows(rows), cv = mrows.length >= 6 ? crossValidate(mrows) : [], best = chooseModel(cv);
+  const dtMed = median(mrows.map(r => r.dtS)) ?? 0;
+  const harm = m => { if (!best || !(m.frp > 0)) return m.frp; const r = { m_logfrp: Math.log10(m.frp), m_scan: m.scan, dtS: dtMed }; return 10 ** predict(best.mod, best.coef, r); };
+  return { sat, M, idx, mr, getCl, res, rows, mrows, real, ch, det, dfit, om, cv, best, harm, dtMed, units: res.filter(r => r.m) }; }
+
+function configComparison(F, V, p) {
+  const cfgs = [{ name: "Distancia fija 1 km", mode: "fixed", dist: 1, margin: 0 }, { name: "Distancia fija 2 km", mode: "fixed", dist: 2, margin: 0 },
+    { name: "Huella N‑S / E‑O", mode: "fp", margin: p.margin }, { name: "Huella rotada", mode: "fprot", margin: p.margin }, { name: "Huella rotada + 0.3 km", mode: "fprot", margin: 0.3 }];
+  return cfgs.map(c => { const q = { ...p, ...c }, mr = matchAll(F.M, V, q, F.idx), st = mStats(F.M, V, mr), chs = chance(F.M, V, q, F.idx);
+    const mrows = modelRows(featureRows(buildResults(F.M, V, mr, F.getCl(p.rule)))), cv = mrows.length >= 6 ? crossValidate(mrows, "M3")[0] : null;
+    const current = c.mode === p.mode && (c.mode === "fixed" ? c.dist === p.dist : Math.abs(c.margin - p.margin) < 1e-9);
+    return { ...c, st, chs, net: st.nV - chs.nV, groups: mrows.length, cv: cv && cv.cv, current }; }); }
+
+function clusterComparison(F, V, p) {
+  return RULES.map(R => { const res = buildResults(F.M, V, F.mr, F.getCl(R.k)), mrows = modelRows(featureRows(res));
+    const x = mrows.map(r => r.m_logfrp), y = mrows.map(r => r.v_logfrp), units = res.filter(r => r.m);
+    const cv3 = mrows.length >= 6 ? crossValidate(mrows, "M3")[0] : null, cv0 = mrows.length >= 6 ? crossValidate(mrows, "M0")[0] : null;
+    return { ...R, units: units.length, matched: units.filter(r => r.status === "MATCHED").length, pxPerUnit: F.M.length / (units.length || 1),
+      r: pearson(x, y), rho: x.length >= 3 ? spearman(x, y) : null, cv: cv3 && cv3.cv, cv0: cv0 && cv0.cv, dayErr: cv3 ? dayError(mrows, cv3.preds) : null, dayErr0: cv0 ? dayError(mrows, cv0.preds) : null,
+      pts: mrows.map(r => ({ x: 10 ** r.m_logfrp, y: 10 ** r.v_logfrp, n: r.m_n })), current: R.k === p.rule }; }); }
+
+function runAnalysis(origin) {
+  const p = params(), t0 = performance.now();
+  const pf = d => (p.pass === "ALL" || d.dn === p.pass) && (p.type === "all" || !d.raw.type || String(d.raw.type).trim() === "0");
+  const allM = S.rawM.map(r => normalize(r, "MODIS")).filter(d => d && pf(d));
+  S.V = S.rawV.map(r => normalize(r, "VIIRS")).filter(d => d && pf(d));
+  // Cobertura: un MODIS solo es comparable si VIIRS tuvo alguna detección (misma pasada día/noche) dentro de la tolerancia de hora
+  let nNoCover = 0;
+  if (p.cover) { const vt = S.V.filter(v => v.t !== null).map(v => [v.t, v.dn]).sort((a, b) => a[0] - b[0]);
+    const has = m => { const tol = m.sat === "T" ? p.tolT : p.tolA; let lo = 0, hi = vt.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (vt[mid][0] < m.t - tol) lo = mid + 1; else hi = mid; }
+      for (let i = lo; i < vt.length && vt[i][0] <= m.t + tol; i++) if (vt[i][1] === m.dn) return true; return false; };
+    const before = allM.length; for (let i = allM.length - 1; i >= 0; i--) if (allM[i].t === null || !has(allM[i])) allM.splice(i, 1); nNoCover = before - allM.length; }
+  S.days = [...new Set(allM.map(m => m.day).concat(S.V.map(v => v.day)))].filter(Boolean).sort();
+  const vIdx = buildIndex(S.V);
+  S.by = {};
+  for (const sat of ["A", "T"]) { const M = allM.filter(m => m.sat === sat); if (M.length) S.by[sat] = analyzeSat(sat, M, S.V, vIdx, p); }
+  S.p = p; S.F = S.by[p.focus] || S.by.A || S.by.T || null;
+  if (S.F) { S.cfg = configComparison(S.F, S.V, p); S.cl = clusterComparison(S.F, S.V, p);
+    S.sens = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5].map(t => { const q = { ...p, mode: "fixed", dist: t }; return { t, real: mStats(S.F.M, S.V, matchAll(S.F.M, S.V, q, S.F.idx)), ch: chance(S.F.M, S.V, q, S.F.idx) }; }); }
+  S.ts = computeSeries(S.F); S.tsBest = null;
+  if (S.ts) { const best = pickScale(S.ts); if (best) { $("tsCell").value = best.cell; $("tsWin").value = String(best.win); } }
+  fillDaySelect(); syncImagery(); drawAll(true);
+  $("downloadButton").disabled = $("exportButton").disabled = !(S.rawM.length || S.rawV.length);
+  const nStatic = S.rawM.concat(S.rawV).filter(r => r.type && String(r.type).trim() !== "0").length;
+  setStatus(`${origin ? origin + " · " : ""}${S.days.length} días · MODIS ${allM.length} · VIIRS ${S.V.length}${p.type === "veg" && nStatic ? ` · ${nStatic} detecciones de fuentes fijas excluidas` : ""}${nNoCover ? ` · ${nNoCover} MODIS sin pasada VIIRS comparable excluidos` : ""} · ${(performance.now() - t0).toFixed(0)} ms`);
+}
+
+function drawAll(fit) { renderStats(); render1(); render2(); drawMaps(fit); render4(); render4b(); render5(); render6(); render7("A"); render7("T"); render8(); render8b(); render8c(); render9(); renderTable(); }
+
+/* ============ series temporales ============ */
+const TS_CELLS = ["0.1", "0.25", "0.5", "1", "R"], TS_WINS = [1, 3, 7, 15], TS_CELLN = { "0.1": "0.1°", "0.25": "0.25°", "0.5": "0.5°", "1": "1°", R: "Región" };
+function seriesAt(B, V, cell, win) {
+  const d0 = Math.min(...S.days.map(dayNum)), nSrc = Math.max(1, new Set(V.map(v => v.vsat)).size);
+  const ck = (lat, lon) => cell === "R" ? "R" : Math.floor(lat / +cell) + "|" + Math.floor(lon / +cell), wOf = d => Math.floor((dayNum(d) - d0) / win);
+  const recs = new Map(), get = (c, w) => { const k = c + "#" + w; if (!recs.has(k)) recs.set(k, { cell: c, w, M: 0, V: 0, sw: 0, ss: 0, tm: [], tv: [] }); return recs.get(k); };
+  for (const m of B.M) { if (!(m.frp > 0) || m.t === null) continue; const r = get(ck(m.lat, m.lon), wOf(m.day)); r.M += m.frp; r.sw += m.frp; r.ss += m.frp * m.scan; r.tm.push(m.t); }
+  for (const v of V) { if (!(v.frp > 0) || v.t === null) continue; const r = get(ck(v.lat, v.lon), wOf(v.day)); r.V += v.frp / nSrc; r.tv.push(v.t); }
+  const rows = [...recs.values()].map(r => ({ ...r, day: "w" + r.w, m_logfrp: r.M > 0 ? Math.log10(r.M) : null, v_logfrp: r.V > 0 ? Math.log10(r.V) : null,
+    m_scan: r.sw ? r.ss / r.sw : null, dtS: r.tm.length && r.tv.length ? mean(r.tv.map(t => t % 1440)) - mean(r.tm.map(t => t % 1440)) : null }));
+  const both = modelRows(rows), nW = new Set(rows.map(r => r.w)).size;
+  const cv = both.length >= 6 && new Set(both.map(r => r.w)).size >= 3 ? crossValidate(both) : [], best = chooseModel(cv);
+  const dtMed = median(both.map(r => r.dtS)) ?? 0, totV = sum(rows.map(r => r.V)), f0 = totV ? sum(rows.filter(r => !(r.M > 0)).map(r => r.V)) / totV : 0;
+  const predOf = r => { if (!(r.M > 0)) return 0; if (best && best.preds.has(r)) return 10 ** best.preds.get(r);
+    if (best) return 10 ** predict(best.mod, best.coef, { m_logfrp: r.m_logfrp, m_scan: r.m_scan ?? median(both.map(x => x.m_scan)), dtS: isF(r.dtS) ? r.dtS : dtMed }); return r.M; };
+  const byW = new Map(); for (const r of rows) { if (!byW.has(r.w)) byW.set(r.w, { w: r.w, x: d0 + r.w * win, V: 0, M: 0, H: 0 }); const o = byW.get(r.w); o.V += r.V; o.M += r.M; o.H += predOf(r); }
+  const ser = [...byW.values()].sort((a, b) => a.w - b.w); ser.forEach(o => o.HO = o.H / (1 - Math.min(0.9, f0)));
+  const ok = ser.filter(o => o.V > 0 && o.HO > 0), okM = ser.filter(o => o.V > 0 && o.M > 0);
+  // bootstrap por ventanas del factor fijo (precisión del coeficiente)
+  let ci = null; if (both.length >= 6) { const ws = [...new Set(both.map(r => r.w))], rnd = seeded(11), byWin = new Map(ws.map(w => [w, both.filter(r => r.w === w).map(r => r.v_logfrp - r.m_logfrp)])), bs = [];
+    for (let k = 0; k < 300; k++) { const a = []; for (let i = 0; i < ws.length; i++) a.push(...byWin.get(ws[Math.floor(rnd() * ws.length)])); bs.push(mean(a)); }
+    ci = [quant(bs, 0.05), quant(bs, 0.95)]; }
+  return { cell, win, rows, both, nW, cv, best, f0, ser, ci,
+    err: ok.length >= 3 ? median(ok.map(o => Math.abs(Math.log10(o.HO / o.V)))) : null, errRaw: okM.length >= 3 ? median(okM.map(o => Math.abs(Math.log10(o.M / o.V)))) : null,
+    r: ok.length >= 4 ? pearson(ok.map(o => Math.log10(o.V)), ok.map(o => Math.log10(o.HO))) : null, rRaw: okM.length >= 4 ? pearson(okM.map(o => Math.log10(o.V)), okM.map(o => Math.log10(o.M))) : null,
+    bias: ok.length ? Math.log10(sum(ok.map(o => o.HO)) / sum(ok.map(o => o.V))) : null, biasRaw: okM.length ? Math.log10(sum(okM.map(o => o.M)) / sum(okM.map(o => o.V))) : null }; }
+function pickScale(G) { const c = Object.values(G).filter(x => isF(x.err) && x.ser.filter(s => s.V > 0).length >= 4); if (!c.length) return null;
+  const min = Math.min(...c.map(x => x.err)), thr = min * 1.5 + 0.02, rank = x => TS_CELLS.indexOf(x.cell) * 10 + TS_WINS.indexOf(x.win);
+  return c.filter(x => x.err <= thr).sort((a, b) => rank(a) - rank(b))[0]; }
+function computeSeries(B) { if (!B || !S.days.length) return null; const g = {}; for (const c of TS_CELLS) for (const w of TS_WINS) g[c + "|" + w] = seriesAt(B, S.V, c, w); return g; }
+function heatgrid(id, rows, cols, val, txt, color, onClick) { const el = $(id), L = 70, T = 24, cw = (el.clientWidth - L - 10) / cols.length, ch = Math.min(46, (el.clientHeight - T - 10) / rows.length);
+  const { c, ctx } = setupCanvas(id); ctx.font = "11px system-ui,Arial"; ctx.textBaseline = "middle";
+  cols.forEach((cl, j) => { ctx.fillStyle = C.ink2; ctx.textAlign = "center"; ctx.fillText(cl.label, L + j * cw + cw / 2, T / 2); });
+  rows.forEach((rw, i) => { ctx.fillStyle = C.ink2; ctx.textAlign = "right"; ctx.fillText(rw.label, L - 6, T + i * ch + ch / 2);
+    cols.forEach((cl, j) => { const o = val(rw.k, cl.k), x = L + j * cw, y = T + i * ch, bg = color(o); ctx.fillStyle = bg; ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2);
+      const rgb = (bg.match(/\d+/g) || [240, 240, 240]).map(Number), dark = rgb.length >= 3 && (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) < 140;
+      const t = txt(o); ctx.fillStyle = dark ? "#fff" : C.ink; ctx.textAlign = "center"; ctx.fillText(t.main, x + cw / 2, y + ch / 2 - (t.sub ? 6 : 0)); if (t.sub) { ctx.fillStyle = dark ? "#e8e8e8" : C.ink2; ctx.font = "9.5px system-ui,Arial"; ctx.fillText(t.sub, x + cw / 2, y + ch / 2 + 8); ctx.font = "11px system-ui,Arial"; }
+      c._hits.push({ x, y, w: cw, h: ch, tip: t.tip, click: () => onClick(rw.k, cl.k) }); }); }); }
+function render8b() {
+  const G = S.ts; if (!G) { ["cScale", "cScaleR", "cTsH", "cCum", "cRec"].forEach(id => emptyChart(id)); $("i8b").textContent = ""; return; }
+  const rows = TS_CELLS.map(k => ({ k, label: TS_CELLN[k] })), cols = TS_WINS.map(k => ({ k, label: k + (k === 1 ? " día" : " días") })), at = (c, w) => G[c + "|" + w];
+  const pick = (c, w) => { $("tsCell").value = c; $("tsWin").value = String(w); render8bDetail(); };
+  heatgrid("cScale", rows, cols, at, o => ({ main: isF(o.err) ? o.err.toFixed(2) : "–", sub: isF(o.errRaw) ? "crudo " + o.errRaw.toFixed(2) : "", tip: `${TS_CELLN[o.cell]} × ${o.win} d\nerror armonizado ${fmt(o.err, 3)} · crudo ${fmt(o.errRaw, 3)}\n${o.both.length} celdas‑ventana con ambos · ${o.nW} ventanas` }),
+    o => isF(o.err) ? lerp("#e8f1fc", "#104281", Math.min(1, o.err / 0.5)) : "#f4f3f0", pick);
+  heatgrid("cScaleR", rows, cols, at, o => ({ main: isF(o.r) ? o.r.toFixed(2) : "–", sub: "n=" + o.ser.filter(s => s.V > 0).length, tip: `${TS_CELLN[o.cell]} × ${o.win} d\nr armonizado ${fmt(o.r, 3)} · crudo ${fmt(o.rRaw, 3)}` }),
+    o => isF(o.r) ? lerp("#f0efec", "#1baf7a", Math.max(0, o.r)) : "#f4f3f0", pick);
+  render8bDetail(); }
+function render8bDetail() {
+  const G = S.ts; if (!G) return; const o = G[$("tsCell").value + "|" + $("tsWin").value], ticks = dayTicks(S.days);
+  const ln = (k, col) => ({ type: "line", color: col, points: o.ser.map(s => ({ x: s.x, y: s[k], tip: `${dayLabel(s.x)}: ${fmt(s[k], 0)} MW` })) });
+  plot("cTsH", { xLabel: "Inicio de ventana", yLabel: "ΣFRP (MW)", logY: true, xTicks: ticks, series: [ln("V", C.viirs), ln("M", C.modis), ln("HO", C.match)], empty: "Sin series" });
+  const cum = k => { let a = 0; return { type: "line", color: k === "V" ? C.viirs : k === "M" ? C.modis : C.match, points: o.ser.map(s => ({ x: s.x, y: (a += s[k]), tip: `${dayLabel(s.x)}: ${fmt(a, 0)}` })) }; };
+  plot("cCum", { xLabel: "Inicio de ventana", yLabel: "ΣFRP acumulado", bars0: true, xTicks: ticks, series: [cum("V"), cum("M"), cum("HO")], empty: "Sin series" });
+  const b = o.best, sc = median(o.both.map(r => r.m_scan)), dm = median(o.both.map(r => r.dtS)) ?? 0;
+  plot("cRec", { xLabel: "ΣFRP MODIS (MW)", yLabel: "ΣFRP VIIRS (MW)", logX: true, logY: true, identity: true, fits: b && b.mod.cols ? [{ f: x => 10 ** predict(b.mod, b.coef, { m_logfrp: Math.log10(x), m_scan: sc, dtS: dm }), color: C.modis, dash: true }] : [],
+    series: [{ type: "scatter", color: C.match, alpha: 0.55, points: o.both.map(r => ({ x: r.M, y: r.V, r: 3, tip: `celda ${r.cell} · ventana ${r.w}\nM ${fmt(r.M, 1)} · V ${fmt(r.V, 1)} · Δt ${fmt(r.dtS, 0)} min` })) }], empty: "Sin celdas con ambos sensores" });
+  const best = pickScale(G);
+  $("i8b").innerHTML = `Escala elegida <b>${TS_CELLN[o.cell]} × ${o.win} días</b>: ${o.both.length} celdas‑ventana con ambos sensores en ${o.nW} ventanas. ` +
+    (b ? `Modelo: <b>${b.mod.name}</b> (error CV por celda ${fmt(b.cv, 3)}). ` : "No alcanza para ajustar un modelo (hacen falta ≥ 6 celdas en ≥ 3 ventanas). ") +
+    `Serie regional: error ${fmt(o.errRaw, 3)} → <b>${fmt(o.err, 3)}</b>, r ${fmt(o.rRaw, 2)} → <b>${fmt(o.r, 2)}</b>, sesgo del total ${fmt(o.biasRaw, 2)} → <b>${fmt(o.bias, 2)}</b> (log10). Omisión agregada: ${pct(o.f0)} del FRP VIIRS cae en celdas sin MODIS. ` +
+    (o.ci ? `Factor fijo con IC 90 %: ×${fmt(10 ** o.ci[0])} a ×${fmt(10 ** o.ci[1])}. ` : "") +
+    (best ? `<br>Escala más fina con error cercano al mínimo (y ≥ 4 ventanas): <b>${TS_CELLN[best.cell]} × ${best.win} días</b> (error ${fmt(best.err, 3)}, r ${fmt(best.r, 2)}, ${best.ser.filter(x => x.V > 0).length} ventanas).` : ""); S.tsBest = best; }
+
+/* ============ diagnóstico de factibilidad ============ */
+function render8c() {
+  const A = S.by[S.p ? S.p.focus : "A"] || S.F; if (!A) { $("feasTable").innerHTML = ""; $("i8c").textContent = ""; return; }
+  const span = S.days.length ? Math.round(dayNum(S.days[S.days.length - 1]) - dayNum(S.days[0])) + 1 : 0, nPairs = A.mrows.length;
+  const adt = median(A.mrows.map(r => Math.abs(r.dtS))), years = [...new Set(S.days.map(d => +d.slice(0, 4)))], b = S.tsBest, cvb = A.best;
+  const nStatic = S.rawM.concat(S.rawV).filter(r => r.type !== undefined).length, nSrc = new Set(S.V.map(v => v.vsat)).size;
+  const ciw = b && b.ci ? (10 ** (b.ci[1] - b.ci[0]) - 1) : null;
+  const st = (c, okc, midc) => c === null || c === undefined ? ["–", "mid"] : okc(c) ? ["OK", "ok"] : midc(c) ? ["Parcial", "mid"] : ["Falta", "bad"];
+  const R = [
+    ["Duración de la muestra", `${span} días`, st(span, x => x >= 90, x => x >= 30), "≥ 90 días (una temporada). Ideal: varias temporadas."],
+    ["Pares matcheados " + SATN[A.sat], `${nPairs}`, st(nPairs, x => x >= 50, x => x >= 20), "≥ 50 unidades con FRP en ambos sensores."],
+    ["Simultaneidad (mediana |Δt|)", isF(adt) ? adt.toFixed(0) + " min" : "–", st(adt, x => x <= 20, x => x <= 45), "≤ 20 min. Aqua deriva desde 2022: usá 2012–2021 o sumá NOAA‑20."],
+    ["Años con Aqua en órbita nominal (≤ 2021)", years.join(", ") || "–", years.length ? (years.some(y => y <= 2021) ? ["OK", "ok"] : ["Falta", "bad"]) : ["–", "mid"], "El período 2012–2021 da pares casi simultáneos y una armonización más limpia."],
+    ["Fuentes VIIRS", `${nSrc}`, nSrc >= 2 ? ["OK", "ok"] : ["Parcial", "mid"], "SNPP + NOAA‑20 duplican las chances de una pasada cercana a Aqua."],
+    ["Fuentes fijas identificadas", nStatic ? "campo type presente" : "sin campo type", nStatic ? ["OK", "ok"] : ["Parcial", "mid"], "Excluir type ≠ 0 (industrias, volcanes)."],
+    ["Transferencia entre días (pares)", cvb && isF(cvb.ins) ? `CV ${fmt(cvb.cv, 2)} / muestra ${fmt(cvb.ins, 2)}` : "–", cvb && isF(cvb.ins) ? st(cvb.cv / cvb.ins, x => x <= 1.25, x => x <= 1.6) : ["–", "mid"], "Error CV ≤ 1,25 × error en muestra."],
+    ["Serie armonizada (mejor escala)", b ? `${TS_CELLN[b.cell]} × ${b.win} d: r ${fmt(b.r, 2)}, error ${fmt(b.err, 2)}` : "–", b ? st(b.r, x => x >= 0.8, x => x >= 0.5) : ["Falta", "bad"], "r ≥ 0,8 entre la serie VIIRS y la MODIS armonizada (en CV)."],
+    ["Precisión del factor (IC 90 %)", isF(ciw) ? "±" + (ciw * 50).toFixed(0) + " %" : "–", isF(ciw) ? st(ciw, x => x <= 0.3, x => x <= 0.6) : ["Falta", "bad"], "Ancho del IC ≤ 30 % para usarlo como coeficiente."],
+    ["Cobertura de observación (nubes, sin datos)", "no disponible en FIRMS", ["Falta", "bad"], "FIRMS solo lista detecciones. Para distinguir 'sin fuego' de 'no observado' hace falta la máscara de fuego/nubes (MOD14/MYD14, VNP14IMG)."]];
+  $("feasTable").innerHTML = "<thead><tr><th>Requisito</th><th>Tus datos</th><th>Estado</th><th>Criterio / cómo resolverlo</th></tr></thead><tbody>" +
+    R.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td class="${r[2][1]}">${r[2][0]}</td><td style="text-align:left;white-space:normal">${r[3]}</td></tr>`).join("") + "</tbody>";
+  const bad = R.filter(r => r[2][1] === "bad").length, mid = R.filter(r => r[2][1] === "mid").length;
+  S.feas = { bad, mid, R };
+  $("i8c").innerHTML = `<b>Veredicto:</b> ${bad <= 1 && mid <= 2 ? "se puede armonizar a la escala indicada. La única falta es la cobertura de nubes, que FIRMS no provee: el resultado vale para totales con buena cobertura." :
+    bad <= 3 ? "el método funciona, pero <b>faltan datos</b> para coeficientes confiables. Resolvé primero las filas en rojo, de arriba hacia abajo." :
+    "todavía <b>no</b> se puede armonizar con estos datos. Las filas en rojo indican qué conseguir: más días, pares simultáneos (2012–2021 o NOAA‑20) y, para series finas, la máscara de nubes."} ` +
+    `(${bad} faltas, ${mid} parciales).`; }
+
+/* ============ render ============ */
+function renderStats() { const A = S.by.A, T = S.by.T, F = S.F;
+  $("sDays").textContent = S.days.length; $("sM").textContent = (A ? A.M.length : 0) + " / " + (T ? T.M.length : 0); $("sV").textContent = S.V.length;
+  const mu = B => B ? B.units.filter(r => r.status === "MATCHED").length : 0; $("sG").textContent = mu(A) + " / " + mu(T);
+  $("sFP").textContent = F && F.real.nV ? pct(Math.min(1, F.ch.nV / F.real.nV), 1) : "–";
+  $("sF50").textContent = F && F.dfit.all && isF(F.dfit.all.f50) ? F.dfit.all.f50.toFixed(1) + " MW" : "–"; }
+
+function render1() { const lat = +$("latitude").value; const hA = heading(lat, true) / D2R, hT = heading(lat, false) / D2R;
+  const satV = S.V.filter(v => isF(v.bt) && v.bt >= I4_SAT - 0.5).length;
+  $("i1").innerHTML = `A ${lat.toFixed(1)}° de latitud, la traza diurna de Aqua/VIIRS va con rumbo <b>${((hA + 360) % 360).toFixed(0)}°</b> y la de Terra con <b>${((hT + 360) % 360).toFixed(0)}°</b>: unos ${Math.abs(hA).toFixed(0)}° fuera del N‑S. ` +
+    `En un píxel MODIS de 4.8 × 2 km, ese giro mueve las esquinas ≈${(2.4 * Math.sin(Math.abs(hA) * D2R) + 1 * (1 - Math.cos(hA * D2R))).toFixed(2)} km. ${satV} píxeles VIIRS (${pct(S.V.length ? satV / S.V.length : null, 1)}) tienen I4 saturado.`; }
+
+function dailyRatio(B) { const m = new Map(); for (const r of B.rows) if (isF(r.lr_frp)) { if (!m.has(r.day)) m.set(r.day, []); m.get(r.day).push(r.lr_frp); }
+  return [...m.entries()].map(([d, a]) => ({ day: d, x: dayNum(d), y: median(a), q1: quant(a, 0.25), q3: quant(a, 0.75), n: a.length })).sort((a, b) => a.x - b.x); }
+function render2() {
+  if (!S.days.length) { emptyChart("cTsCount"); emptyChart("cTsRatio"); return; }
+  const cnt = (arr, f) => S.days.map(d => ({ x: dayNum(d), y: arr.filter(x => x.day === d && (!f || f(x))).length, tip: `${dayLabel(dayNum(d))}: ${arr.filter(x => x.day === d && (!f || f(x))).length}` }));
+  const series = [{ type: "line", color: C.viirs, points: cnt(S.V) }];
+  if (S.by.A) series.push({ type: "line", color: C.modis, points: cnt(S.by.A.M) }, { type: "line", color: C.match, points: cnt(S.by.A.res, r => r.status === "MATCHED") });
+  if (S.by.T) series.push({ type: "line", color: C.terra, points: cnt(S.by.T.M) });
+  plot("cTsCount", { xLabel: "Día", yLabel: "Detecciones", logY: false, bars0: true, xTicks: dayTicks(S.days), series });
+  const rs = []; const info = {};
+  for (const [sat, col, off] of [["A", C.modis, -3], ["T", C.terra, 3]]) { const B = S.by[sat]; if (!B) continue; const d = dailyRatio(B); info[sat] = d;
+    rs.push({ type: "range", color: col, off, points: d.map(o => ({ x: o.x, y0: o.q1, y1: o.q3 })) }, { type: "scatter", color: col, off, alpha: 0.95, points: d.map(o => ({ x: o.x, y: o.y, r: 3 + Math.min(4, Math.sqrt(o.n)), tip: `${SATN[sat]} ${dayLabel(o.x)}\nmediana ${fmt(o.y)} · n=${o.n}` })) }); }
+  plot("cTsRatio", { xLabel: "Día", yLabel: "log10(V / M)", hLines: [0], xTicks: dayTicks(S.days), series: rs, empty: "Sin grupos matcheados" });
+  const txt = []; for (const sat of ["A", "T"]) { const d = info[sat]; if (!d || d.length < 2) continue; const ys = d.map(o => o.y);
+    txt.push(`<b>${SATN[sat]}</b>: mediana diaria entre ${fmt(Math.min(...ys))} y ${fmt(Math.max(...ys))} (desvío entre días ${fmt(sd(ys))} en log10, ≈ ±${fmt((10 ** (sd(ys) || 0) - 1) * 100, 0)} %). ${sd(ys) > 0.12 ? "La variación entre días es alta: el factor puede no transferirse." : "Los días son consistentes entre sí."}`); }
+  if (info.A && info.T) { const a = median(info.A.map(o => o.y)), t = median(info.T.map(o => o.y)); txt.push(`Terra queda ${fmt(t - a)} en log respecto de Aqua (≈ ${fmt((10 ** (t - a) - 1) * 100, 0)} %): es la huella del ciclo diurno entre las 10:30 y las 13:30.`); }
+  $("i2").innerHTML = txt.join("<br>"); }
+
+/* mapas */
+const MAPOPT = { preferCanvas: true }, C0 = [-32.89, -68.85];
+const mapS = L.map("mapS", MAPOPT).setView(C0, 8), mapA = L.map("mapA", MAPOPT).setView(C0, 8), mapB = L.map("mapB", MAPOPT).setView(C0, 8);
+["pM", "pV", "vM", "vV"].forEach((n, i) => { mapS.createPane(n).style.zIndex = i < 2 ? 200 + i : 450 + i; });
+const rendM = L.canvas({ pane: "vM" }), rendV = L.canvas({ pane: "vV" });
+const gibs = (name, day, pane) => { const pn = pane ? { pane } : {}; return name === "OSM" ? L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 18, ...pn })
+  : L.tileLayer(`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${name}/default/${day}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`, { attribution: "NASA GIBS / Worldview", maxNativeZoom: 9, maxZoom: 15, ...pn }); };
+let baseLayers = [];
+function setBases() { baseLayers.forEach(([m, l]) => m.removeLayer(l)); const d = $("mapDay").value || $("dateFrom").value, a = $("imgA").value, b = $("imgB").value;
+  baseLayers = [[mapS, gibs(a, d, "pM")], [mapS, gibs(b, d, "pV")], [mapA, gibs(a, d)], [mapB, gibs(b, d)]]; baseLayers.forEach(([m, l]) => l.addTo(m)); clipSwipe(); }
+function clipSwipe() { const r = +$("swipe").value / 100, size = mapS.getSize(), nw = mapS.containerPointToLayerPoint([0, 0]), se = mapS.containerPointToLayerPoint(size), cx = nw.x + size.x * r;
+  const left = `rect(${nw.y}px, ${cx}px, ${se.y}px, ${nw.x}px)`, right = `rect(${nw.y}px, ${se.x}px, ${se.y}px, ${cx}px)`, both = $("swipeDet").value === "both";
+  mapS.getPane("pM").style.clip = left; mapS.getPane("pV").style.clip = right; mapS.getPane("vM").style.clip = both ? "auto" : left; mapS.getPane("vV").style.clip = both ? "auto" : right;
+  $("swipeLine").style.left = (size.x * r - 1) + "px"; }
+mapS.on("move zoom resize zoomend moveend", clipSwipe); $("swipe").addEventListener("input", clipSwipe);
+function syncImagery() { $("imgA").value = (S.F && S.F.sat === "T") ? "MODIS_Terra_CorrectedReflectance_Bands721" : "MODIS_Aqua_CorrectedReflectance_Bands721";
+  const vs = $("viirsSource").value; $("imgB").value = vs.includes("NOAA21") ? "VIIRS_NOAA21_CorrectedReflectance_BandsM11-I2-I1" : vs.includes("NOAA20") ? "VIIRS_NOAA20_CorrectedReflectance_BandsM11-I2-I1" : "VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1";
+  setBases(); }
+const MAPS = [mapS, mapA, mapB]; let syncing = false;
+MAPS.forEach(a => a.on("move", () => { if (syncing) return; syncing = true; MAPS.forEach(b => { if (b !== a) b.setView(a.getCenter(), a.getZoom(), { animate: false }); }); syncing = false; }));
+$("sbs").addEventListener("toggle", () => { if ($("sbs").open) { mapA.invalidateSize(); mapB.invalidateSize(); mapA.setView(mapS.getCenter(), mapS.getZoom(), { animate: false }); mapB.setView(mapS.getCenter(), mapS.getZoom(), { animate: false }); } });
+const ovS = L.layerGroup().addTo(mapS), ovA = L.layerGroup().addTo(mapA), ovB = L.layerGroup().addTo(mapB);
+function fillDaySelect() { const sel = $("mapDay"), prev = sel.value; const F = S.F; const cnt = d => F ? F.res.filter(r => r.day === d && r.status === "MATCHED").length : 0;
+  sel.innerHTML = S.days.map(d => `<option value="${d}">${d} (${cnt(d)} unidades)</option>`).join("");
+  if (S.days.includes(prev)) sel.value = prev; else if (S.days.length) sel.value = S.days.reduce((a, b) => cnt(b) > cnt(a) ? b : a); }
+function popup(d, extra) { return `<b>${d.sensor}</b> ${d.sat !== "V" ? SATN[d.sat] || d.sat : ""} ${d.dn}<br>${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}<br>${d.day} ${hhmm(d.raw)} UTC<br>FRP ${fmt(d.frp, 1)} MW · BT ${fmt(d.bt, 1)} K<br>scan × track ${fmt(d.scan)} × ${fmt(d.track)} km · rumbo ${((d.h / D2R + 360) % 360).toFixed(0)}°${extra || ""}`; }
+function hull(pts) { pts = pts.slice().sort((a, b) => a[1] - b[1] || a[0] - b[0]); if (pts.length < 3) return pts; const cr = (o, a, b) => (a[1] - o[1]) * (b[0] - o[0]) - (a[0] - o[0]) * (b[1] - o[1]);
+  const lo = [], up = []; for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (const p of pts.slice().reverse()) { while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); } return lo.slice(0, -1).concat(up.slice(0, -1)); }
+// Colores del mapa: elegidos para contrastar con la vegetación verde y las cicatrices rojizas de 7‑2‑1 / M11‑I2‑I1
+const MC = { match: "#ff2bd6", modis: "#ffe600", viirs: "#00e5ff", halo: "#000000" };
+function drawMaps(fit) { [ovS, ovA, ovB].forEach(o => o.clearLayers()); if (!S.F) return;
+  const day = $("mapDay").value, rot = S.p.mode !== "fp", sm = $("showM").checked, sv = $("showV").checked, bounds = [];
+  const style = $("mapStyle").value, z = mapS.getZoom(), useFp = style === "fp" || (style === "auto" && z >= 11), useDot = style === "dot" || (style === "auto" && z < 11);
+  const targets = [[ovS, rendM, rendV], [ovA, null, null], [ovB, null, null]];
+  // polígono con halo negro debajo para que resalte sobre cualquier fondo
+  const poly = (ov, rd, ll, col, w, fill, pop, dash) => { const o = rd ? { renderer: rd } : {};
+    L.polygon(ll, { ...o, color: MC.halo, weight: w + 2.5, opacity: 0.9, fill: false, dashArray: dash, interactive: false }).addTo(ov);
+    L.polygon(ll, { ...o, color: col, weight: w, opacity: 1, fillColor: col, fillOpacity: fill, fill: fill > 0, dashArray: dash }).bindPopup(pop).addTo(ov); };
+  const dot = (ov, rd, ll, col, r, ring, pop) => L.circleMarker(ll, { ...(rd ? { renderer: rd } : {}), radius: r, color: MC.halo, weight: 2, fillColor: col, fillOpacity: ring ? 0 : 1, opacity: 1 })
+    .on("add", function () { if (ring) this.setStyle({ color: col, weight: 3 }); }).bindPopup(pop).addTo(ov);
+  for (const r of S.F.res) { if (r.day !== day && !r.g.some(x => x.v.day === day)) continue; const mt = r.status === "MATCHED", colM = mt ? MC.match : MC.modis, colV = mt ? MC.match : MC.viirs;
+    if (r.m && sm) { const ex = `<br><b>Unidad de ${r.m.n} píxel(es) MODIS · ΣFRP ${fmt(r.m.frp, 1)} MW</b>` + (mt ? `<br><b>${r.vn} VIIRS · ΣFRP ${fmt(r.vfrp, 1)} MW · Δt ${fmt(r.dtS, 0)} min</b>` : "<br><b>Sin VIIRS</b>");
+      for (const [ov, rm] of targets) {
+        if (useFp) { for (const m of r.m.members) poly(ov, rm, footprint(m, rot), colM, 2.5, 0.12, popup(m, ex));
+          if (r.m.n > 1) poly(ov, rm, hull(r.m.members.flatMap(m => footprint(m, rot))), "#ffffff", 2, 0, ex, "6 4"); }
+        if (useDot) { for (const m of r.m.members) { L.circleMarker([m.lat, m.lon], { ...(rm ? { renderer: rm } : {}), radius: 8, color: MC.halo, weight: 5, fill: false, interactive: false }).addTo(ov);
+            L.circleMarker([m.lat, m.lon], { ...(rm ? { renderer: rm } : {}), radius: 8, color: colM, weight: 2.5, fill: false }).bindPopup(popup(m, ex)).addTo(ov); } } }
+      bounds.push([r.m.lat, r.m.lon]); }
+    if (sv) for (const x of r.g) { if (x.v.day !== day) continue; const pop = popup(x.v, isF(x.d) ? `<br><b>a ${x.d.toFixed(2)} km de su píxel MODIS</b>` : "");
+      for (const [ov, , rv] of targets) { if (useFp) poly(ov, rv, footprint(x.v, rot), colV, 1.5, 0.85, pop);
+        if (useDot) L.circleMarker([x.v.lat, x.v.lon], { ...(rv ? { renderer: rv } : {}), radius: 3.5, color: MC.halo, weight: 1.2, fillColor: colV, fillOpacity: 1 }).bindPopup(pop).addTo(ov); }
+      bounds.push([x.v.lat, x.v.lon]); } }
+  if (fit && bounds.length) mapS.fitBounds(bounds, { padding: [20, 20] }); clipSwipe(); }
+let lastZ = null; mapS.on("zoomend", () => { const z = mapS.getZoom(); if ($("mapStyle").value === "auto" && S.F && (lastZ === null || (lastZ < 11) !== (z < 11))) drawMaps(false); lastZ = z; });
+
+function render4() {
+  const F = S.F, p = S.p; if (!F || !S.V.length) { $("cfgTable").innerHTML = ""; ["cSens", "cOffset", "cDist", "cDt"].forEach(id => emptyChart(id, "Necesito datos de ambos sensores")); $("i4").textContent = $("i4a").textContent = ""; return; }
+  const cfg = S.cfg, best = cfg.reduce((a, b) => (b.net > a.net * 1.01 || (Math.abs(b.net - a.net) <= a.net * 0.01 && (b.cv ?? 9) < (a.cv ?? 9))) ? b : a), base = cfg[0];
+  $("cfgTable").innerHTML = `<thead><tr><th>Configuración (${SATN[F.sat]})</th><th>MODIS con VIIRS</th><th>VIIRS asignados</th><th>Azar (VIIRS)</th><th>Netos</th><th>Netos vs 1 km</th><th>Grupos</th><th>Error CV (log10)</th></tr></thead><tbody>` +
+    cfg.map(c => `<tr class="${c === best ? "best" : ""} ${c.current ? "current" : ""}"><td>${c.name}</td><td>${c.st.nM} (${pct(c.st.fM)})</td><td>${c.st.nV} (${pct(c.st.fV)})</td><td>${fmt(c.chs.nV, 1)} (${pct(c.st.nV ? c.chs.nV / c.st.nV : null, 1)})</td><td>${fmt(c.net, 0)}</td><td>${base.net ? (c.net >= base.net ? "+" : "") + pct((c.net - base.net) / base.net) : "–"}</td><td>${c.groups}</td><td>${fmt(c.cv, 3)}</td></tr>`).join("") + "</tbody>";
+  const fp = cfg.find(c => c.mode === "fp"), fr = cfg.find(c => c.mode === "fprot" && c.margin === p.margin) || cfg[3];
+  $("i4a").innerHTML = `Mejor configuración: <b>${best.name}</b> (${fmt(best.net, 0)} pares netos, ${pct(best.st.nV ? best.chs.nV / best.st.nV : null, 1)} por azar). ` +
+    (fp && fr ? `Rotar la huella cambia los pares netos de ${fmt(fp.net, 0)} a ${fmt(fr.net, 0)} (${fp.net ? ((fr.net - fp.net) / fp.net * 100).toFixed(1) : "–"} %) y el error CV de ${fmt(fp.cv, 3)} a ${fmt(fr.cv, 3)}. ` +
+      (Math.abs(fr.net - fp.net) < 0.01 * fp.net ? "Con estos datos casi no hay diferencia: los píxeles son chicos o el giro es pequeño a esta latitud." : fr.net > fp.net ? "La rotación recupera pares reales, sobre todo en el borde del barrido." : "La rotación no mejora acá: revisá el margen.") : "");
+  const s = S.sens, ln = (k, w) => s.map(o => ({ x: o.t, y: 100 * o[w][k], tip: `${o.t} km · ${w === "real" ? "real" : "azar"}: ${(100 * o[w][k]).toFixed(1)} %` }));
+  plot("cSens", { xLabel: "Distancia máxima (km)", yLabel: "% matcheado", yDom: [0, 100], vLines: p.mode === "fixed" ? [p.dist] : [], series: [
+    { type: "line", color: C.modis, points: ln("fM", "real") }, { type: "line", color: C.modis, dash: true, points: ln("fM", "ch") }, { type: "line", color: C.viirs, points: ln("fV", "real") }, { type: "line", color: C.viirs, dash: true, points: ln("fV", "ch") }] });
+  const mt = F.res.filter(r => r.status === "MATCHED"), off = mt.map(r => ({ x: r.near.ac, y: r.near.al, r: 3, tip: `a través ${fmt(r.near.ac)} km · a lo largo ${fmt(r.near.al)} km\nscan ${fmt(r.m.scan)} · ${r.day}` }));
+  const hs = median(mt.map(r => r.m.scan / 2)) || 0.5, ht = median(mt.map(r => r.m.track / 2)) || 0.5;
+  plot("cOffset", { xLabel: "A través de la órbita, scan (km)", yLabel: "A lo largo, track (km)", square: true, hLines: [0], vLines: [0], rects: [{ x0: -hs, x1: hs, y0: -ht, y1: ht, color: C.modis }], series: [{ type: "scatter", color: C.match, alpha: 0.5, points: off }], empty: "Sin matches" });
+  const ds = mt.map(r => r.dist), dm = Math.max(1, Math.ceil(Math.max(0, ...ds) * 2) / 2); plot("cDist", { xLabel: "Distancia (km)", yLabel: "Grupos", bars0: true, series: [{ type: "bar", color: C.match, points: hist(ds, linEdges(0, dm, 24)) }], empty: "Sin matches" });
+  const dts = mt.map(r => r.dtS), tm = Math.max(10, Math.ceil(Math.max(0, ...dts.map(Math.abs)) / 10) * 10); plot("cDt", { xLabel: "VIIRS − MODIS (min)", yLabel: "Grupos", bars0: true, series: [{ type: "bar", color: C.viirs, points: hist(dts, linEdges(-tm, tm, 30)) }], empty: "Sin matches" });
+  const mx = mean(off.map(o => o.x)), my = mean(off.map(o => o.y)), sx = sd(off.map(o => o.x)) || 0, sy = sd(off.map(o => o.y)) || 0, se = Math.max(sx, sy) / Math.sqrt(off.length || 1);
+  $("i4").innerHTML = `Desplazamiento medio en el marco de la órbita: <b>${fmt(mx)} km</b> a través, <b>${fmt(my)} km</b> a lo largo ${off.length > 10 && Math.hypot(mx, my) > 3 * se && Math.hypot(mx, my) > 0.15 ? "→ <b>sesgo sistemático</b>; revisá el relieve y la geolocalización." : "→ sin sesgo significativo."} La dispersión a través de la órbita es ${fmt(sx / (sy || 1e-9), 1)}× la dispersión a lo largo${sx > 1.3 * sy ? ", como se espera por la forma del píxel" : ""}. ` +
+    `Δt mediano ${fmt(median(dts), 0)} min.`; }
+
+function render4b() {
+  const cl = S.cl; if (!cl) { $("clTable").innerHTML = ""; ["cClR", "cClCv", "cClSc"].forEach(id => emptyChart(id)); $("i4b").textContent = ""; return; }
+  const ok = cl.filter(c => isF(c.dayErr)), best = ok.length ? ok.reduce((a, b) => b.dayErr < a.dayErr ? b : a) : null, px = cl[0];
+  $("clTable").innerHTML = `<thead><tr><th>Unidad MODIS (${SATN[S.F.sat]})</th><th>Unidades</th><th>Píxeles / unidad</th><th>Con VIIRS</th><th>Pearson r</th><th>Spearman ρ</th><th>Error CV por unidad</th><th>Sin corregir</th><th>Error total diario</th><th>Total diario sin corregir</th></tr></thead><tbody>` +
+    cl.map(c => `<tr class="${c === best ? "best" : ""} ${c.current ? "current" : ""}"><td>${c.name}</td><td>${c.units}</td><td>${fmt(c.pxPerUnit, 2)}</td><td>${c.matched} (${pct(c.units ? c.matched / c.units : null)})</td><td>${fmt(c.r, 3)}</td><td>${fmt(c.rho, 3)}</td><td>${fmt(c.cv, 3)}</td><td>${fmt(c.cv0, 3)}</td><td>${fmt(c.dayErr, 3)}</td><td>${fmt(c.dayErr0, 3)}</td></tr>`).join("") + "</tbody>";
+  const ticks = cl.map((c, i) => ({ v: i, label: c.k })), n = cl.length;
+  plot("cClR", { xLabel: "Regla", yLabel: "Correlación", xDom: [-0.6, n - 0.4], xTicks: ticks, bars0: true, yDom: [0, 1], series: [
+    { type: "bar", color: C.viirs, points: cl.map((c, i) => ({ x0: i - 0.38, x1: i, y: c.r, tip: `${c.name}\nr = ${fmt(c.r, 3)}` })) },
+    { type: "bar", color: C.match, points: cl.map((c, i) => ({ x0: i, x1: i + 0.38, y: c.rho, tip: `${c.name}\nρ = ${fmt(c.rho, 3)}` })) }] });
+  plot("cClCv", { xLabel: "Regla", yLabel: "Error (log10)", xDom: [-0.6, n - 0.4], xTicks: ticks, bars0: true, series: [
+    { type: "bar", color: C.grey, points: cl.map((c, i) => ({ x0: i - 0.38, x1: i, y: c.cv, tip: `${c.name}\nCV por unidad ${fmt(c.cv, 3)}` })) },
+    { type: "bar", color: C.modis, points: cl.map((c, i) => ({ x0: i, x1: i + 0.38, y: c.dayErr, tip: `${c.name}\nerror total diario ${fmt(c.dayErr, 3)}` })) }] });
+  const cur = cl.find(c => c.current) || px;
+  plot("cClSc", { xLabel: "FRP MODIS (MW)", yLabel: "ΣFRP VIIRS (MW)", logX: true, logY: true, identity: true, series: [
+    { type: "scatter", color: C.grey, alpha: 0.5, points: px.pts.map(p => ({ x: p.x, y: p.y, r: 2.5 })) },
+    { type: "scatter", color: C.match, alpha: 0.6, points: cur === px ? [] : cur.pts.map(p => ({ x: p.x, y: p.y, r: 2.5 + Math.min(5, Math.sqrt(p.n)), tip: `${p.n} píxeles MODIS\nM ${fmt(p.x, 1)} · V ${fmt(p.y, 1)}` })) }] });
+  const dr = c => isF(c.r) && isF(px.r) ? c.r - px.r : null;
+  $("i4b").innerHTML = !best ? "Hacen falta más días para comparar reglas." :
+    `Mejor regla por error total diario: <b>${best.name}</b> (${fmt(best.dayErr, 3)} contra ${fmt(px.dayErr, 3)} del píxel solo${isF(px.dayErr) && px.dayErr > 0 ? `, ${((1 - best.dayErr / px.dayErr) * 100).toFixed(0)} % menos` : ""}). ` +
+    `La correlación pasa de r = ${fmt(px.r, 3)} (píxel) a ${fmt(best.r, 3)}${isF(dr(best)) ? ` (${dr(best) >= 0 ? "+" : ""}${fmt(dr(best), 3)})` : ""}. ` +
+    (best.k === "pixel" ? "Clusterizar no mejora a escala diaria: los errores del píxel se compensan al sumar el día. Usá el píxel solo, que conserva más detalle." :
+      (() => { const imp = cl.filter(c => c.k !== "pixel" && isF(c.dayErr) && c.dayErr < px.dayErr * 0.95), tot = cl.filter(c => c.k !== "pixel" && isF(c.dayErr)).length;
+        return (best.dayErr > px.dayErr * 0.9 ? "La mejora es menor al 10 %: con este número de días puede ser ruido. Sumá días antes de decidir. " : "") +
+          (imp.length === tot ? "Todas las reglas con cluster mejoran el total diario: <b>juntar píxeles corrige el fuego partido y la asignación de VIIRS al píxel equivocado</b>."
+            : `Mejoran ${imp.length} de ${tot} reglas (${imp.map(c => c.name).join(", ") || "ninguna"}). Un radio grande puede mezclar fuegos distintos: revisá el contorno punteado en el mapa (paso 3).`); })()) +
+    ` Las demás secciones (5–9) usan la regla actual: <b>${(cl.find(c => c.current) || px).name}</b>.`; }
+
+function render5() {
+  const F = S.F; if (!F || !F.det.length) { emptyChart("cDetProb", "Sin píxeles comparables"); emptyChart("cDetRev", "Sin datos"); $("i5").textContent = ""; return; }
+  const e = []; for (let v = -1; v <= 4.01; v += 0.25) e.push(v);
+  const bins = e.slice(0, -1).map((lo, i) => { const d = F.det.filter(x => x.lf >= lo && x.lf < e[i + 1]); return d.length ? { x: 10 ** ((lo + e[i + 1]) / 2), y: mean(d.map(x => x.det)), r: 2.5 + Math.min(6, Math.sqrt(d.length)), tip: `${tl(10 ** lo)}–${tl(10 ** e[i + 1])} MW: ${d.filter(x => x.det).length}/${d.length} píxeles VIIRS detectados` } : null; }).filter(Boolean);
+  plot("cDetProb", { xLabel: "ΣFRP VIIRS dentro de un píxel MODIS (MW)", yLabel: "P(MODIS detecta)", logX: true, yDom: [0, 1], hLines: [0.5],
+    fits: F.dfit.groups.filter(g => g.fit).map(g => ({ f: x => sigmoid(g.fit.w[0] + g.fit.w[1] * Math.log10(x)), color: g.color })), series: [{ type: "scatter", color: C.ink2, alpha: 0.6, points: bins }] });
+  const mb = e.slice(0, -1).map((lo, i) => { const d = F.res.filter(r => r.m && r.m.frp > 0 && Math.log10(r.m.frp) >= lo && Math.log10(r.m.frp) < e[i + 1]); return d.length ? { x: 10 ** ((lo + e[i + 1]) / 2), y: mean(d.map(r => r.status === "MATCHED" ? 1 : 0)), tip: `${tl(10 ** lo)}–${tl(10 ** e[i + 1])} MW: ${d.filter(r => r.status === "MATCHED").length}/${d.length} con VIIRS` } : null; }).filter(Boolean);
+  plot("cDetRev", { xLabel: "FRP MODIS (MW)", yLabel: "P(VIIRS confirma)", logX: true, yDom: [0, 1], series: [{ type: "line", color: C.modis, points: mb }] });
+  const g = F.dfit.groups, a = F.dfit.all;
+  $("i5").innerHTML = `${F.det.length} píxeles VIIRS comparables (${SATN[F.sat]}). ` + (a ? `MODIS detecta el 50 % de las veces cuando hay <b>${fmt(a.f50, 1)} MW</b> VIIRS dentro de su píxel (FRP50). ` : "") +
+    g.filter(x => x.fit).map(x => `${x.name}: FRP50 = ${fmt(x.fit.f50, 1)} MW (n=${x.fit.n})`).join(" · ") + ". " +
+    (g[0].fit && g[2].fit && isF(g[0].fit.f50) && isF(g[2].fit.f50) ? `El umbral sube ${fmt(g[2].fit.f50 / g[0].fit.f50, 1)}× del nadir al borde del barrido: <b>la omisión depende del scan</b> y hay que corregirla así (paso 8).` : "Faltan fuegos en algún grupo de scan para comparar umbrales.") +
+    ` MODIS detecta el ${pct(1 - F.om.overall)} del FRP VIIRS observable.`; }
+
+function render6() {
+  const F = S.F, rows = F ? F.rows : [];
+  const Mx = VARS.map(([a]) => VARS.map(([b]) => { const { x, y } = pairs(rows, a, b); if (x.length < 5) return null; const r = spearman(x, y); return isF(r) ? r : null; }));
+  if (!rows.length) { $("cCorr").style.height = "200px"; emptyChart("cCorr", "Sin grupos matcheados"); }
+  else heatmap("cCorr", VARS.map(v => v[1]), Mx, (i, j) => { $("exX").value = VARS[j][0]; $("exY").value = VARS[i][0]; drawExplorer(); });
+  const top = key => { const i = VARS.findIndex(v => v[0] === key); return VARS.map((v, j) => ({ v, r: Mx[i][j] })).filter(o => o.r !== null && !["lr_frp", "d_bt", "v_logfrp", "v_bt", "v_btmax", "m_bt"].includes(o.v[0]) && o.v[0] !== key).sort((a, b) => Math.abs(b.r) - Math.abs(a.r)).slice(0, 4); };
+  const say = (k, l) => { const t = top(k); return t.length ? `<b>${l}</b> se asocia con: ` + t.map(o => `${o.v[2]} (ρ=${o.r.toFixed(2)}${o.v[0].startsWith("v_") ? ", solo VIIRS" : ""})`).join(", ") + ". " : ""; };
+  $("i6").innerHTML = rows.length < 5 ? "Hacen falta al menos 5 grupos." : `${rows.length} grupos ${SATN[F.sat]}. ` + say("lr_frp", "La diferencia de FRP") + say("d_bt", "La diferencia de BT") + "|ρ| > 0.3 es relevante; |ρ| > 0.6 es fuerte.";
+  drawExplorer();
+  const np = rows.map(r => ({ x: r.m_scan * r.m_track, y: r.v_n, r: 3.5, tip: `área ${fmt(r.m_scan * r.m_track)} km² · ${r.v_n} VIIRS` }));
+  plot("cN", { xLabel: "Área píxel MODIS (km²)", yLabel: "N° VIIRS", bars0: true, yDom: [0, Math.max(5, ...np.map(p => p.y)) * 1.1], fits: [{ f: a => a / 0.1406, color: C.ink2, dash: true }], series: [{ type: "scatter", color: C.match, alpha: 0.6, points: np }], empty: "Sin grupos" }); }
+function drawExplorer() { const rows = S.F ? S.F.rows : [], a = $("exX").value, b = $("exY").value, { x, y, rr } = pairs(rows, a, b), lab = k => VARS.find(v => v[0] === k)[2], f = ols(x, y);
+  plot("cExp", { xLabel: lab(a), yLabel: lab(b), series: [{ type: "scatter", color: C.match, alpha: 0.6, points: x.map((v, i) => ({ x: v, y: y[i], r: 3.5, tip: `${fmt(v)}, ${fmt(y[i])}\n${rr[i].day} · ${rr[i].v_n} VIIRS` })) }],
+    fits: f ? [{ f: v => f.a + f.b * v, color: C.modis, dash: true }] : [], empty: "Sin pares" });
+  $("exStat").textContent = x.length >= 3 ? `n=${x.length} · r=${fmt(pearson(x, y), 3)} · ρ=${fmt(spearman(x, y), 3)} · y = ${fmt(f && f.a, 3)} + ${fmt(f && f.b, 4)}·x` : ""; }
+
+function render7(sat) {
+  const B = S.by[sat], ids = ["cFrp_" + sat, "cCv_" + sat], ins = $("i7_" + sat);
+  if (!B || B.mrows.length < 6) { ids.forEach(id => emptyChart(id, B ? "Menos de 6 grupos con FRP" : "Sin datos de " + SATN[sat])); ins.innerHTML = B ? `Solo ${B.mrows.length} grupos: ampliá el rango de fechas o la tolerancia de tiempo.` : ""; return; }
+  const best = B.best, sc = median(B.mrows.map(r => r.m_scan));
+  plot("cFrp_" + sat, { xLabel: "FRP MODIS (MW)", yLabel: "ΣFRP VIIRS (MW)", logX: true, logY: true, identity: true,
+    fits: best ? [{ f: x => 10 ** predict(best.mod, best.coef, { m_logfrp: Math.log10(x), m_scan: sc, dtS: B.dtMed }), color: C.modis, dash: true }] : [],
+    series: [{ type: "scatter", color: C.match, alpha: 0.55, points: B.mrows.map(r => ({ x: 10 ** r.m_logfrp, y: 10 ** r.v_logfrp, r: 3, tip: `${r.day} · M ${fmt(10 ** r.m_logfrp, 1)} · V ${fmt(10 ** r.v_logfrp, 1)}\nscan ${fmt(r.m_scan)} · Δt ${fmt(r.dtS, 0)}` })) }] });
+  const cv = B.cv, n = cv.length;
+  plot("cCv_" + sat, { xLabel: "Modelo", yLabel: "Error RMS (log10)", bars0: true, xDom: [-0.6, n - 0.4], xTicks: cv.map((c, i) => ({ v: i, label: c.mod.k })),
+    series: [{ type: "bar", color: C.grey, points: cv.map((c, i) => ({ x0: i - 0.38, x1: i, y: c.ins, tip: `${c.mod.name}\nen muestra: ${fmt(c.ins, 3)}` })) },
+             { type: "bar", color: C.viirs, points: cv.map((c, i) => ({ x0: i, x1: i + 0.38, y: c.cv, color: c === best ? C.match : C.viirs, tip: `${c.mod.name}\nCV ${c.byDay ? "por día" : "5 grupos"}: ${fmt(c.cv, 3)}` })) }] });
+  const m0 = cv[0], coefTxt = best && best.mod.cols ? best.coef.map((v, i) => ["a", "b·logFRP", "c·scan", "d·Δt"][i] + "=" + fmt(v, i === 3 ? 5 : 3)).join(", ") : "—";
+  const days = new Set(B.mrows.map(r => r.day)).size;
+  ins.innerHTML = `${B.mrows.length} grupos en ${days} días${cv[0].byDay ? " (CV dejando un día afuera)" : " (pocos días: CV con 5 grupos al azar)"}. ` +
+    `Modelo elegido: <b>${best ? best.mod.k + " " + best.mod.name : "—"}</b>: log10(V/M) = a + b·log10(FRP<sub>M</sub>) + c·scan… (${coefTxt}). ` +
+    `Error en días no vistos: <b>${fmt(best && best.cv, 3)}</b> contra ${fmt(m0.cv, 3)} sin corregir (factor típico ×${fmt(10 ** (best ? best.cv : 0))} contra ×${fmt(10 ** m0.cv)}). ` +
+    (best && isF(best.ins) && best.cv > best.ins * 1.25 ? "El error CV supera bastante al de la muestra: el modelo depende de los días con los que se ajustó." : "El error CV es cercano al de la muestra: el modelo se transfiere entre días.") +
+    (sat === "T" ? ` En Terra, Δt (mediana ${fmt(B.dtMed, 0)} min) carga el ciclo diurno: ${cv[4] && cv[3] && isF(cv[4].cv) && isF(cv[3].cv) && cv[4].cv < cv[3].cv * 0.98 ? "agregarlo mejora el modelo." : "con este rango de Δt no aporta, porque casi no varía."}` : ""); }
+
+function dailyTotals(B) { return S.days.map(d => {
+  const det = B.det.filter(x => x.day === d), V = sum(det.map(x => x.frp)), Ms = B.units.filter(r => r.day === d && r.m.frp > 0).map(r => r.m);
+  const raw = sum(Ms.map(m => m.frp)), h = sum(Ms.map(m => B.harm(m))), hc = sum(Ms.map(m => B.harm(m) / (1 - B.om.f(m.scan))));
+  return { day: d, x: dayNum(d), V, raw, h, hc }; }).filter(o => o.V > 0 && o.raw > 0); }
+function render8() {
+  const bars = []; for (const [sat, col, o] of [["A", C.modis, -0.12], ["T", C.terra, 0.12]]) { const B = S.by[sat]; if (!B) continue;
+    B.om.bins.forEach(b => { if (isF(b.f)) bars.push({ x0: (b.lo + b.hi) / 2 + o - 0.11, x1: (b.lo + b.hi) / 2 + o + 0.11, y: 100 * b.f, color: col, tip: `${SATN[sat]} scan ${b.lo}–${b.hi} km\n${(100 * b.f).toFixed(1)} % del FRP omitido (n=${b.n})` }); }); }
+  plot("cOmit", { xLabel: "Scan MODIS en la zona (km)", yLabel: "% FRP omitido", bars0: true, xDom: [0.8, 5.2], yDom: [0, Math.max(10, ...bars.map(b => b.y)) * 1.1], series: [{ type: "bar", color: C.modis, points: bars }], empty: "Sin píxeles comparables" });
+  const A = S.by.A; if (!A) { emptyChart("cTot_A", "Sin Aqua"); $("i8").textContent = ""; return; }
+  const t = dailyTotals(A); const mk = (k, col) => ({ type: "line", color: col, points: t.map(o => ({ x: o.x, y: o[k], tip: `${o.day}: ${fmt(o[k], 0)} MW` })) });
+  plot("cTot_A", { xLabel: "Día", yLabel: "ΣFRP (MW)", logY: true, xTicks: dayTicks(S.days), series: [mk("V", C.viirs), mk("raw", C.modis), mk("h", C.match), mk("hc", C.terra)], empty: "Sin días comparables" });
+  const err = k => median(t.map(o => Math.abs(Math.log10(o[k] / o.V)))), bias = k => median(t.map(o => Math.log10(o[k] / o.V)));
+  S.totErr = t.length ? { raw: err("raw"), h: err("h"), hc: err("hc"), braw: bias("raw"), bh: bias("h"), bhc: bias("hc"), n: t.length } : null;
+  const e = S.totErr; $("i8").innerHTML = !e ? "" : `En ${e.n} días, el error típico del total diario (|log10 MODIS/VIIRS|) es: crudo <b>${fmt(e.raw, 3)}</b> (sesgo ${fmt(e.braw, 2)}), armonizado <b>${fmt(e.h, 3)}</b> (sesgo ${fmt(e.bh, 2)}), armonizado + omisión <b>${fmt(e.hc, 3)}</b> (sesgo ${fmt(e.bhc, 2)}). ` +
+    (e.hc < e.h ? "Sumar la omisión acerca los totales a VIIRS." : "La corrección por omisión no mejora: probablemente la fracción omitida no está bien estimada (pocos fuegos o fuegos lejos de MODIS).") +
+    ` Nota: el total "VIIRS" incluye solo los píxeles con una detección MODIS a menos de 50 km. Los de zonas sin ninguna detección MODIS quedan afuera de esta comparación.`; }
+
+function render9() {
+  const L = [], A = S.by.A, T = S.by.T, F = S.F;
+  if (!F) { $("conclusions").innerHTML = "<li>Cargá datos para generar conclusiones.</li>"; return; }
+  L.push(`<b>Datos:</b> ${S.days.length} días; grupos matcheados Aqua ${A ? A.real.nM : 0}, Terra ${T ? T.real.nM : 0}. ${(A ? A.mrows.length : 0) < 30 ? "Todavía son pocos para coeficientes finales; sumá días." : "Muestra suficiente para un primer coeficiente."}`);
+  if (S.cfg) { const fp = S.cfg.find(c => c.mode === "fp"), fr = S.cfg[3], best = S.cfg.reduce((a, b) => b.net > a.net ? b : a);
+    L.push(`<b>Matcheo:</b> la regla con más pares reales es "${best.name}" (azar ${pct(best.st.nV ? best.chs.nV / best.st.nV : null, 1)}). La huella rotada frente a la N‑S cambia ${fp.net ? ((fr.net - fp.net) / fp.net * 100).toFixed(1) : "–"} % los pares netos y ${fp.cv && fr.cv ? ((fr.cv - fp.cv) / fp.cv * 100).toFixed(1) : "–"} % el error CV. Los dos modos de huella superan a la distancia fija de 1 km: ${fr.net > S.cfg[0].net ? "sí" : "no"}.`); }
+  if (S.cl) { const px = S.cl[0], ok = S.cl.filter(c => isF(c.dayErr)), b = ok.length ? ok.reduce((a, c) => c.dayErr < a.dayErr ? c : a) : null;
+    if (b) L.push(`<b>Unidad MODIS:</b> la mejor regla es "${b.name}" (error total diario ${fmt(b.dayErr, 3)} contra ${fmt(px.dayErr, 3)} por píxel; r ${fmt(px.r, 3)} → ${fmt(b.r, 3)}). ${b.k === "pixel" ? "Clusterizar no aporta a escala diaria." : "Conviene armonizar por fuego (cluster) y no por píxel."}`); }
+  if (F.dfit.all) L.push(`<b>Detección:</b> MODIS ${SATN[F.sat]} alcanza 50 % de detección con ${fmt(F.dfit.all.f50, 1)} MW de VIIRS dentro de su píxel. ${F.dfit.groups.filter(g => g.fit).map(g => `${g.name}: ${fmt(g.fit.f50, 1)} MW`).join(", ")}. Ve el ${pct(1 - F.om.overall)} del FRP VIIRS observable; lo que falta se concentra en fuegos débiles y en scan alto.`);
+  for (const B of [A, T]) { if (!B || !B.best) continue; const m0 = B.cv[0];
+    L.push(`<b>Armonización ${SATN[B.sat]}:</b> usar <b>${B.best.mod.name}</b>. log10(V/M) = ${B.best.mod.cols ? B.best.coef.map((v, i) => (i ? (v >= 0 ? " + " : " − ") + fmt(Math.abs(v), i === 3 ? 5 : 3) + ["", "·logFRP", "·scan", "·Δt"][i] : fmt(v, 3))).join("") : "0"}. Error en días nuevos ×${fmt(10 ** B.best.cv)} (sin corregir ×${fmt(10 ** m0.cv)}; mejora ${fmt((1 - B.best.cv / m0.cv) * 100, 0)} %).`); }
+  if (A && T && A.best && T.best) L.push(`<b>Terra ≠ Aqua:</b> no uses el mismo factor. Terra mira el fuego ~3 h antes y su relación con VIIRS incluye el ciclo diurno. Armonizá cada uno con su modelo, o primero llevá Terra a "hora Aqua".`);
+  if (S.totErr) L.push(`<b>Totales regionales:</b> el error del total diario pasa de ${fmt(S.totErr.raw, 3)} (crudo) a ${fmt(S.totErr.h, 3)} (armonizado) y a ${fmt(S.totErr.hc, 3)} (con omisión). ${S.totErr.hc < S.totErr.raw ? "La cadena armonización + omisión es la recomendada para series largas." : "Revisá la omisión antes de aplicarla a series largas."}`);
+  if (S.tsBest) { const o = S.tsBest; L.push(`<b>Series:</b> la escala más fina con error cercano al mínimo es ${TS_CELLN[o.cell]} × ${o.win} días: r ${fmt(o.rRaw, 2)} → ${fmt(o.r, 2)}, error ${fmt(o.errRaw, 2)} → ${fmt(o.err, 2)}, sesgo del total ${fmt(o.biasRaw, 2)} → ${fmt(o.bias, 2)}. ${o.best && o.best.mod.cols ? `Modelo: ${o.best.mod.name} (log10(V/M) = ${o.best.coef.map((v, i) => (i ? (v >= 0 ? " + " : " − ") + fmt(Math.abs(v), i === 3 ? 5 : 3) + ["", "·logΣFRP", "·scan", "·Δt"][i] : fmt(v, 3))).join("")}).` : ""}`); }
+  if (S.feas) L.push(`<b>¿Se puede?</b> ${S.feas.bad} requisitos en rojo y ${S.feas.mid} parciales (paso 8c). ${S.feas.R.filter(r => r[2][1] === "bad").map(r => r[0]).join("; ")}.`);
+  L.push(`<b>Siguiente:</b> repetí con otra temporada o región y compará coeficientes. Si se mantienen (diferencia menor que el error CV), la armonización es transferible.`);
+  $("conclusions").innerHTML = L.map(x => "<li>" + x + "</li>").join(""); }
+
+function rowVals(r, csv) { const F = S.F, m = r.m, v = r.status === "MATCHED" ? r.near.v : r.v, f = (x, d = 2) => csv ? (isF(x) ? x.toFixed(4) : "") : fmt(x, d), o = m || v;
+  return [r.status, m ? m.n : "", r.day, o.lat.toFixed(4), o.lon.toFixed(4), m ? hhmm(m.raw) : "", r.vn, isF(r.dtS) ? r.dtS.toFixed(0) : "", f(r.dist), f(m && m.scan), ((o.h / D2R + 360) % 360).toFixed(0),
+    f(m && m.frp, 1), f(r.status === "VIIRS_ONLY" ? v.frp : r.vfrp, 1), f(m ? F.harm(m) : null, 1), f(m && m.bt, 1), f(r.status === "VIIRS_ONLY" ? v.bt : r.vbt, 1)]; }
+function renderTable() { const tb = $("tableBody"); tb.innerHTML = ""; if (!S.F) return; const fr = document.createDocumentFragment();
+  for (const r of S.F.res.slice(0, 1000)) { const tr = document.createElement("tr"); rowVals(r, false).forEach((v, i) => { const td = document.createElement("td"); td.textContent = v; if (!i) td.className = "s-" + r.status; tr.appendChild(td); });
+    tr.addEventListener("click", () => { const d = r.m || r.v; $("mapDay").value = d.day; setBases(); drawMaps(false); mapS.setView([d.lat, d.lon], 12); $("p3").scrollIntoView({ behavior: "smooth" }); });
+    fr.appendChild(tr); } tb.appendChild(fr);
+  $("raw").textContent = "MODIS (" + S.rawM.length + ")\n" + JSON.stringify(S.rawM.slice(0, 100), null, 1) + "\n\nVIIRS (" + S.rawV.length + ")\n" + JSON.stringify(S.rawV.slice(0, 100), null, 1); }
+function downloadCSV() { const H = ["satellite", "status", "modis_pixels", "day", "lat", "lon", "modis_time", "viirs_n", "dt_min", "dist_km", "modis_scan", "heading_deg", "modis_frp", "viirs_frp_sum", "modis_frp_harmonized", "modis_bt", "viirs_bt_mean"];
+  const esc = s => { s = String(s ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }; const lines = [H.join(",")]; const F0 = S.F;
+  for (const sat of ["A", "T"]) { const B = S.by[sat]; if (!B) continue; S.F = B; for (const r of B.res) lines.push([SATN[sat], ...rowVals(r, true)].map(esc).join(",")); } S.F = F0;
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" })); a.download = `firms_modis_viirs_${$("dateFrom").value}_${$("dateTo").value}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
+
+/* ============ carga de datos ============ */
+async function searchFirms() {
+  const from = $("dateFrom").value, to = $("dateTo").value, lat = +$("latitude").value, lon = +$("longitude").value, rad = +$("radius").value;
+  if (!from || !to || to < from || !isF(lat) || !isF(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 || !(rad > 0)) return setStatus("Revisá fechas (desde ≤ hasta), coordenadas y radio.", true);
+  const nDays = Math.round(dayNum(to) - dayNum(from)) + 1; if (nDays > 180) return setStatus("Máximo 180 días por consulta (para no agotar la cuota de FIRMS).", true);
+  const btn = $("searchButton"); btn.disabled = true; const bbox = bboxStr(lat, lon, rad), chunks = [];
+  for (let i = 0; i < nDays; i += 5) chunks.push({ date: addDays(from, i), range: Math.min(5, nDays - i) });
+  try { const M = [], V = [];
+    for (let k = 0; k < chunks.length; k++) { const c = chunks[k]; setStatus(`Descargando bloque ${k + 1}/${chunks.length} (${c.date}, ${c.range} días)…`);
+      const srcs = [$("viirsSource").value, $("viirsSource2").value].filter((x, i, a) => x && a.indexOf(x) === i);
+      const [m, ...vs] = await Promise.all([fetchFirms($("modisSource").value, bbox, c.range, c.date), ...srcs.map(sv => fetchFirms(sv, bbox, c.range, c.date))]);
+      M.push(...m); vs.forEach((v, i) => V.push(...v.map(r => ({ ...r, _src: srcs[i] })))); }
+    loadData(M, V, "FIRMS"); }
+  catch (e) { console.error(e); setStatus("Error: " + e.message + ". Probá «Datos demo» o importá datos guardados.", true); }
+  finally { btn.disabled = false; } }
+function loadData(M, V, origin) { S.rawM = M; S.rawV = V; const all = M.concat(V), demo = all.length && all.every(r => r.version === "demo");
+  runAnalysis(demo ? "⚠ DATOS DEMO SINTÉTICOS (no son de FIRMS) · " + origin : origin);
+  if (demo) { const e = $("status"); e.style.background = "#fff4d6"; e.style.color = "#6b4a00"; } }
+function exportData() { const meta = {}; ["dateFrom", "dateTo", "latitude", "longitude", "radius", "modisSource", "viirsSource"].forEach(k => meta[k] = $(k).value);
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify({ version: 2, meta, rawM: S.rawM, rawV: S.rawV })], { type: "application/json" }));
+  a.download = `firms_raw_${meta.dateFrom}_${meta.dateTo}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
+async function importData(file) { try { const j = JSON.parse(await file.text()); if (!Array.isArray(j.rawM) || !Array.isArray(j.rawV)) throw new Error("formato inválido");
+  if (j.meta) for (const [k, v] of Object.entries(j.meta)) if ($(k)) $(k).value = v; updSel(true); loadData(j.rawM, j.rawV, "Importado " + file.name); } catch (e) { setStatus("No pude importar: " + e.message, true); } }
+
+async function importCSVs(files) {
+  try { const lat0 = +$("latitude").value, lon0 = +$("longitude").value, rad = +$("radius").value, from = $("dateFrom").value, to = $("dateTo").value; const M = [], V = []; let nAll = 0;
+    for (const f of files) { const rows = parseCSV(await f.text()); if (!rows.length) continue; const isM = "brightness" in rows[0], isV = "bright_ti4" in rows[0]; if (!isM && !isV) continue;
+      for (const r of rows) { nAll++; const la = num(r.latitude), lo = num(r.longitude); if (!isF(la) || !isF(lo)) continue;
+        if (Math.hypot((la - lat0) * KM, (lo - lon0) * KM * Math.cos(lat0 * D2R)) > rad) continue; if ((from && r.acq_date < from) || (to && r.acq_date > to)) continue;
+        if (isM) M.push(r); else V.push({ ...r, _src: "VIIRS_" + (r.satellite || f.name) }); } }
+    if (!M.length && !V.length) throw new Error(`ninguna fila dentro del círculo y las fechas elegidas (${nAll} leídas)`);
+    loadData(M, V, `CSV (${files.length} archivo/s, ${nAll} filas leídas)`); } catch (e) { setStatus("No pude importar los CSV: " + e.message, true); } }
+$("csvButton").addEventListener("click", () => $("csvFile").click());
+$("csvFile").addEventListener("change", e => { if (e.target.files.length) importCSVs([...e.target.files]); e.target.value = ""; });
+$("tsCell").addEventListener("change", render8bDetail); $("tsWin").addEventListener("change", render8bDetail);
+
+/* ============ selector de área ============ */
+const mapSel = L.map("mapSel").setView([+$("latitude").value, +$("longitude").value], 6);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap", maxZoom: 18 }).addTo(mapSel);
+let selDragging = false, selCircle = null, selRect = null, selMarker = null, drawOn = false, drawing = false, justDrew = false;
+function updSel(fit) { const lat = +$("latitude").value, lon = +$("longitude").value, rad = +$("radius").value; if (!isF(lat) || !isF(lon) || !(rad > 0)) return;
+  const b = bboxStr(lat, lon, rad).split(",").map(Number), rb = [[b[1], b[0]], [b[3], b[2]]];
+  if (!selCircle) { selCircle = L.circle([lat, lon], { radius: rad * 1000, color: "#ff2bd6", weight: 2, fillOpacity: 0.08, interactive: false }).addTo(mapSel);
+    selRect = L.rectangle(rb, { color: "#111", weight: 1.5, dashArray: "6 4", fill: false, interactive: false }).addTo(mapSel);
+    selMarker = L.marker([lat, lon], { draggable: true }).addTo(mapSel); selMarker.on("dragstart", () => selDragging = true).on("drag", e => setCenter(e.target.getLatLng())).on("dragend", () => { selDragging = false; updSel(false); }); }
+  else { selCircle.setLatLng([lat, lon]).setRadius(rad * 1000); selRect.setBounds(rb); if (!selDragging) selMarker.setLatLng([lat, lon]); }
+  $("selInfo").innerHTML = `Centro <b>${lat.toFixed(4)}, ${lon.toFixed(4)}</b> · radio <b>${rad.toFixed(1)} km</b> · FIRMS descarga el rectángulo punteado: <code>${b.map(v => v.toFixed(2)).join(", ")}</code>`;
+  if (fit) mapSel.fitBounds(selRect.getBounds(), { padding: [20, 20] }); }
+function setCenter(ll) { $("latitude").value = ll.lat.toFixed(4); $("longitude").value = ll.lng.toFixed(4); updSel(false); }
+function setDraw(on) { drawOn = on; $("drawBtn").textContent = on ? "Arrastrá desde el centro hacia afuera… (Esc cancela)" : "✏️ Dibujar área en el mapa"; mapSel.getContainer().style.cursor = on ? "crosshair" : ""; if (on) mapSel.dragging.disable(); else mapSel.dragging.enable(); }
+$("drawBtn").addEventListener("click", () => setDraw(!drawOn));
+document.addEventListener("keydown", e => { if (e.key === "Escape" && drawOn) { drawing = false; setDraw(false); } });
+mapSel.on("mousedown", e => { if (!drawOn) return; drawing = true; setCenter(e.latlng); $("radius").value = "1"; updSel(false); });
+mapSel.on("mousemove", e => { if (!drawing) return; const r = mapSel.distance(L.latLng(+$("latitude").value, +$("longitude").value), e.latlng) / 1000; $("radius").value = Math.max(1, r).toFixed(1); updSel(false); });
+mapSel.on("mouseup", () => { if (!drawing) return; drawing = false; setDraw(false); justDrew = true; setTimeout(() => justDrew = false, 300); updSel(true); });
+mapSel.on("click", e => { if (drawOn || justDrew) return; setCenter(e.latlng); });
+["latitude", "longitude", "radius"].forEach(id => $(id).addEventListener("input", () => updSel(false)));
+updSel(true);
+
+/* ============ demo multi‑día ============ */
+function demoData() {
+  const lat0 = +$("latitude").value, lon0 = +$("longitude").value, from = $("dateFrom").value, to = $("dateTo").value;
+  const nDays = Math.max(1, Math.min(120, Math.round(dayNum(to) - dayNum(from)) + 1)), rnd = seeded(2025), randn = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(2 * Math.PI * rnd());
+  const kLat = 1 / KM, kLon = 1 / (KM * Math.cos(lat0 * D2R)), tt = m => { m = Math.round(m); return String(Math.floor(m / 60) % 24).padStart(2, "0") + String(m % 60).padStart(2, "0"); };
+  const M = [], V = []; const hA = heading(lat0, true), hT = heading(lat0, false);
+  // ubica un punto dentro de un píxel rotado (ac, al en km) alrededor de (lat,lon)
+  const place = (lat, lon, h, ac, al) => [lat + (-ac * Math.sin(h) + al * Math.cos(h)) * kLat, lon + (ac * Math.cos(h) + al * Math.sin(h)) * kLon];
+  for (let d = 0; d < nDays; d++) {
+    const date = addDays(from, d), act = Math.exp(randn() * 0.35), baseScan = 1 + 3.6 * Math.abs(Math.sin(d * 0.83 + 0.4)), vT = 18 * 60 + 5 + randn() * 6, aT = vT - 6 + randn() * 4, tT = 15 * 60 + 2 + randn() * 4;
+    const vRow = (lat, lon, frp, sc) => ({ latitude: lat.toFixed(5), longitude: lon.toFixed(5), bright_ti4: Math.min(I4_SAT, 300 + 40 * Math.log10(1 + frp) + randn() * 3).toFixed(2), scan: sc.toFixed(2), track: (0.36 + (sc - 0.38) * 0.6).toFixed(2),
+      acq_date: date, acq_time: tt(vT), satellite: "N", instrument: "VIIRS", confidence: frp > 6 ? "h" : frp > 1.5 ? "n" : "l", version: "demo", bright_ti5: (292 + 9 * Math.log10(1 + frp) + randn() * 2).toFixed(2), frp: frp.toFixed(2), daynight: "D" });
+    const mRow = (lat, lon, frp, sc, sat, time) => ({ latitude: lat.toFixed(5), longitude: lon.toFixed(5), brightness: Math.min(500, 306 + 24 * Math.log10(1 + frp / sc) + randn() * 2).toFixed(2), scan: sc.toFixed(2), track: (1 + (sc - 1) * 0.27).toFixed(2),
+      acq_date: date, acq_time: tt(time), satellite: sat, instrument: "MODIS", confidence: String(Math.max(0, Math.min(100, Math.round(35 + 22 * Math.log10(1 + frp) + randn() * 8)))), version: "demo", bright_t31: (294 + 6 * Math.log10(1 + frp) + randn() * 2).toFixed(2), frp: frp.toFixed(2), daynight: "D" });
+    const nc = Math.round(35 * act);
+    for (let c = 0; c < nc; c++) {
+      const cl = lat0 + randn() * 70 * kLat, co = lon0 + randn() * 90 * kLon, ms = Math.max(1, Math.min(4.8, baseScan + randn() * 0.5)), mt = 1 + (ms - 1) * 0.27, vs = 0.38 + rnd() * 0.4;
+      // fuego de 1 a 3 píxeles MODIS de ancho; los VIIRS se reparten en una grilla MODIS rotada con desfase aleatorio
+      const wide = 1 + Math.floor(rnd() ** 1.5 * 3), n = Math.max(1, Math.round((1 + rnd() ** 2 * 9) * wide)); let tot = 0;
+      const offA = rnd() * ms, offL = rnd() * mt, cells = new Map();
+      for (let k = 0; k < n; k++) { const f = Math.exp(randn() * 0.9 + 1.0) * act, ac = (rnd() - 0.5) * ms * wide, al = (rnd() - 0.5) * mt * (0.6 + 0.4 * wide);
+        const [la, lo] = place(cl, co, hA, ac, al); V.push(vRow(la, lo, f, vs)); tot += f;
+        const ia = Math.floor((ac + offA) / ms), il = Math.floor((al + offL) / mt), fa = ((ac + offA) / ms) - ia;
+        const add = (a, b, w) => { const key = a + "|" + b; cells.set(key, (cells.get(key) || 0) + f * w); };
+        // la respuesta del sensor reparte energía con el píxel vecino a lo largo del barrido
+        if (fa < 0.3) { add(ia, il, 0.75); add(ia - 1, il, 0.25); } else if (fa > 0.7) { add(ia, il, 0.75); add(ia + 1, il, 0.25); } else add(ia, il, 1); }
+      for (const [key, fc] of cells) { const [ia, il] = key.split("|").map(Number);
+        if (rnd() < sigmoid(3.2 * (Math.log10(fc) - Math.log10(4 * ms)))) { const [la, lo] = place(cl, co, hA, (ia + 0.5) * ms - offA + randn() * 0.08, (il + 0.5) * mt - offL + randn() * 0.08);
+          M.push(mRow(la, lo, fc * 0.8 * (1 + 0.1 * (ms - 1)) * Math.exp(randn() * 0.18), ms, "A", aT)); } }
+      const msT = Math.max(1, Math.min(4.8, 5.8 - baseScan + randn() * 0.4)), totT = tot * 0.55 * Math.exp(randn() * 0.35);
+      if (rnd() < sigmoid(3 * (Math.log10(totT) - Math.log10(4 * msT)))) { const [la, lo] = place(cl, co, hT, randn() * 0.1, randn() * 0.1); M.push(mRow(la, lo, totT * (1 + 0.1 * (msT - 1)), msT, "T", tT)); }
+    }
+    for (let k = 0; k < 2; k++) M.push(mRow(lat0 + randn() * 80 * kLat, lon0 + randn() * 80 * kLon, 12 + rnd() * 20, baseScan, "A", aT));
+  }
+  return { M, V }; }
+
+/* ============ eventos ============ */
+$("searchButton").addEventListener("click", searchFirms);
+$("demoButton").addEventListener("click", () => { const d = demoData(); loadData(d.M, d.V, "DEMO sintético"); });
+$("downloadButton").addEventListener("click", downloadCSV);
+$("exportButton").addEventListener("click", exportData);
+$("importButton").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", e => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ""; });
+document.querySelectorAll(".rematch").forEach(el => el.addEventListener("change", () => { if (S.rawM.length || S.rawV.length) runAnalysis("Recalculado"); }));
+$("imgA").addEventListener("change", setBases); $("imgB").addEventListener("change", setBases); $("swipeDet").addEventListener("change", clipSwipe); $("mapStyle").addEventListener("change", () => drawMaps(false));
+$("mapDay").addEventListener("change", () => { setBases(); drawMaps(true); });
+["showM", "showV"].forEach(id => $(id).addEventListener("change", () => drawMaps(false)));
+["exX", "exY"].forEach(id => $(id).addEventListener("change", drawExplorer));
+let rT; window.addEventListener("resize", () => { clearTimeout(rT); rT = setTimeout(() => { if (S.F) { render2(); render4(); render4b(); render5(); render6(); render7("A"); render7("T"); render8(); render8b(); } }, 250); });
+for (const id of ["exX", "exY"]) $(id).innerHTML = VARS.map(v => `<option value="${v[0]}">${v[2]}</option>`).join(""); $("exX").value = "m_scan"; $("exY").value = "lr_frp";
+setBases();
+["cClR", "cClCv", "cClSc", "cScale", "cScaleR", "cTsH", "cCum", "cRec", "cTsCount", "cTsRatio", "cSens", "cOffset", "cDist", "cDt", "cDetProb", "cDetRev", "cExp", "cN", "cFrp_A", "cCv_A", "cFrp_T", "cCv_T", "cOmit", "cTot_A"].forEach(id => emptyChart(id, "Buscá en FIRMS, importá datos o cargá la demo"));
+$("cCorr").style.height = "200px"; emptyChart("cCorr", "Sin datos");
+</script>
+</body>
+</html>
