@@ -1,9 +1,10 @@
 ETL_DIR      := etl
 BACKEND_DIR  := backend
+FRONTEND_DIR := frontend
 DATA_DIR     := data
 
 .DEFAULT_GOAL := help
-.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse backend-setup backend-dev backend-test
+.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse backend-setup backend-dev backend-test frontend-setup frontend-dev
 
 help: ## List available commands
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -41,3 +42,11 @@ backend-dev: ## Run the API with auto-reload on http://localhost:8000 (docs at /
 
 backend-test: ## Run the backend tests
 	cd $(BACKEND_DIR) && uv run pytest
+
+# --- frontend (Vue + Vite) ---------------------------------------------------
+
+frontend-setup: ## Once per machine: install the frontend dependencies
+	cd $(FRONTEND_DIR) && npm install
+
+frontend-dev: ## Run the UI on http://localhost:5173 (needs make backend-dev running)
+	cd $(FRONTEND_DIR) && npm run dev
