@@ -59,6 +59,9 @@ export const getHexagonPeriod = (h3, params, signal) => get(`/hexagons/${h3}/per
 
 export const getHexagonDetections = (h3, params, signal) => get(`/hexagons/${h3}/detections`, params, signal)
 
+// Daily weather of a hexagon (NASA MERRA-2 + GPM IMERG, from its nearest grid cells).
+export const getHexagonWeather = (h3, params, signal) => get(`/hexagons/${h3}/weather`, params, signal)
+
 // Many hexagons at once (a drawn area or a multi-selection): POST, ids in the body.
 export const getSelectionSummary = (body, signal) => post('/hexagons/selection/summary', body, signal)
 

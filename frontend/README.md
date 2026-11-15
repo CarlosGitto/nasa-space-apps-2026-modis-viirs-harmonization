@@ -39,7 +39,13 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   ([src/components/hexagon/](src/components/hexagon/)); Shift/Ctrl/Cmd + click
   adds or removes hexagons, Esc closes. Tabs: **Observaciones** (table of
   detections for the dataset and dates, per satellite), **Ficha · historial**
-  (whole history, precomputed) and **Ficha · período** (the selected dates). With
+  (whole history, precomputed), **Ficha · período** (the selected dates, with a
+  compact weather summary, `HexWeather.vue`) and **Clima** (`HexClimate.vue`): the
+  hexagon's weather day by day, at least 30 days up to the end date, with the time
+  slider's day marked: fire detections per sensor against the maximum VPD,
+  temperature and dew point, minimum humidity and wind (with direction in the
+  tooltip), daily rain with its 30-day total and days since rain. NASA MERRA-2 and
+  GPM IMERG, from the grid cell nearest to the hexagon. With
   several hexagons, "Detalle" shows one ficha each; "Agrupado" is a work in progress.
 - **Area**: "Area (4 points)" on the map: click 4 points and every res-6 hexagon
   whose center is inside is selected, empty ones too (up to 5000; a bigger area only

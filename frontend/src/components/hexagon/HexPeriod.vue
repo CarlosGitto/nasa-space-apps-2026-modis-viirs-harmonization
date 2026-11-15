@@ -1,10 +1,12 @@
 <script setup>
 // Ficha · período: one hexagon over the selected dates (or the time slider's day).
-// The backend adds up this hexagon's precomputed daily rows (fct_hexagon_daily).
+// The backend adds up this hexagon's precomputed daily rows (fct_hexagon_daily); below,
+// the weather of the same dates (HexWeather).
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getHexagonPeriod } from '../../api'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import { useFiltersStore } from '../../stores/filters'
+import HexWeather from './HexWeather.vue'
 import MiniChart from './MiniChart.vue'
 import { dayRange, num, pct, sensorBars } from './charts'
 import './ficha.css'
@@ -90,5 +92,7 @@ const dailyChart = computed(() => {
         <MiniChart :option="dailyChart" />
       </section>
     </template>
+    <!-- Weather is per place, not per detection: shown even when the hexagon never burned. -->
+    <HexWeather :h3="h3" :start="range.start" :end="range.end" />
   </article>
 </template>
