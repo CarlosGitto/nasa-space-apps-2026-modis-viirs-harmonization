@@ -19,3 +19,18 @@ sources:
       - name: viirs_snpp_sp
       - name: viirs_noaa20_sp
       - name: viirs_noaa21_sp
+
+  - name: weather_raw
+    description: >
+      Raw NASA Earthdata weather landed by dlt in the DuckLake (bronze), subset to
+      the configured area: one row per grid cell and time step, values as in the
+      file. Append-only like firms_raw: silver keeps the latest version.
+    database: lake
+    schema: weather_raw
+    tables:
+      - name: merra2_slv_hourly
+        description: MERRA-2 M2T1NXSLV (hourly, 0.5° x 0.625°). t2m / t2mdew in K, u10m / v10m in m/s.
+      - name: imerg_final_daily
+        description: GPM IMERG Final daily (GPM_3IMERGDF, 0.1°). precipitation in mm per UTC day.
+      - name: imerg_late_daily
+        description: GPM IMERG Late daily (GPM_3IMERGDL, 0.1°). precipitation in mm per UTC day.

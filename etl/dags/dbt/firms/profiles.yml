@@ -7,6 +7,12 @@ firms:
       # (see include/firms/config.py). Same env var and defaults as Airflow.
       path: ":memory:"
       threads: 1
+      # Cap DuckDB's memory (default: 80 % of the machine, more than Airflow leaves free:
+      # the OS then kills dbt with exit code -9) and let it spill to disk instead.
+      settings:
+        memory_limit: "{{ env_var('DBT_DUCKDB_MEMORY_LIMIT', '4GB') }}"
+        temp_directory: "{{ env_var('DBT_DUCKDB_TEMP_DIR', '/tmp/dbt_duckdb_spill') }}"
+        preserve_insertion_order: false  # lets big inserts stream; DuckLake's sorted_by sets file order
       extensions:
         - ducklake
         - sqlite
