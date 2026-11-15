@@ -125,7 +125,11 @@ latest version of each detection, whatever its origin. Lineage columns say where
 - Narrow the load with `--product`, `--prefix` (that label), `--since`/`--until` (days written in the file name)
   and `--exclude` (globs). `make etl-load-local ARGS="--help"` lists everything.
 - Airflow must not be writing to the lake meanwhile (the catalog accepts one writer): pause the ingest and dbt
-  DAGs or stop Airflow first. The command runs with `umask 000` so Airflow can keep writing next to the new files.
+  DAGs or stop Airflow first. DuckDB creates folders with mode 755 whatever the umask, so the loader opens the permissions
+  of what it wrote at the end (otherwise Airflow, another user, fails with "Permission denied"); after any other terminal
+  write (local dbt) run `make etl-lake-perms`.
+- The catalog keeps the data path of whoever wrote first (inside Airflow it is `/usr/local/airflow/data/lake/files/`); every
+  connection from outside Docker overrides it (`OVERRIDE_DATA_PATH`), so it does not matter who writes first.
 - The loaded days aren't limited to the dev dataset (South America, 2025 onward): the lake takes any area
   and period, and the scheduled runs go on as before.
 

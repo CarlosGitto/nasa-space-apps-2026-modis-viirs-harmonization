@@ -124,6 +124,26 @@ def run_load(staged: list[Staged], root: Path, batch_rows: int) -> None:
         print(pipeline.run(source()))
 
 
+def open_lake_permissions(lake: Path) -> int:
+    """Make everything under the lake's `files/` writable by any user; returns how many entries were changed.
+
+    Airflow writes as another user (uid 50000). DuckDB creates the partition folders with mode 755 whatever the umask
+    says, so a terminal run (this loader, local dbt) would leave folders Airflow can read but not write into, and its
+    next write to those tables fails with "Permission denied". Best effort: entries owned by someone else are skipped.
+    """
+    changed = 0
+    for root, dirs, files in os.walk(lake / "files"):
+        for name, mode in [(d, 0o777) for d in dirs] + [(f, 0o666) for f in files]:
+            path = os.path.join(root, name)
+            try:
+                if (os.stat(path).st_mode & 0o777) != mode:
+                    os.chmod(path, mode)
+                    changed += 1
+            except OSError:
+                pass
+    return changed
+
+
 def known_windows() -> set[tuple[str, str, date]]:
     """(product, area, start) of the windows already registered."""
     import duckdb
@@ -257,6 +277,9 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if not args.keep_staging and not args.staging:
             shutil.rmtree(staging, ignore_errors=True)
+    n = open_lake_permissions(Path(os.environ["FIRMS_LAKE_PATH"]))
+    if n:
+        print(f"Opened permissions of {n} lake entries so Airflow (another user) can write next to them.")
     print("\nDone. Silver and gold are not rebuilt yet: run `make etl-reprocess` (Airflow running).")
     return 0
 

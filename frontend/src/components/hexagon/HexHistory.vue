@@ -165,7 +165,9 @@ const kpis = (p) => [
         <p class="muted small">
           El índice es la probabilidad de que otro sensor confirme la detección (de 0 a 1), según su confianza, su
           persistencia y su FRP. Mide si la detección vuelve a verse, no si es un incendio real. Capacidad de
-          discriminación moderada (AUC 0,66 MODIS · 0,73 VIIRS). Cada año pesa por sus detecciones.
+          discriminación moderada (AUC 0,66 MODIS · 0,73 VIIRS). Cada año pesa por sus detecciones. No es comparable entre
+          sensores: cada uno se calibró contra otro objetivo (MODIS confirmado por VIIRS, que lo logra el 93 % de las veces;
+          VIIRS confirmado por NOAA-20, el 66 %), así que un índice más alto en MODIS no lo hace más fiable.
         </p>
       </section>
       <section v-if="harmonizedChart">
