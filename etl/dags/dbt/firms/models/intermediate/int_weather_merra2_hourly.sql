@@ -7,7 +7,8 @@
 -- DuckDB can spill to disk, instead of a window over every row. The per-file lineage
 -- (_granule, _collection, _area, _extracted_at) stays in bronze, joinable by _dlt_load_id.
 {{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='obs_month',
-          partitioned_by=['obs_month'], sorted_by=['cell_lat', 'cell_lon'], tags=['weather']) }}
+          partitioned_by=['obs_month'], sorted_by=['cell_lat', 'cell_lon'], tags=['weather'],
+          on_schema_change='sync_all_columns') }}
 {% set source_sql %}
     select * from {{ ref('stg_weather__merra2_slv_hourly') }}
 {% endset %}
