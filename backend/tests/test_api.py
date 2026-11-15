@@ -17,7 +17,7 @@ from app.main import app
 
 def _attach(root: Path, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
-    con.execute("INSTALL ducklake; LOAD ducklake; INSTALL sqlite; LOAD sqlite;")
+    con.execute("INSTALL ducklake; LOAD ducklake; INSTALL sqlite; LOAD sqlite; INSTALL h3 FROM community; LOAD h3;")
     # Inlining off: write real Parquet files even for a handful of rows, so the
     # relocated lake must find them through OVERRIDE_DATA_PATH.
     options = f"DATA_PATH '{root}/files/', OVERRIDE_DATA_PATH true, DATA_INLINING_ROW_LIMIT 0" + (", READ_ONLY" if read_only else "")
@@ -32,10 +32,13 @@ def _build_lake(root: Path) -> None:
     sqlite.close()
     con = _attach(root)
     con.execute("CREATE SCHEMA lake.silver; CREATE SCHEMA lake.gold;")
-    # MODIS: silver table + gold view, like dbt builds them. Two fires in Argentina, one in the US.
+    # MODIS: silver table + gold view, like dbt builds them (with the stored h3_r6 cell).
+    # Two fires in Argentina, one in the US, one invalid row.
     con.execute(
         """
-        CREATE TABLE lake.silver.modis_nrt AS select * from (values
+        CREATE TABLE lake.silver.modis_nrt AS
+        select *, case when latitude between -90 and 90 then h3_latlng_to_cell(latitude, longitude, 6) end as h3_r6
+        from (values
             (-34.6, -58.4, date '2026-11-10', timestamp '2026-11-10 12:30', 10.0, 'D', 'Aqua',  85, 320.0, 290.0, '1', null),
             (-31.4, -64.2, date '2026-11-11', timestamp '2026-11-11 03:00',  5.0, 'N', 'Terra', 50, 310.0, 285.0, '1', null),
             ( 40.0, -100.0, date '2026-11-11', timestamp '2026-11-11 18:00', 20.0, 'D', 'Aqua', 90, 330.0, 295.0, '2', null),
@@ -226,9 +229,57 @@ def test_sees_new_commits_without_restart(client, lake):
     writer = _attach(lake)  # an ETL run committing while the backend is up
     writer.execute(
         "insert into lake.silver.modis_nrt values "
-        "(-30.0, -60.0, date '2026-11-12', timestamp '2026-11-12 01:00', 1.0, 'N', 'Aqua', 70, 300.0, 280.0, '3', null)"
+        "(-30.0, -60.0, date '2026-11-12', timestamp '2026-11-12 01:00', 1.0, 'N', 'Aqua', 70, 300.0, 280.0, '3', null, "
+        "h3_latlng_to_cell(-30.0, -60.0, 6))"
     )
     writer.close()
     body = {d["id"]: d for d in client.get("/datasets").json()}
     assert body["modis_nrt"]["rows"] == 4
     assert body["modis_nrt"]["end_date"] == "2026-11-12"
+
+
+def _cell(lat, lon, res=6):
+    con = duckdb.connect()
+    con.execute("INSTALL h3 FROM community; LOAD h3;")
+    return con.execute(f"select h3_h3_to_string(h3_latlng_to_cell({lat}, {lon}, {res}))").fetchone()[0]
+
+
+def test_hex_res6_is_the_fixed_cell_of_each_detection(client):
+    cells = {f["properties"]["h3"] for f in client.get("/datasets/modis_nrt/stats/hex?res=6").json()["features"]}
+    assert cells == {_cell(-34.6, -58.4), _cell(-31.4, -64.2), _cell(40.0, -100.0)}
+
+
+@pytest.mark.parametrize("res", [0, 1, 3, 5])
+def test_coarser_res_rolls_up_parents(client, res):
+    # Each coarse cell is the parent of the detections' res-6 cells, and no detection is lost.
+    con = duckdb.connect()
+    con.execute("INSTALL h3 FROM community; LOAD h3;")
+    expected = {
+        con.execute(f"select h3_cell_to_parent('{_cell(lat, lon)}', {res})").fetchone()[0]
+        for lat, lon in [(-34.6, -58.4), (-31.4, -64.2), (40.0, -100.0)]
+    }
+    body = client.get(f"/datasets/modis_nrt/stats/hex?res={res}").json()
+    assert {f["properties"]["h3"] for f in body["features"]} == expected
+    assert sum(f["properties"]["detections"] for f in body["features"]) == 3
+
+
+def test_dataset_without_h3_column_gets_it_computed(client):
+    # harmonized_nrt has no h3_r6 column: the backend computes the same cell.
+    cells = {f["properties"]["h3"] for f in client.get("/datasets/harmonized_nrt/stats/hex?res=6").json()["features"]}
+    assert cells == {_cell(10.5, 20.5)}
+
+
+def test_res_finer_than_the_base_cell_is_422(client):
+    assert client.get("/datasets/modis_nrt/stats/hex?res=7").status_code == 422
+
+
+def test_empty_catalog_file_is_no_lake_yet(tmp_path, monkeypatch):
+    # The ETL creates catalog.sqlite (WAL mode) before DuckLake initializes it.
+    lake = tmp_path / "lake"
+    lake.mkdir()
+    sqlite = sqlite3.connect(lake / "catalog.sqlite")
+    sqlite.execute("PRAGMA journal_mode=WAL")
+    sqlite.close()
+    monkeypatch.setenv("LAKE_PATH", str(lake))
+    with TestClient(app) as c:
+        assert all(not d["available"] for d in c.get("/datasets").json())
