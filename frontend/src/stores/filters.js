@@ -8,7 +8,7 @@ import { listDatasets } from '../api'
 import { pickLayer } from '../gibs'
 
 const DEFAULT_DAYS = 7
-const PREFERRED_DATASET = 'viirs_nrt'
+const PREFERRED_DATASET = 'viirs_best' // continuous: SP where published, NRT after it
 
 const isoDate = (d) => d.toISOString().slice(0, 10)
 const addDays = (iso, days) => {

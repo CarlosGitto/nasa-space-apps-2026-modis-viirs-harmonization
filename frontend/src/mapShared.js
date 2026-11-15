@@ -40,12 +40,17 @@ export const HEX_FILL_COLOR = [
   0, '#fde68a', 2, '#fbbf24', 4, '#f97316', 6, '#dc2626', 8, '#7f1d1d',
 ]
 
+// Heat that is not a wildfire (refineries, gas flares, industry, volcanoes) is drawn gray.
+export const STATIC_COLOR = '#6b7280'
+
 // p.h3 is the cell's fixed H3 id: the same id is always the same place.
 export const hexPopup = (p) =>
   `<b>${fmt(p.detections)}</b> detections<br>Total FRP: ${fmt(p.frp_sum)} MW<br>` +
+  (p.static_detections ? `<span style="color:${STATIC_COLOR}">+ ${fmt(p.static_detections)} static-source detections (not wildfires)</span><br>` : '') +
   `<span style="color:#6b7280">Cell ${p.h3}</span>`
 
 export const pointPopup = (p) => `
-  <b>${p.satellite ?? p.sensor}</b> · ${p.acq_datetime_utc.replace('T', ' ').slice(0, 16)} UTC<br>
+  ${p.is_static_source ? `<b style="color:${STATIC_COLOR}">Static source (not a wildfire)</b><br>` : ''}
+  <b>${p.satellite ?? p.sensor}</b> · ${(p.product ?? '').toUpperCase()} · ${p.acq_datetime_utc.replace('T', ' ').slice(0, 16)} UTC<br>
   FRP: ${fmt(p.frp)} MW<br>
   Confidence: ${p.confidence ?? '–'} · ${p.daynight === 'D' ? 'Day' : p.daynight === 'N' ? 'Night' : '–'}`

@@ -7,7 +7,7 @@ import { useFiltersStore } from '../stores/filters'
 const store = useFiltersStore()
 
 const SENSORS = { modis: 'MODIS', viirs: 'VIIRS', harmonized: 'Harmonized' }
-const PRODUCTS = { nrt: 'NRT · near real-time', sp: 'SP · historical' }
+const PRODUCTS = { best: 'SP + NRT · continuous', sp: 'SP · science quality', nrt: 'NRT · near real-time' }
 
 const groups = computed(() =>
   Object.entries(SENSORS).map(([sensor, label]) => ({
