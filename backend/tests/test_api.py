@@ -12,6 +12,7 @@ import duckdb
 import pytest
 from fastapi.testclient import TestClient
 
+from app import db
 from app.main import app
 
 
@@ -99,6 +100,20 @@ PROFILE = """
 """
 
 
+# Weather gold (etl/dags/dbt/firms/models/gold/fct_weather_daily.sql, NASA POWER near fires):
+# two cells of the MERRA-2 grid near Buenos Aires, October to November 11 (POWER lags ~2 days
+# in reality; here it simply ends there). Rain on Nov 10 in one cell, 0.05 mm (dry) in the other.
+WEATHER = """
+    select cell_lat, cell_lon, d::date as obs_date, date_trunc('month', d)::date as obs_month,
+           30.0 as t2m_max_c,
+           case when d::date = date '2026-11-10' and cell_lat = -34.5 then 12.0
+                when d::date = date '2026-11-10' then 0.05 else 0.0 end as precipitation_mm,
+           5.0 as wind_speed_mean_ms, 270.0 as wind_dir_mean_deg, '1' as last_load_id
+    from range(date '2026-10-01', date '2026-11-12', interval 1 day) t(d),
+         (values (-34.5::double, -58.125::double), (-35.0::double, -58.125::double)) c(cell_lat, cell_lon)
+"""
+
+
 def _build_lake(root: Path) -> None:
     root.mkdir(parents=True)
     sqlite = sqlite3.connect(root / "catalog.sqlite")
@@ -111,6 +126,7 @@ def _build_lake(root: Path) -> None:
     con.execute(f"CREATE TABLE lake.gold.dim_hexagon AS {HEXAGONS}")
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_monthly AS {MONTHLY}")
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_profile AS {PROFILE}")
+    con.execute(f"CREATE TABLE lake.gold.fct_weather_daily AS {WEATHER}")
     # Harmonized gold with only the minimum contract: no satellite/confidence/brightness, no dlt columns.
     con.execute(
         """
@@ -439,6 +455,127 @@ def test_hexagon_without_data_is_404(client):
 
 
 
+# ------------------------------------------------------ weather of a hexagon ---
+# NASA POWER is faked (app.power._fetch): no network in tests.
+
+def _power_day(day, rain=0.0):
+    return {"t2m_max_c": 30.0, "t2m_min_c": 15.0, "t2m_mean_c": 22.0, "dewpoint_mean_c": 8.0, "rh_mean_pct": 45.0,
+            "wind_speed_mean_ms": 5.0, "wind_speed_max_ms": 9.0, "wind_dir_mean_deg": 270.0, "precipitation_mm": rain}
+
+
+@pytest.fixture
+def fake_power(tmp_path, monkeypatch):
+    """POWER answering a daily series (rain 12 mm on Oct 20 and Nov 10), counting requests."""
+    from datetime import date, timedelta
+
+    from app import power
+
+    monkeypatch.setenv("POWER_CACHE_PATH", str(tmp_path / "power.sqlite"))
+    monkeypatch.setattr(power.time, "sleep", lambda s: None)
+    calls = []
+
+    def fetch(lat, lon, start, end):
+        calls.append((lat, lon, start, end))
+        rain = {date(2026, 10, 20): 12.0, date(2026, 11, 10): 12.0, date(2026, 11, 11): 0.5}
+        return {start + timedelta(days=i): _power_day(start + timedelta(days=i), rain.get(start + timedelta(days=i), 0.0))
+                for i in range((end - start).days + 1)}
+
+    monkeypatch.setattr(power, "_fetch", fetch)
+    return calls
+
+
+def test_hexagon_weather_comes_from_power_for_the_hexagon_cell(client, fake_power):
+    body = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-08&end=2026-11-12").json()
+    (cell,) = body["cells"]
+    assert cell["product"] == "power" and cell["center"] == [-58.125, -34.5] and cell["distance_km"] < 40
+    assert [d["date"] for d in body["days"]] == ["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]
+    day = body["days"][0]
+    assert (day["t2m_max_c"], day["wind_dir_mean_deg"], day["wind_speed_max_ms"]) == (30.0, 270.0, 9.0)
+    # Derived: VPD and minimum RH from the max temperature and the dew point (Magnus).
+    assert day["vpd_max_kpa"] == pytest.approx(4.24 - 1.07, abs=0.02) and 20 < day["rh_min_pct"] < 30
+    # One POWER request, snapped to the cell, with 60 days of history for the accumulations.
+    assert len(fake_power) == 1 and fake_power[0][:2] == (-34.5, -58.125)
+    assert str(fake_power[0][2]) == "2026-09-09" and str(fake_power[0][3]) == "2026-11-12"
+
+
+def test_hexagon_weather_accumulations_see_rain_before_the_range(client, fake_power):
+    days = {d["date"]: d for d in client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-08&end=2026-11-12").json()["days"]}
+    assert days["2026-11-09"]["days_since_rain"] == 20  # rain on Oct 20, before the range
+    assert days["2026-11-10"]["days_since_rain"] == 0
+    assert days["2026-11-12"]["days_since_rain"] == 2  # 0.5 mm on Nov 11 is not a rain day
+    assert days["2026-11-12"]["precipitation_7d_mm"] == 12.5
+    assert days["2026-11-12"]["precipitation_30d_mm"] == 24.5
+
+
+def test_hexagon_weather_is_cached_per_power_cell(client, fake_power):
+    url = "/hexagons/{}/weather?start=2026-10-01&end=2026-10-31"
+    client.get(url.format(_cell(*BUENOS_AIRES)))
+    client.get(url.format(_cell(*BUENOS_AIRES)))  # same hexagon again
+    client.get(url.format(_cell(-34.52, -58.2)))  # a neighbor hexagon in the same POWER cell
+    assert len(fake_power) == 1  # POWER asked once: "requesting the same location" again is avoided
+
+
+def test_hexagon_weather_works_anywhere_without_fires(client, fake_power):
+    body = client.get(f"/hexagons/{_cell(0.0, 0.0)}/weather?start=2026-11-01&end=2026-11-02").json()
+    assert len(body["days"]) == 2 and body["cells"][0]["center"] == [0.0, 0.0]
+
+
+def test_hexagon_weather_when_power_is_down_is_503(client, monkeypatch, tmp_path):
+    from app import power
+
+    monkeypatch.setenv("POWER_CACHE_PATH", str(tmp_path / "power.sqlite"))
+
+    def down(*args):
+        raise power.PowerUnavailable("NASA POWER answered 429")
+
+    monkeypatch.setattr(power, "_fetch", down)
+    r = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-01&end=2026-11-02")
+    assert r.status_code == 503 and "429" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("query", ["start=2026-11-12&end=2026-11-11", "start=2020-01-01&end=2026-11-11"])
+def test_hexagon_weather_rejects_bad_ranges(client, fake_power, query):
+    assert client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?{query}").status_code == 422
+
+
+# -------------------------------------------------------------- weather maps ---
+
+@pytest.mark.parametrize(("layer", "first"), [("temperature", [-58.125, -35.0, 30.0]), ("wind", [-58.125, -35.0, 5.0, 270.0])])
+def test_weather_map_layers(client, layer, first):
+    body = client.get(f"/weather/map?layer={layer}&date=2026-11-11").json()
+    assert (body["product"], body["cell"]) == ("power", [0.5, 0.625])
+    assert sorted(body["cells"])[0] == first and len(body["cells"]) == 2
+    assert body["coverage"] is None
+
+
+def test_weather_map_precipitation_leaves_dry_cells_out(client):
+    wet = client.get("/weather/map?layer=precipitation&date=2026-11-10").json()
+    assert wet["unit"] == "mm" and wet["cells"] == [[-58.125, -34.5, 12.0]]  # 0.05 mm in the other cell: dry
+    assert client.get("/weather/map?layer=precipitation&date=2026-11-09").json()["cells"] == []
+
+
+def test_weather_map_bbox_and_a_day_without_data_tells_what_exists(client):
+    assert client.get("/weather/map?layer=temperature&date=2026-11-11&bbox=0,0,10,10").json()["cells"] == []
+    later = client.get("/weather/map?layer=temperature&date=2026-11-14").json()
+    assert later["cells"] == [] and later["coverage"] == {"first_date": "2026-10-01", "last_date": "2026-11-11"}
+
+
+def test_weather_map_averages_into_coarser_cells_when_the_area_is_big(monkeypatch, client):
+    monkeypatch.setattr(db, "MAX_MAP_CELLS", 1)  # the two cells no longer fit
+    body = client.get("/weather/map?layer=temperature&date=2026-11-10").json()
+    assert body["cell"][0] > 0.5 and body["cells"][0][2] == 30.0
+
+
+def test_weather_map_before_any_weather_load_is_404(client, monkeypatch):
+    monkeypatch.setattr(db, "weather_ready", lambda cur: False)
+    assert client.get("/weather/map?layer=wind&date=2026-11-11").status_code == 404
+
+
+@pytest.mark.parametrize("query", ["layer=snow&date=2026-11-11", "layer=wind", "layer=wind&date=2026-11-11&bbox=1,2,3"])
+def test_weather_map_rejects_bad_input(client, query):
+    assert client.get(f"/weather/map?{query}").status_code == 422
+
+
 # ---------------------------------------------------------- a selection ---
 
 def test_selection_summary_includes_only_hexagons_with_history(client):
@@ -466,3 +603,77 @@ def test_selection_detections(client):
 ])
 def test_selection_rejects_bad_input(client, body):
     assert client.post("/hexagons/selection/summary", json=body).status_code == 422
+
+
+# ------------------------------------------------ weather of a selection (map) ---
+
+def test_selection_weather_groups_hexagons_by_power_cell(client, fake_power):
+    ba, neighbor = _cell(*BUENOS_AIRES), _cell(-34.52, -58.2)
+    # Days the lake doesn't have (it ends Nov 11): asked to POWER.
+    body = client.post("/hexagons/selection/weather",
+                       json={"h3": [ba, neighbor, ba], "start": "2026-11-09", "end": "2026-11-13", "rings": 0}).json()
+    assert body["cell"] == [0.5, 0.625] and body["cells"] == [[-58.125, -34.5]]  # both in the same POWER cell
+    assert body["hexagons"] == {ba: 0, neighbor: 0}
+    assert [d[0] for d in body["days"]] == ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13"]
+    assert body["days"][1][1] == [[30.0, 12.0, 5.0, 270.0]]  # t2m_max, rain, wind speed, direction
+    # The lake has Nov 9-11; POWER is asked only from Nov 12 on (one point request).
+    assert body["sources"] == {"lake": 0, "power": 1} and len(fake_power) == 1
+    assert str(fake_power[0][2]) == "2026-11-12" and str(fake_power[0][3]) == "2026-11-13"
+
+
+def test_selection_weather_comes_from_the_lake_when_it_has_it(client, fake_power):
+    body = client.post("/hexagons/selection/weather",
+                       json={"h3": [_cell(*BUENOS_AIRES)], "start": "2026-11-01", "end": "2026-11-11", "rings": 0}).json()
+    assert body["sources"] == {"lake": 1, "power": 0} and fake_power == []  # ingested already: POWER not asked
+    assert body["days"][9][1] == [[30.0, 12.0, 5.0, 270.0]]  # Nov 10, rain 12 mm in the lake
+
+
+def test_selection_weather_includes_the_neighbors(client, fake_power):
+    ba = _cell(*BUENOS_AIRES)
+    alone = client.post("/hexagons/selection/weather", json={"h3": [ba], "start": "2026-11-01", "end": "2026-11-11", "rings": 0}).json()
+    around = client.post("/hexagons/selection/weather", json={"h3": [ba], "start": "2026-11-01", "end": "2026-11-11"}).json()
+    assert len(around["cells"]) > len(alone["cells"])  # 3 rings (~18 km) reach the next POWER cell
+    assert around["sources"]["lake"] == 1 and around["sources"]["power"] == len(around["cells"]) - 1
+
+
+def test_selection_weather_uses_regional_requests_for_many_cells(client, monkeypatch, tmp_path):
+    from datetime import date
+
+    from app import power
+
+    monkeypatch.setenv("POWER_CACHE_PATH", str(tmp_path / "power.sqlite"))
+    monkeypatch.setattr(power.time, "sleep", lambda s: None)
+    requests = []
+
+    def regional(box, start, end):
+        requests.append(box)
+        west, south, east, north = box
+        cells = [(round(lat, 4), round(lon, 4)) for lat in [x * 0.5 for x in range(int(south * 2), int(north * 2) + 1)]
+                 for lon in [x * 0.625 for x in range(int(west / 0.625) - 1, int(east / 0.625) + 2)] if south <= lat <= north and west <= lon <= east]
+        return {c: {start: {"t2m_max_c": 25.0, "precipitation_mm": 0.0, "wind_speed_mean_ms": 3.0,
+                                         "wind_dir_mean_deg": 90.0}} for c in cells}
+
+    monkeypatch.setattr(power, "_fetch_regional", regional)
+    # A drawn area: 8 POWER cells close together, inside one 10° box: by region (4 requests,
+    # one per parameter, faked here as one call) beats 8 point requests.
+    hexes = [_cell(-34.6 + 0.5 * i, -58.4 - 0.7 * j) for i in range(4) for j in range(2)]
+    query = {"h3": hexes, "start": "2026-11-13", "end": "2026-11-13", "rings": 0}  # a day the lake doesn't have
+    body = client.post("/hexagons/selection/weather", json=query).json()
+    assert len(body["cells"]) == 8 and len(requests) == 1 and body["sources"] == {"lake": 0, "power": 8}
+    assert all(v == [25.0, 0.0, 3.0, 90.0] for v in body["days"][0][1])
+    client.post("/hexagons/selection/weather", json=query)
+    assert len(requests) == 1  # cached
+
+
+def test_selection_weather_rejects_long_ranges(client, fake_power):
+    r = client.post("/hexagons/selection/weather", json={"h3": [_cell(*BUENOS_AIRES)], "start": "2024-01-01", "end": "2026-11-10"})
+    assert r.status_code == 422
+
+
+def test_power_regional_boxes_are_between_2_and_10_degrees():
+    from app import power
+
+    small = power._boxes([(-41.5, -71.875), (-41.0, -71.25)])  # 1.5° wide: under POWER's 2° minimum
+    assert all(2 <= e - w <= 10 and 2 <= n - s <= 10 for w, s, e, n in small)
+    big = power._boxes([(-55.0, -80.0), (10.0, -35.0)])
+    assert len(big) > 1 and all(e - w <= 10 and n - s <= 10 for w, s, e, n in big)

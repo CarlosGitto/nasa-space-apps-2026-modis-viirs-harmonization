@@ -5,6 +5,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { listDatasets } from '../api'
+import { errorMessage } from '../format'
 import { pickLayer } from '../gibs'
 
 const DEFAULT_DAYS = 7
@@ -30,6 +31,10 @@ export const useFiltersStore = defineStore('filters', () => {
   const view = ref('map') // 'map' | 'compare' (MODIS | VIIRS curtain)
   const camera = ref({ center: [0, 20], zoom: 1.5 }) // shared by both views
   const selectedHexes = ref([]) // H3 res-6 ids open in the hexagon panel, in click order
+  // Weather layers drawn on the map ('temperature' | 'precipitation' | 'wind'), for imageryDate.
+  const weatherLayers = ref([])
+  // Where they're drawn: 'fires' (fire hexagons and their neighbors) or 'all' (the whole field).
+  const weatherScope = ref('fires')
   // Maps still loading a change (data and imagery): the time slider waits for them before
   // showing the next day, so the picture always matches the day on the slider.
   const busy = ref({}) // view -> true while loading
@@ -75,7 +80,7 @@ export const useFiltersStore = defineStore('filters', () => {
       datasets.value = await listDatasets()
       error.value = null
     } catch (e) {
-      error.value = `Could not connect to the backend: ${e.message}`
+      error.value = errorMessage(e) // shown in the user's language (App.vue)
       return
     }
     const available = datasets.value.filter((d) => d.available)
@@ -138,11 +143,18 @@ export const useFiltersStore = defineStore('filters', () => {
   const removeHex = (id) => { selectedHexes.value = selectedHexes.value.filter((h) => h !== id) }
   const clearSelection = () => { selectedHexes.value = [] }
   const setCamera = (center, zoom) => { camera.value = { center, zoom } }
+  const setWeatherScope = (scope) => { weatherScope.value = scope }
+  const toggleWeatherLayer = (id) => {
+    weatherLayers.value = weatherLayers.value.includes(id)
+      ? weatherLayers.value.filter((l) => l !== id)
+      : [...weatherLayers.value, id]
+  }
 
   return {
-    datasets, dataset, start, end, zone, zoneCells, error, basemap, day, view, camera, selectedHexes,
+    datasets, dataset, start, end, zone, zoneCells, error, basemap, day, view, camera, selectedHexes, weatherLayers, weatherScope,
     currentDataset, queryParams, imagery, compareSides, imageryDate, isBusy, setBusy,
     loadDatasets, setDataset, setDates, setDay, setMonth, setArea, clearZone, setBasemap, setView, setCamera,
+    toggleWeatherLayer, setWeatherScope,
     selectHex, removeHex, clearSelection,
   }
 })

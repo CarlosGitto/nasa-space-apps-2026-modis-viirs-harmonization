@@ -11,21 +11,24 @@ async function get(path, params = {}, signal) {
   }
   const qs = query.toString()
   const res = await fetch(`${BASE}${path}${qs ? `?${qs}` : ''}`, { signal })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail ?? `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw await httpError(res)
   return res.json()
+}
+
+// The API's messages are English, for developers: the error keeps the HTTP status so
+// the UI shows its own message in the user's language (format.js errorMessage).
+async function httpError(res) {
+  const detail = (await res.json().catch(() => ({}))).detail
+  const error = new Error(typeof detail === 'string' ? detail : `HTTP ${res.status}`)
+  error.status = res.status
+  return error
 }
 
 async function post(path, body, signal) {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
   })
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({}))).detail
-    throw new Error(typeof detail === 'string' ? detail : `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw await httpError(res)
   return res.json()
 }
 
@@ -58,6 +61,15 @@ export const getHexagonMonthly = (h3) => cached(`monthly:${h3}`, () => get(`/hex
 export const getHexagonPeriod = (h3, params, signal) => get(`/hexagons/${h3}/period`, params, signal)
 
 export const getHexagonDetections = (h3, params, signal) => get(`/hexagons/${h3}/detections`, params, signal)
+
+// One UTC day of a weather layer (temperature | precipitation | wind) over a bbox, for the map.
+export const getWeatherMap = (layer, params, signal) => get('/weather/map', { layer, ...params }, signal)
+
+// The map's weather (NASA POWER, on demand) of selected hexagons, every day of start..end.
+export const getSelectionWeather = (body, signal) => post('/hexagons/selection/weather', body, signal)
+
+// Daily weather of a hexagon (NASA POWER, asked on demand by the backend for its center).
+export const getHexagonWeather = (h3, params, signal) => get(`/hexagons/${h3}/weather`, params, signal)
 
 // Many hexagons at once (a drawn area or a multi-selection): POST, ids in the body.
 export const getSelectionSummary = (body, signal) => post('/hexagons/selection/summary', body, signal)

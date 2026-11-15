@@ -25,6 +25,10 @@ each detection falls in (`h3_r6`), the project's fixed, sensor-agnostic spatial 
 | **gold** | `fct_hexagon_daily` | Metrics: hexagon × day × product × sensor × satellite × day/night |
 | **gold** | `fct_hexagon_monthly` | Continuous series (`is_preferred`) per hexagon × month × sensor × satellite |
 | **gold** | `fct_hexagon_profile` | The hexagon's "ficha": one row per hexagon × sensor with its whole history (last detection, last 7/30 days, totals, FRP max/mean/p90, peak day and month, 12-month climatology, static share) |
+| bronze `weather_raw` | `power_daily` | NASA POWER daily weather near fires, from dlt, append-only |
+| silver | `stg_weather__power_daily` (view) | Types, `dq_issue` |
+| silver | `int_weather_power_daily` | Latest version per grid cell and day |
+| **gold** | `fct_weather_daily` | Grid cell (MERRA-2 grid) × UTC day near fires: max temperature, precipitation, mean wind (speed, direction). Feeds the map's weather layers |
 
 How to read gold:
 
@@ -84,6 +88,81 @@ NRT (near real time):                   day after SP ─────────
 
 Instead of downloading, you can copy someone's `data/lake/` folder (stop Airflow
 first so nothing is writing): the catalog and its files travel together.
+
+## Weather (NASA POWER)
+
+Weather comes from [NASA POWER](https://power.larc.nasa.gov): MERRA-2 meteorology
+(GEOS-IT for the latest days) already aggregated per UTC day, on the MERRA-2 grid
+(0.5° × 0.625°, ~55 km), from 1981 to ~2 days ago, with no login. Two uses:
+
+- **The hexagon panel** (Clima tab, Ficha · período) asks POWER on demand for the
+  hexagon's center, through the backend (`/hexagons/{h3}/weather`): any place on
+  Earth, nothing to ingest. Answers are cached per POWER cell and day in
+  `data/cache/power.sqlite` (recent days refreshed at most every 6 hours), so a
+  place is asked once: POWER warns that repeatedly requesting the same location
+  can get a client blocked.
+- **The map's weather layers** need many cells per day at once, so they read the
+  lake: the `weather_ingest` DAG loads POWER's daily regional values (max
+  temperature, precipitation, mean wind speed and direction) near fires only,
+  `weather_dbt` turns them into `gold.fct_weather_daily`.
+
+How to read the lake's weather:
+
+- **Keyed by grid cell, not by hexagon** (`cell_lat`, `cell_lon`): one cell covers
+  ~90 hexagons; take the cell under a point.
+- **UTC days** (`obs_date`), like FIRMS `acq_date`, so they join on the same date.
+- Wind direction is where the wind comes from (0° = north).
+
+POWER's limits (https://power.larc.nasa.gov/docs/services/api/temporal/daily/): no
+published rate, HTTP 429 when hit too hard, one parameter per regional request,
+boxes of at most 10° a side (the API rejects more). The ETL asks one request at a
+time, a second apart, backing off on 429; it never asks the same box, parameter and
+days twice (it resumes after the last day loaded).
+
+Loading the dev weather: `make etl-seed-weather-dev` (Airflow running; no credentials).
+
+**Weather follows the fires** (`WEATHER_KEEP=fires`, the default). A global grid
+every day would be billions of rows, and the map only shows weather around fires,
+so each month of weather keeps only the grid cells within ~100–150 km of that
+month's fire hexagons (their H3 res-3 parents plus one ring;
+`etl/include/weather/fires.py`), and only boxes of at most 10° around them are
+requested from POWER. That decides *what* to download; *when*:
+
+- Fire first. The weather DAG only plans days whose fires, loaded with the same
+  area (`_firms_area` in gold), are already in gold, walking forward from where
+  each weather product stopped and halting at the first gap of more than 7 days.
+- Up to yesterday: days POWER hasn't published yet (~2 days) come back empty and
+  are asked again the next day. A month never runs with only part of its fires;
+  it's picked up by the next daily run once FIRMS has them.
+- Fires that land later for a month whose weather is already loaded (e.g. late
+  NRT detections in a new place) don't get their weather automatically: re-run
+  `weather_ingest` with `start_date`/`end_date` for that month.
+
+**Ingest runs load everything missing**, in chunks: `firms_ingest_sp` and
+`weather_ingest` plan every day from where they stopped (or 2025-01-01) to what
+NASA has published and load it one month per task (dynamic task mapping), so a
+long backfill lands month by month and a failure retries only its month.
+`firms_ingest_nrt` also catches up the days it missed if Airflow was off.
+
+## Changing the region or the dates
+
+Fire and weather cover **the same area and dates on purpose**: weather is only
+useful where and when there are detections to explain. If you change one,
+change the other:
+
+| What | Where |
+|---|---|
+| Area of the scheduled runs | `FIRMS_AREA` in `etl/.env` (weather follows it; `WEATHER_AREA` only to override) |
+| Area of the dev seeds | `DEV_AREA` in the Makefile (used by `etl-seed-dev` and `etl-seed-weather-dev`) |
+| Dates of the dev seeds | `DEV_START` / `DEV_NRT_START` in the Makefile |
+| First day for an empty lake | `SP_DEFAULT_START` (`etl/dags/firms_ingest_sp.py`) and `WEATHER_DEFAULT_START` (`etl/include/weather/config.py`) |
+
+Data already in the lake for the old area stays there: changing the area only
+affects new loads. To go from South America to **the whole world**:
+`FIRMS_AREA=world` in `etl/.env`, `make etl-restart`, then
+`make etl-seed-dev DEV_AREA=world` and `make etl-seed-weather-dev DEV_AREA=world`
+(hours of downloads, tens of GB of fire data plus little weather: daily values near
+the fires; the weather follows as the world's fires land).
 
 ## Setup (once per machine)
 

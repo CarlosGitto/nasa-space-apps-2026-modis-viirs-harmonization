@@ -78,6 +78,8 @@ HEXAGONS = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.dim_hexagon"
 MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_monthly"
 PROFILE = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_profile"
 HEXAGON_TABLES = ("fct_hexagon_detections", "fct_hexagon_daily", "dim_hexagon")
+# Weather near fires (NASA POWER daily), keyed by grid cell and UTC day: see data/README.md.
+WEATHER = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_weather_daily"  # NASA POWER, near fires (map layers)
 
 # Harmonized datasets (own relation) must have these columns (same names in the lake).
 REQUIRED_COLUMNS = ("latitude", "longitude", "acq_date", "acq_datetime_utc", "frp", "daynight")
@@ -605,3 +607,153 @@ def selection_detections(
         [*params, limit + 1],
     )
     return [dict(zip(("h3", *DETECTION_COLUMNS), row)) for row in rel.fetchall()]
+
+
+# ------------------------------------------------------------------ weather ---
+# The hexagon panel asks NASA POWER for its point on demand (app/power.py); the lake's
+# weather (gold fct_weather_daily, near fires) only feeds the map layers below.
+
+# A day with at least this much precipitation (mm) counts as a rain day.
+RAIN_DAY_MM = 1.0
+
+
+def weather_ready(cur: duckdb.DuckDBPyConnection) -> bool:
+    """Whether the lake has the weather gold relation (catalog lookup, no data scan)."""
+    return _attached and "fct_weather_daily" in _tables(cur)
+
+
+def weather_cells_daily(
+    cur: duckdb.DuckDBPyConnection, cells: list[tuple[float, float]], start: date, end: date
+) -> dict[tuple[float, float], dict[date, dict]]:
+    """{(cell_lat, cell_lon): {day: map values}} the lake already has (gold, NASA POWER near
+    fires) for these POWER cells in [start, end]."""
+    if not cells or not weather_ready(cur):
+        return {}
+    rows = cur.execute(
+        f"""
+        select w.cell_lat, w.cell_lon, w.obs_date, w.t2m_max_c, w.precipitation_mm, w.wind_speed_mean_ms, w.wind_dir_mean_deg
+        from {WEATHER} w
+        join (select unnest(?::double[]) as cell_lat, unnest(?::double[]) as cell_lon) c using (cell_lat, cell_lon)
+        where w.obs_date between ? and ? and w.cell_lat between ? and ?
+        """,
+        [[c[0] for c in cells], [c[1] for c in cells], start, end,
+         min(c[0] for c in cells), max(c[0] for c in cells)],
+    ).fetchall()
+    out: dict[tuple[float, float], dict[date, dict]] = {}
+    names = ("t2m_max_c", "precipitation_mm", "wind_speed_mean_ms", "wind_dir_mean_deg")
+    for lat, lon, day, *values in rows:
+        out.setdefault((round(lat, 4), round(lon, 4)), {})[day] = dict(zip(names, values))
+    return out
+
+
+def hexagon_neighborhood(cur: duckdb.DuckDBPyConnection, keys: list[int], rings: int) -> list[tuple[float, float]]:
+    """(lat, lon) centers of the hexagons within `rings` of any of `keys` (them included)."""
+    return cur.execute(
+        "select h3_cell_to_latlng(c)[1], h3_cell_to_latlng(c)[2] "
+        "from (select distinct unnest(h3_grid_disk(k, ?)) as c from unnest(?::ubigint[]) t(k))",
+        [rings, keys],
+    ).fetchall()
+
+
+def hexagon_centers(cur: duckdb.DuckDBPyConnection, keys: list[int]) -> list[tuple[float, float]]:
+    """(lat, lon) of many hexagons' centers, in the order of `keys` (one query)."""
+    return cur.execute(
+        "select h3_cell_to_latlng(k)[1], h3_cell_to_latlng(k)[2] "
+        "from unnest(?::ubigint[]) with ordinality t(k, n) order by n",
+        [keys],
+    ).fetchall()
+
+
+def hexagon_center(cur: duckdb.DuckDBPyConnection, key: int) -> tuple[float, float]:
+    """(lat, lon) of a hexagon's center: computed by H3, the hexagon needn't have detections."""
+    lat, lon = cur.execute("select h3_cell_to_latlng(?)[1], h3_cell_to_latlng(?)[2]", [key, key]).fetchone()
+    return lat, lon
+
+
+# ------------------------------------------------------------- weather maps ---
+# One day of a weather variable over an area, for the map's weather layers.
+
+
+@dataclass(frozen=True)
+class WeatherLayer:
+    table: str
+    value: str  # column drawn (color)
+    direction: str | None  # column with a direction in degrees (wind arrows), else None
+    cell: tuple[float, float]  # native cell size (lat, lon) in degrees
+    min_value: float | None  # cells below it are left out (dry cells for rain), else None
+
+
+# All from NASA POWER daily, on the MERRA-2 grid (0.5° x 0.625°).
+WEATHER_LAYERS = {
+    # Daily maximum: the hottest hour is the one that matters for fire.
+    "temperature": WeatherLayer(WEATHER, "t2m_max_c", None, (0.5, 0.625), None),
+    # Daily mean wind: speed and the direction it comes from.
+    "wind": WeatherLayer(WEATHER, "wind_speed_mean_ms", "wind_dir_mean_deg", (0.5, 0.625), None),
+    # Daily total; dry cells (< 0.1 mm) are left out.
+    "precipitation": WeatherLayer(WEATHER, "precipitation_mm", None, (0.5, 0.625), 0.1),
+}
+
+# At most about this many cells per response: zoomed far out over a big area, cells are
+# averaged into coarser ones.
+MAX_MAP_CELLS = 20_000
+MAP_STEPS = (0.2, 0.25, 0.5, 1.0, 2.0)
+
+
+def weather_extent(cur: duckdb.DuckDBPyConnection, layer: WeatherLayer, day: date) -> BBox | None:
+    """Bounding box of the cells a day has (the loaded area), or None if the day has no data."""
+    row = cur.execute(
+        f"select min(cell_lon)::double, min(cell_lat)::double, max(cell_lon)::double, max(cell_lat)::double "
+        f"from {layer.table} where obs_date = ?",
+        [day],
+    ).fetchone()
+    return BBox(*row) if row[0] is not None else None
+
+
+def weather_map_cell(layer: WeatherLayer, area: BBox) -> tuple[float, float]:
+    """Cell size (lat, lon degrees) to draw an area with: the native grid if it fits in
+    MAX_MAP_CELLS, else the smallest square step, coarser than both native sides, that does."""
+    def cells(dlat: float, dlon: float) -> float:  # cells per side, both ends included
+        # Rounded: (-34.55 - -34.75) / 0.2 is 1.0000000000000142 in floating point.
+        return (round((area.max_lat - area.min_lat) / dlat, 6) + 1) * (round((area.max_lon - area.min_lon) / dlon, 6) + 1)
+
+    if cells(*layer.cell) <= MAX_MAP_CELLS:
+        return layer.cell
+    for step in MAP_STEPS:
+        if step > max(layer.cell) and cells(step, step) <= MAX_MAP_CELLS:
+            return step, step
+    return MAP_STEPS[-1], MAP_STEPS[-1]
+
+
+def weather_map(
+    cur: duckdb.DuckDBPyConnection, layer: WeatherLayer, day: date, area: BBox, cell: tuple[float, float]
+) -> list[tuple]:
+    """(lon, lat, value[, direction]) per cell center for one day inside `area`.
+
+    On the native grid, the cells as stored; on a coarser (square) cell, the mean of the
+    native cells that fall in it, and for wind the mean of the directions as unit vectors.
+    Cells under layer.min_value are left out.
+    """
+    where = "obs_date = ? and cell_lon between ? and ? and cell_lat between ? and ?"
+    params = [day, area.min_lon, area.max_lon, area.min_lat, area.max_lat]
+    keep = f"having avg({layer.value}) >= {layer.min_value}" if layer.min_value is not None else ""
+    step = cell[0]
+    if cell == layer.cell:
+        direction = f", {layer.direction}::double" if layer.direction else ""
+        filt = f" and {layer.value} >= {layer.min_value}" if layer.min_value is not None else ""
+        sql = f"select cell_lon::double, cell_lat::double, {layer.value}::double{direction} from {layer.table} where {where}{filt}"
+    else:
+        lat = f"floor(cell_lat / {step}) * {step} + {step / 2}"
+        lon = f"floor(cell_lon / {step}) * {step} + {step / 2}"
+        direction = ""
+        if layer.direction:
+            # Mean of the unit vectors the wind comes from, back to degrees.
+            rad = f"radians({layer.direction})"
+            direction = f", (degrees(atan2(avg(sin({rad})), avg(cos({rad})))) + 360) % 360"
+        sql = f"select ({lon})::double, ({lat})::double, avg({layer.value})::double{direction} from {layer.table} where {where} group by 1, 2 {keep}"
+    return cur.execute(sql, params).fetchall()
+
+
+def weather_layer_coverage(cur: duckdb.DuckDBPyConnection, layer: WeatherLayer) -> tuple[date, date] | None:
+    """(first, last) day the layer's table has anywhere."""
+    first, last = cur.execute(f"select min(obs_date), max(obs_date) from {layer.table}").fetchone()
+    return (first, last) if first else None

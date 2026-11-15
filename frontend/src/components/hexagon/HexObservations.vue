@@ -2,10 +2,13 @@
 // Observaciones: every detection of the selected hexagons, like FIRMS' table.
 // Respects the chosen dataset and dates (or the time slider's day). One request for
 // the whole selection (a drawn area can hold thousands of hexagons).
+// The values are shown as FIRMS gives them (ISO dates, dot decimals): a technical
+// table people copy from; the labels around it are translated.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSelectionDetections } from '../../api'
-import { STATIC_COLOR } from '../../mapShared'
+import { date, errorMessage } from '../../format'
 import { useFiltersStore } from '../../stores/filters'
+import { useLoadingBar } from '../../stores/loading'
 import { num } from './charts'
 
 const LIMIT = 5000
@@ -15,8 +18,9 @@ const store = useFiltersStore()
 
 const rows = ref([])
 const truncated = ref(false)
-const error = ref(null)
+const error = ref(null) // the API error (with .status), shown in the user's language
 const loading = ref(false)
+useLoadingBar('panel', loading)
 const satellite = ref('all')
 const localTime = ref(false)
 const filter = ref('')
@@ -44,7 +48,7 @@ async function load() {
     truncated.value = result.truncated
   } catch (e) {
     if (e.name === 'AbortError') return
-    error.value = e.message
+    error.value = e
     rows.value = []
   }
   loading.value = false
@@ -67,21 +71,28 @@ function timeOf(r) {
   return t.toISOString().slice(0, 16).replace('T', ' ')
 }
 
+const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
+
+// main: shown by default. The rest (position, brightness, pixel size, version) behind
+// "All columns": 13 columns never fit the panel, 6 do without scrolling sideways.
+// Column labels: obs.cols.<key> in the locales ('time' depends on UTC / solar).
 const COLUMNS = [
-  { key: 'time', label: 'Fecha y hora', value: (r) => r.acq_datetime_utc },
-  { key: 'satellite', label: 'Satélite', value: (r) => r.satellite ?? '' },
-  { key: 'product', label: 'Prod.', value: (r) => r.product },
-  { key: 'latitude', label: 'Lat', value: (r) => r.latitude },
-  { key: 'longitude', label: 'Lon', value: (r) => r.longitude },
-  { key: 'frp', label: 'FRP (MW)', value: (r) => r.frp ?? -1 },
-  { key: 'confidence', label: 'Conf.', value: (r) => r.confidence_raw ?? '' },
-  { key: 'daynight', label: 'D/N', value: (r) => r.daynight ?? '' },
-  { key: 'brightness', label: 'Brillo (K)', value: (r) => r.brightness ?? -1 },
-  { key: 'brightness_aux', label: 'Brillo aux (K)', value: (r) => r.brightness_aux ?? -1 },
-  { key: 'scan', label: 'Scan', value: (r) => r.scan ?? -1 },
-  { key: 'track', label: 'Track', value: (r) => r.track ?? -1 },
-  { key: 'version', label: 'Versión', value: (r) => r.version ?? '' },
+  { key: 'time', main: true, value: (r) => r.acq_datetime_utc, cell: (r) => timeOf(r) },
+  { key: 'satellite', main: true, value: (r) => r.satellite ?? '', cell: (r) => r.satellite ?? '–' },
+  { key: 'product', main: true, value: (r) => r.product, cell: (r) => r.product.toUpperCase() + (r.is_preferred ? '' : '*') },
+  { key: 'frp', main: true, value: (r) => r.frp ?? -1, cell: (r) => fixed(r.frp, 1) },
+  { key: 'confidence', main: true, value: (r) => r.confidence_raw ?? '', cell: (r) => r.confidence_raw ?? '–' },
+  { key: 'daynight', main: true, value: (r) => r.daynight ?? '', cell: (r) => r.daynight ?? '–' },
+  { key: 'latitude', value: (r) => r.latitude, cell: (r) => fixed(r.latitude, 4) },
+  { key: 'longitude', value: (r) => r.longitude, cell: (r) => fixed(r.longitude, 4) },
+  { key: 'brightness', value: (r) => r.brightness ?? -1, cell: (r) => fixed(r.brightness, 1) },
+  { key: 'brightness_aux', value: (r) => r.brightness_aux ?? -1, cell: (r) => fixed(r.brightness_aux, 1) },
+  { key: 'scan', value: (r) => r.scan ?? -1, cell: (r) => fixed(r.scan, 2) },
+  { key: 'track', value: (r) => r.track ?? -1, cell: (r) => fixed(r.track, 2) },
+  { key: 'version', value: (r) => r.version ?? '', cell: (r) => r.version ?? '–' },
 ]
+const allColumns = ref(false)
+const columns = computed(() => (allColumns.value ? COLUMNS : COLUMNS.filter((c) => c.main)))
 
 const visible = computed(() => {
   const q = filter.value.trim().toLowerCase()
@@ -98,79 +109,76 @@ function sortBy(key) {
   sort.value = sort.value.key === key ? { key, desc: !sort.value.desc } : { key, desc: key === 'time' || key === 'frp' }
 }
 
-const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
 </script>
 
 <template>
   <section class="obs">
-    <p v-if="!supported" class="muted">Este dataset no tiene detalle por hexágono: elegí MODIS o VIIRS.</p>
+    <p v-if="!supported" class="muted">{{ $t('obs.notSupported') }}</p>
     <template v-else>
-      <div class="subtabs" role="tablist">
-        <button :class="{ on: satellite === 'all' }" role="tab" @click="satellite = 'all'">
-          Todos <span>{{ num(rows.length) }}</span>
+      <!-- Filters (not tabs): each button shows only that satellite's rows. -->
+      <div class="subtabs" role="group" :aria-label="$t('obs.satellites')">
+        <button :aria-pressed="satellite === 'all'" :class="{ on: satellite === 'all' }" @click="satellite = 'all'">
+          {{ $t('obs.all') }} <span>{{ num(rows.length) }}</span>
         </button>
-        <button v-for="[s, n] in satellites" :key="s" :class="{ on: satellite === s }" role="tab" @click="satellite = s">
+        <button
+          v-for="[s, n] in satellites" :key="s" :aria-pressed="satellite === s" :class="{ on: satellite === s }"
+          @click="satellite = s"
+        >
           {{ s }} <span>{{ num(n) }}</span>
         </button>
       </div>
 
       <div class="tools">
-        <input v-model="filter" type="search" placeholder="Filtrar…" aria-label="Filtrar observaciones" />
-        <div class="toggle" role="group" aria-label="Hora">
-          <button :class="{ on: !localTime }" @click="localTime = false">UTC</button>
-          <button :class="{ on: localTime }" @click="localTime = true">Hora solar local</button>
+        <input v-model="filter" type="search" :placeholder="$t('obs.filter')" :aria-label="$t('obs.filterLabel')" />
+        <div class="toggle" role="group" :aria-label="$t('obs.time')">
+          <button :aria-pressed="!localTime" :class="{ on: !localTime }" @click="localTime = false">{{ $t('obs.utc') }}</button>
+          <button :aria-pressed="localTime" :class="{ on: localTime }" @click="localTime = true">{{ $t('obs.local') }}</button>
         </div>
+        <button class="columns" :aria-pressed="allColumns" @click="allColumns = !allColumns">
+          {{ $t('obs.allColumns') }}
+        </button>
       </div>
 
-      <p class="muted">
-        {{ store.queryParams.start }} → {{ store.queryParams.end }} · {{ store.currentDataset?.id }}
-        <span v-if="loading"> · cargando…</span>
+      <p class="muted" aria-live="polite">
+        {{ $t('obs.range', { start: date(store.queryParams.start), end: date(store.queryParams.end), dataset: store.currentDataset?.id ?? '' }) }}
+        <span v-if="loading">{{ $t('obs.loading') }}</span>
       </p>
-      <p v-if="error" class="error">{{ error }}</p>
-      <p v-if="truncated" class="muted">
-        Se muestran las {{ num(LIMIT) }} más recientes: acortá las fechas para ver todas.
-      </p>
+      <p v-if="error" class="error" role="alert">{{ errorMessage(error) }}</p>
+      <p v-if="truncated" class="muted">{{ $t('obs.truncated', { n: num(LIMIT) }) }}</p>
 
-      <div class="table-wrap">
+      <div class="table-wrap" :class="{ wide: allColumns }">
         <table>
+          <caption class="sr-only">{{ $t('obs.caption') }}</caption>
           <thead>
             <tr>
-              <th v-if="hexes.length > 1">Hexágono</th>
-              <th v-for="c in COLUMNS" :key="c.key" :aria-sort="sort.key === c.key ? (sort.desc ? 'descending' : 'ascending') : 'none'">
+              <th v-if="hexes.length > 1" scope="col">{{ $t('obs.cols.hexagon') }}</th>
+              <th
+                v-for="c in columns" :key="c.key" scope="col"
+                :aria-sort="sort.key === c.key ? (sort.desc ? 'descending' : 'ascending') : 'none'"
+              >
                 <button @click="sortBy(c.key)">
-                  {{ c.key === 'time' ? (localTime ? 'Fecha y hora (solar)' : 'Fecha y hora (UTC)') : c.label }}
-                  <span v-if="sort.key === c.key">{{ sort.desc ? '▼' : '▲' }}</span>
+                  {{ c.key === 'time' ? (localTime ? $t('obs.cols.timeLocal') : $t('obs.cols.timeUtc')) : $t(`obs.cols.${c.key}`) }}
+                  <span v-if="sort.key === c.key" aria-hidden="true">{{ sort.desc ? '▼' : '▲' }}</span>
                 </button>
               </th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(r, i) in visible" :key="i" :class="{ static: r.is_static_source }"
-                :title="r.is_static_source ? 'Fuente fija de calor: no es un incendio' : ''">
+            <tr
+              v-for="(r, i) in visible" :key="i" :class="{ static: r.is_static_source }"
+              :title="r.is_static_source ? $t('obs.staticRow') : undefined"
+            >
               <td v-if="hexes.length > 1"><code>{{ r.h3 }}</code></td>
-              <td class="nowrap">{{ timeOf(r) }}</td>
-              <td>{{ r.satellite ?? '–' }}</td>
-              <td>{{ r.product.toUpperCase() }}{{ r.is_preferred ? '' : '*' }}</td>
-              <td>{{ fixed(r.latitude, 4) }}</td>
-              <td>{{ fixed(r.longitude, 4) }}</td>
-              <td>{{ fixed(r.frp, 1) }}</td>
-              <td>{{ r.confidence_raw ?? '–' }}</td>
-              <td>{{ r.daynight ?? '–' }}</td>
-              <td>{{ fixed(r.brightness, 1) }}</td>
-              <td>{{ fixed(r.brightness_aux, 1) }}</td>
-              <td>{{ fixed(r.scan, 2) }}</td>
-              <td>{{ fixed(r.track, 2) }}</td>
-              <td>{{ r.version ?? '–' }}</td>
+              <td v-for="c in columns" :key="c.key">{{ c.cell(r) }}</td>
             </tr>
             <tr v-if="!visible.length && !loading">
-              <td :colspan="COLUMNS.length + 1" class="empty">Sin observaciones.</td>
+              <td :colspan="columns.length + 1" class="empty">{{ $t('obs.empty') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
       <p class="muted legend">
-        <span class="swatch" :style="{ background: STATIC_COLOR }"></span> gris: fuente fija (no es incendio) ·
-        * NRT reemplazado por SP (no entra en la serie continua)
+        <span class="swatch" aria-hidden="true"></span> {{ $t('obs.legendStatic') }} · {{ $t('obs.legendReplaced') }}
       </p>
     </template>
   </section>
@@ -181,23 +189,42 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
 .subtabs { display: flex; flex-wrap: wrap; gap: 4px; }
 .subtabs button, .toggle button {
   border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px;
-  padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer;
+  padding: 4px 8px; font: inherit; font-size: 0.75rem; cursor: pointer;
 }
 .subtabs button span { color: var(--muted); }
-.subtabs button.on, .toggle button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.subtabs button.on span { color: #dbeafe; }
+.subtabs button.on, .toggle button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.subtabs button.on span { color: var(--on-accent); }
 .tools { display: flex; gap: 8px; align-items: center; }
-.tools input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 12px; }
+.tools input {
+  flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+  font: inherit; font-size: 0.75rem; color: var(--text); background: var(--bg);
+}
 .toggle { display: flex; gap: 2px; }
-.table-wrap { overflow: auto; max-height: calc(100vh - 330px); border: 1px solid var(--border); border-radius: 6px; }
-table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; width: max-content; min-width: 100%; }
-th { position: sticky; top: 0; background: #f9fafb; border-bottom: 1px solid var(--border); text-align: left; z-index: 1; }
-th button { all: unset; cursor: pointer; display: block; padding: 6px 8px; font-weight: 600; white-space: nowrap; }
-td { padding: 4px 8px; border-bottom: 1px solid #f3f4f6; white-space: nowrap; }
-tr.static td { color: v-bind(STATIC_COLOR); background: #f9fafb; font-style: italic; }
+.table-wrap { overflow-y: auto; overflow-x: hidden; max-height: calc(100vh - 330px); border: 1px solid var(--border); border-radius: 6px; }
+/* Default columns fit the panel; "All columns" scrolls sideways on purpose, with the
+   date column pinned so a row stays readable. */
+.table-wrap.wide { overflow-x: auto; }
+.table-wrap.wide th:first-child, .table-wrap.wide td:first-child {
+  position: sticky; left: 0; background: var(--panel); box-shadow: 1px 0 0 var(--border);
+}
+.table-wrap.wide thead th:first-child { z-index: 2; }
+table { border-collapse: collapse; font-size: 0.75rem; font-variant-numeric: tabular-nums; width: 100%; }
+.table-wrap.wide table { width: max-content; min-width: 100%; }
+.columns {
+  border: 1px solid var(--border); background: var(--panel); border-radius: 6px; color: var(--text);
+  padding: 4px 8px; font: inherit; font-size: 0.75rem; cursor: pointer; white-space: nowrap;
+}
+.columns[aria-pressed="true"] { background: var(--bg); }
+th { position: sticky; top: 0; background: var(--surface-2); border-bottom: 1px solid var(--border); text-align: left; z-index: 1; }
+th button {
+  display: block; width: 100%; padding: 6px 8px; border: none; background: none; text-align: left;
+  font: inherit; font-weight: 600; color: var(--text); white-space: nowrap; cursor: pointer;
+}
+td { padding: 4px 8px; border-bottom: 1px solid var(--surface-3); white-space: nowrap; }
+tr.static td { color: var(--static); background: var(--surface-2); font-style: italic; }
 .empty { text-align: center; color: var(--muted); padding: 16px; }
-.muted { color: var(--muted); font-size: 12px; margin: 0; }
-.error { color: var(--danger); font-size: 12px; margin: 0; }
+.muted { color: var(--muted); font-size: 0.75rem; margin: 0; }
+.error { color: var(--danger); font-size: 0.75rem; margin: 0; }
 .legend { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; background: var(--static); }
 </style>

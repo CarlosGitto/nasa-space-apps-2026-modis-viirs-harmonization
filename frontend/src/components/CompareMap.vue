@@ -10,33 +10,41 @@
 // sensor: MODIS = yellow ring (~1 km pixel), VIIRS = cyan dot (375 m pixel); static
 // heat sources (refineries, gas flares...) in gray on both.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getDetections, getHexagons } from '../api'
+import { date, errorMessage } from '../format'
 import { GIBS_LAYERS, gibsDate, gibsUrl } from '../gibs'
 import { cellsOutline } from '../hexGrid'
 import {
-  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE,
-  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle,
+  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE, hexOpacity, withDensity,
+  fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
+import { trackMapSources, useLoadingBar } from '../stores/loading'
+import { usePrefsStore } from '../stores/prefs'
 
+// Imagery per side: { id, sat, kind } -> label "<sat> (fire)" / "<sat> true color" in the user's language.
 const LEFT_IMAGERY = [
-  { id: 'MODIS_Aqua_CorrectedReflectance_Bands721', label: 'MODIS Aqua 7-2-1 (fire)' },
-  { id: 'MODIS_Aqua_CorrectedReflectance_TrueColor', label: 'MODIS Aqua true color' },
-  { id: 'MODIS_Terra_CorrectedReflectance_Bands721', label: 'MODIS Terra 7-2-1 (fire)' },
-  { id: 'MODIS_Terra_CorrectedReflectance_TrueColor', label: 'MODIS Terra true color' },
-  { id: 'none', label: 'Map only' },
+  { id: 'MODIS_Aqua_CorrectedReflectance_Bands721', sat: 'MODIS Aqua 7-2-1', kind: 'fire' },
+  { id: 'MODIS_Aqua_CorrectedReflectance_TrueColor', sat: 'MODIS Aqua', kind: 'trueColor' },
+  { id: 'MODIS_Terra_CorrectedReflectance_Bands721', sat: 'MODIS Terra 7-2-1', kind: 'fire' },
+  { id: 'MODIS_Terra_CorrectedReflectance_TrueColor', sat: 'MODIS Terra', kind: 'trueColor' },
+  { id: 'none', kind: 'mapOnly' },
 ]
 const RIGHT_IMAGERY = [
-  { id: 'VIIRS_NOAA20_CorrectedReflectance_BandsM11-I2-I1', label: 'VIIRS NOAA-20 M11-I2-I1 (fire)' },
-  { id: 'VIIRS_NOAA20_CorrectedReflectance_TrueColor', label: 'VIIRS NOAA-20 true color' },
-  { id: 'VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1', label: 'VIIRS S-NPP M11-I2-I1 (fire)' },
-  { id: 'VIIRS_SNPP_CorrectedReflectance_TrueColor', label: 'VIIRS S-NPP true color' },
-  { id: 'none', label: 'Map only' },
+  { id: 'VIIRS_NOAA20_CorrectedReflectance_BandsM11-I2-I1', sat: 'VIIRS NOAA-20 M11-I2-I1', kind: 'fire' },
+  { id: 'VIIRS_NOAA20_CorrectedReflectance_TrueColor', sat: 'VIIRS NOAA-20', kind: 'trueColor' },
+  { id: 'VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1', sat: 'VIIRS S-NPP M11-I2-I1', kind: 'fire' },
+  { id: 'VIIRS_SNPP_CorrectedReflectance_TrueColor', sat: 'VIIRS S-NPP', kind: 'trueColor' },
+  { id: 'none', kind: 'mapOnly' },
 ]
 const MODIS_COLOR = '#ffcc00'
 const VIIRS_COLOR = '#22d3ee'
 
 const store = useFiltersStore()
+const prefs = usePrefsStore()
+const { t } = useI18n()
+const imageryLabel = (o) => t(`curtain.${o.kind}`, { sat: o.sat })
 const leftEl = ref(null)
 const rightEl = ref(null)
 const split = ref(50) // curtain position, % of the width
@@ -44,6 +52,8 @@ const imgLeft = ref(LEFT_IMAGERY[0].id)
 const imgRight = ref(RIGHT_IMAGERY[0].id)
 const detMode = ref('side') // 'side' | 'both' | 'none'
 const loading = ref(false)
+useLoadingBar('curtain', loading) // the top loading bar, MODIS yellow -> VIIRS cyan
+const untrack = []
 const error = ref(null)
 const zoomedIn = ref(false)
 const result = ref(null) // last fetch: { kind: 'hex' | 'points', modis, viirs }
@@ -66,10 +76,14 @@ function createMap(el, side) {
     zoom: store.camera.zoom,
     renderWorldCopies: false,
     attributionControl: side === 'right' ? { compact: true } : false,
+    locale: { ...mapLocale(), 'Map.Title': side === 'left' ? t('curtain.mapLeft') : t('curtain.mapRight') },
   })
   if (side === 'right') map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
   map.on('load', () => {
+    untrack.push(trackMapSources(map, { img: 'imagery', openmaptiles: 'basemap' }))
     addLayers(map)
+    localizeBasemap(map, prefs.locale)
+    applyContrast(map)
     if (++loaded === 2) onBothLoaded()
   })
   return map
@@ -83,7 +97,7 @@ function addLayers(map) {
     paint: { 'raster-brightness-max': 0.8 } }, labels)
   for (const id of ['hex', 'modis', 'viirs', 'zone']) map.addSource(id, { type: 'geojson', data: EMPTY })
   map.addLayer({ id: 'hex-fill', type: 'fill', source: 'hex',
-    paint: { 'fill-color': HEX_FILL_COLOR, 'fill-opacity': 0.7 } }, labels)
+    paint: { 'fill-color': HEX_FILL_COLOR, 'fill-opacity': hexOpacity(0.8) } }, labels)
   map.addLayer({ id: 'hex-line', type: 'line', source: 'hex',
     paint: { 'line-color': '#7c2d12', 'line-width': 0.3, 'line-opacity': 0.4 } }, labels)
   // Like the prototype: VIIRS = solid cyan dot, MODIS = yellow ring with a dark halo (never color alone).
@@ -150,7 +164,8 @@ async function refresh() {
   loading.value = true
   store.setBusy('curtain', true)
   try {
-    const [modis, viirs] = await Promise.all([fetchSide(left), fetchSide(right)])
+    const [modis, viirs] = (await Promise.all([fetchSide(left), fetchSide(right)]))
+      .map((r) => (zoomedIn.value ? r : withDensity(r, store.queryParams.start, store.queryParams.end)))
     result.value = { kind: zoomedIn.value ? 'points' : 'hex', modis, viirs }
     error.value = null
     render()
@@ -159,7 +174,7 @@ async function refresh() {
     if (!signal.aborted) store.setBusy('curtain', false)
   } catch (e) {
     if (e.name === 'AbortError') return // a newer refresh owns the busy flag
-    error.value = e.message
+    error.value = e
     store.setBusy('curtain', false)
   } finally {
     if (!signal.aborted) loading.value = false
@@ -196,22 +211,19 @@ const total = (r) => {
 const counts = computed(() => ({ modis: total(result.value?.modis), viirs: total(result.value?.viirs) }))
 const summary = computed(() => {
   const { modis, viirs } = counts.value
-  const parts = [
-    `MODIS ${modis === null ? 'no data' : fmt(modis)}`,
-    `VIIRS ${viirs === null ? 'no data' : fmt(viirs)}`,
-  ]
-  if (modis && viirs) parts.push(`VIIRS/MODIS ×${(viirs / modis).toFixed(1)}`)
-  return `${parts.join(' · ')} detections in view`
+  const value = (n) => (n === null ? t('common.noData') : fmt(n))
+  const ratio = modis && viirs ? t('curtain.ratio', { r: fmt(viirs / modis) }) : ''
+  return t('curtain.summary', { modis: value(modis), viirs: value(viirs) }) + ratio
 })
 const truncated = computed(() => result.value?.kind === 'points' && (result.value.modis?.truncated || result.value.viirs?.truncated))
 
 // ------------------------------------------------------------- imagery ---
 
 const imageryState = (id) => {
-  if (id === 'none') return { tiles: null, note: 'map only' }
+  if (id === 'none') return { tiles: null, note: t('curtain.mapOnlyNote') }
   const layer = GIBS_LAYERS.find((l) => l.id === id)
-  const date = layer && gibsDate(layer, store.imageryDate)
-  return date ? { tiles: gibsUrl(id, date), note: date } : { tiles: null, note: 'no imagery for this date' }
+  const day = layer && gibsDate(layer, store.imageryDate)
+  return day ? { tiles: gibsUrl(id, day), note: date(day) } : { tiles: null, note: t('curtain.noImagery') }
 }
 const leftNote = computed(() => imageryState(imgLeft.value).note)
 const rightNote = computed(() => imageryState(imgRight.value).note)
@@ -234,6 +246,13 @@ function syncZone() {
   maps.right.getSource('zone').setData(data)
 }
 
+// High contrast (accessibility menu): stronger hexagon borders and fill.
+function applyContrast(map) {
+  map.setPaintProperty('hex-line', 'line-opacity', prefs.contrast ? 0.9 : 0.4)
+  map.setPaintProperty('hex-line', 'line-width', prefs.contrast ? 0.8 : 0.3)
+  map.setPaintProperty('hex-fill', 'fill-opacity', hexOpacity(prefs.contrast ? 0.95 : 0.8)) // by density, like the main map
+}
+
 // ------------------------------------------------------------ lifecycle ---
 
 onMounted(() => {
@@ -247,57 +266,60 @@ onBeforeUnmount(() => {
   store.setBusy('curtain', false)
   maps.left?.remove()
   maps.right?.remove()
+  for (const stop of untrack) stop()
 })
 
 watch(() => [store.queryParams, store.compareSides.left.id, store.compareSides.right.id], refresh)
 watch(detMode, render)
 watch(() => [imgLeft.value, imgRight.value, store.imageryDate], syncImagery)
 watch(() => [store.zone, store.zoneCells], syncZone)
+watch(() => prefs.locale, (locale) => { if (bothReady()) for (const m of [maps.left, maps.right]) localizeBasemap(m, locale) })
+watch(() => prefs.contrast, () => { if (bothReady()) for (const m of [maps.left, maps.right]) applyContrast(m) })
 </script>
 
 <template>
   <div class="compare">
     <div class="bar">
-      <b>MODIS | VIIRS · {{ product }}</b>
-      <label>Left
+      <b>{{ $t('curtain.title', { product }) }}</b>
+      <label>{{ $t('curtain.left') }}
         <select v-model="imgLeft">
-          <option v-for="o in LEFT_IMAGERY" :key="o.id" :value="o.id">{{ o.label }}</option>
+          <option v-for="o in LEFT_IMAGERY" :key="o.id" :value="o.id">{{ imageryLabel(o) }}</option>
         </select>
       </label>
-      <label>Right
+      <label>{{ $t('curtain.right') }}
         <select v-model="imgRight">
-          <option v-for="o in RIGHT_IMAGERY" :key="o.id" :value="o.id">{{ o.label }}</option>
+          <option v-for="o in RIGHT_IMAGERY" :key="o.id" :value="o.id">{{ imageryLabel(o) }}</option>
         </select>
       </label>
-      <label>Detections
+      <label>{{ $t('curtain.detections') }}
         <select v-model="detMode">
-          <option value="side">Each sensor on its side</option>
-          <option value="both">Both sensors on both sides</option>
-          <option value="none">Hide</option>
+          <option value="side">{{ $t('curtain.modeSide') }}</option>
+          <option value="both">{{ $t('curtain.modeBoth') }}</option>
+          <option value="none">{{ $t('curtain.modeNone') }}</option>
         </select>
       </label>
-      <span class="hint">
-        Drag the handle over a fire front. If the front “jumps” between sides there is an offset;
-        if it looks sharper on VIIRS, that is resolution.
-      </span>
+      <span class="hint">{{ $t('curtain.hint') }}</span>
     </div>
 
     <div class="stage">
       <div ref="leftEl" class="cmap"></div>
       <div ref="rightEl" class="cmap" :style="{ clipPath: `inset(0 0 0 ${split}%)` }"></div>
       <div class="line" :style="{ left: `${split}%` }"></div>
-      <input v-model.number="split" type="range" class="handle" min="0" max="100" step="0.2" aria-label="Curtain position">
+      <input
+        v-model.number="split" type="range" class="handle" min="0" max="100" step="0.2"
+        :aria-label="$t('curtain.handle')" :aria-valuetext="`${Math.round(split)} %`"
+      >
 
-      <div class="lab l">◀ MODIS <small>{{ leftNote }}</small></div>
-      <div class="lab r">VIIRS ▶ <small>{{ rightNote }}</small></div>
+      <div class="lab l"><span aria-hidden="true">◀</span> MODIS <small>{{ leftNote }}</small></div>
+      <div class="lab r">VIIRS <span aria-hidden="true">▶</span> <small>{{ rightNote }}</small></div>
 
-      <div class="status">
-        <span v-if="loading" class="spinner" aria-label="Loading"></span>
-        <span v-if="error" class="error">{{ error }}</span>
+      <div class="status" aria-live="polite">
+        <span v-if="loading" class="spinner" role="img" :aria-label="$t('common.loading')"></span>
+        <span v-if="error" class="error">{{ errorMessage(error) }}</span>
         <template v-else-if="result">
           <span>{{ summary }}</span>
-          <span v-if="truncated" class="muted">· showing up to {{ fmt(POINTS_LIMIT) }} per sensor: zoom in to see all</span>
-          <span v-if="detMode === 'both' && !zoomedIn" class="muted">· zoom in to see both sensors on each side</span>
+          <span v-if="truncated" class="muted">{{ $t('curtain.truncated', { n: fmt(POINTS_LIMIT) }) }}</span>
+          <span v-if="detMode === 'both' && !zoomedIn" class="muted">{{ $t('curtain.bothHint') }}</span>
         </template>
       </div>
     </div>
@@ -308,19 +330,19 @@ watch(() => [store.zone, store.zoneCells], syncZone)
 .compare { display: flex; flex-direction: column; height: 100%; }
 .bar {
   display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 14px;
-  background: var(--panel); border-bottom: 1px solid var(--border); font-size: 13px;
+  background: var(--panel); border-bottom: 1px solid var(--border); font-size: 0.8125rem;
 }
-.bar label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+.bar label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 0.75rem; }
 .bar select {
-  font: inherit; font-size: 12px; color: var(--text); background: var(--bg);
+  font: inherit; font-size: 0.75rem; color: var(--text); background: var(--bg);
   border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px;
 }
-.hint { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.hint { flex-basis: 100%; font-size: 0.75rem; color: var(--muted); }
 .stage { position: relative; flex: 1; min-height: 0; }
 .cmap { position: absolute; inset: 0; }
 .line {
-  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff;
-  box-shadow: 0 0 0 1px #000; z-index: 2; pointer-events: none;
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ffffff;
+  box-shadow: 0 0 0 1px #000000; z-index: 2; pointer-events: none;
 }
 /* Full-width invisible range: only its thumb takes the mouse, so the maps keep their clicks. */
 .handle {
@@ -337,7 +359,7 @@ watch(() => [store.zone, store.zoneCells], syncZone)
 }
 .lab {
   position: absolute; top: 12px; z-index: 2; padding: 4px 10px; border-radius: 7px;
-  font-weight: 700; font-size: 12.5px; pointer-events: none; box-shadow: var(--shadow);
+  font-weight: 700; font-size: 0.7812rem; pointer-events: none; box-shadow: var(--shadow);
 }
 .lab small { font-weight: 500; opacity: 0.8; margin-left: 4px; }
 .lab.l { left: 12px; background: #ffcc00; color: #1a1400; }
@@ -345,7 +367,7 @@ watch(() => [store.zone, store.zoneCells], syncZone)
 .status {
   position: absolute; bottom: 28px; left: 12px; z-index: 2; max-width: calc(100% - 24px);
   display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: var(--panel);
-  padding: 6px 10px; border-radius: 6px; font-size: 13px; box-shadow: var(--shadow);
+  padding: 6px 10px; border-radius: 6px; font-size: 0.8125rem; box-shadow: var(--shadow);
 }
 .status:empty { display: none; }
 .muted { color: var(--muted); }
