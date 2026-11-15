@@ -206,3 +206,88 @@ def test_covered_until_stops_at_the_first_long_gap():
     assert covered_until(days, d0, max_gap=3) == d0 + timedelta(days=9)
     assert covered_until(days, date(2025, 6, 1)) is None  # nothing near that start
     assert covered_until(set(), d0) is None
+
+
+def test_zone_boxes_cover_the_fires_and_merge_contiguous_tiles():
+    from include.weather.fires import zone_boxes
+
+    # Two fires in the same 10° row, contiguous tiles -> one box; one far away -> its own box.
+    boxes = zone_boxes([(-41.5, -71.8), (-41.5, -61.0), (45.0, 5.0)])
+    # -71.8 and -61.0 fall in contiguous tiles, and -61.0 is within the 1° margin of -60:
+    # three tiles of the same row, merged into one box.
+    assert (-80, -50, -50, -40) in boxes
+    assert (0.0, 40.0, 10.0, 50.0) in boxes
+    assert len(boxes) == 2
+    # A center within the margin of a tile edge pulls the neighbor tile in too.
+    assert zone_boxes([(-40.5, -70.5)]) == [(-80.0, -50.0, -60.0, -40.0), (-80.0, -40.0, -60.0, -30.0)]
+    assert zone_boxes([]) == []
+
+
+class FakeOpendap:
+    """Answers like GES DISC's OPeNDAP for a MERRA-2-sized grid (361 x 576, 2 hours):
+    the DMR, the coordinates, and subsets cut to the indices of a DAP4 constraint."""
+
+    def __init__(self):
+        self.lat = np.arange(-90, 90.01, 0.5)
+        self.lon = np.arange(-180, 180, 0.625)
+        self.requests = []  # (lat cells, lon cells) of every data request
+
+    def get(self, url, params=None, timeout=None):
+        import re
+
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        if url.endswith(".dmr"):
+            extra = "".join(f'<Float32 name="{v}"><Dim name="/time"/><Dim name="/lat"/><Dim name="/lon"/></Float32>'
+                            for v in ("T2MDEW", "V10M"))
+            response._content = MERRA2_DMR.replace('size="24"', 'size="2"').replace("</Dataset>", extra + "</Dataset>").encode()
+            return response
+        ce = params["dap4.ce"]
+        if ce == "/lat;/lon":
+            ds = xr.Dataset(coords={"lat": self.lat, "lon": self.lon})
+        else:
+            (t0, t1), (a0, a1), (o0, o1) = [tuple(map(int, m)) for m in re.findall(r"\[(\d+):1:(\d+)\]", ce.split(";")[0])]
+            lat, lon = self.lat[a0:a1 + 1], self.lon[o0:o1 + 1]
+            self.requests.append((lat.size, lon.size))
+            grid = lat[:, None] * 1000 + lon[None, :]  # value encodes the cell: easy to compare
+            ds = xr.Dataset(
+                {v: (("time", "lat", "lon"), np.repeat(grid[None], t1 - t0 + 1, 0)) for v in ("T2M", "T2MDEW", "U10M", "V10M")},
+                coords={"time": np.datetime64("2025-01-01T00:30") + np.arange(t1 - t0 + 1) * np.timedelta64(1, "h"),
+                        "lat": lat, "lon": lon},
+            )
+        response._content = bytes(ds.to_netcdf(engine="h5netcdf"))
+        return response
+
+
+def test_only_the_boxes_around_fires_are_downloaded_and_nothing_near_them_is_lost():
+    import duckdb
+
+    from include.weather.earthdata import OpendapReader
+    from include.weather.fires import FIRE_ZONE_RES, near_fire_filter, zone_boxes, zone_centers
+
+    con = duckdb.connect()
+    con.execute("INSTALL h3 FROM community; LOAD h3;")
+    fires = [(-41.5, -71.8), (-15.0, -50.0), (10.0, 20.0)]  # Patagonia, central Brazil, Sahel
+    zone = [c for (lat, lon) in fires for (c,) in con.execute(
+        f"select unnest(h3_grid_disk(h3_latlng_to_cell(?, ?, {FIRE_ZONE_RES}), 1))", [lat, lon]).fetchall()]
+    keep = near_fire_filter(zone)
+    granule = _granule(date(2025, 1, 1))
+
+    server = FakeOpendap()
+    boxes = OpendapReader(server, MERRA2_SLV.file_variables, Area(), boxes=zone_boxes(zone_centers(zone)))
+    from include.weather.source import _unique_cells
+
+    near = keep(_unique_cells(pa.concat_tables([to_arrow(ds, MERRA2_SLV, granule, "world") for ds in boxes.read(granule)])))
+    assert str(near.schema.field("time_utc").type).endswith("tz=UTC]")
+    downloaded = sum(a * b for a, b in server.requests)
+
+    server_all = FakeOpendap()
+    everything = OpendapReader(server_all, MERRA2_SLV.file_variables, Area())
+    reference = keep(pa.concat_tables([to_arrow(ds, MERRA2_SLV, granule, "world") for ds in everything.read(granule)]))
+
+    # One or two boxes per fire (a fire's ring can cross into the next 10° row), never the globe.
+    assert 3 <= len(server.requests) <= 6
+    assert downloaded < 0.05 * 361 * 576  # under 5 % of the global grid
+    key = lambda t: sorted(zip(t.column("time_utc").to_pylist(), t.column("lat").to_pylist(), t.column("lon").to_pylist(), t.column("t2m").to_pylist()))  # noqa: E731
+    assert near.num_rows > 0 and key(near) == key(reference)  # the same cells, the same values

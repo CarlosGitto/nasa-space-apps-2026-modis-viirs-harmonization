@@ -146,7 +146,7 @@ def weather_ingest():
         from include.firms.config import raw_pipeline
         from include.weather.config import WEATHER_RAW_DATASET, get_earthdata_session
         from include.weather.earthdata import search_granules
-        from include.weather.fires import WEATHER_KEEP, fire_zone, near_fire_filter
+        from include.weather.fires import WEATHER_KEEP, fire_zone, near_fire_filter, zone_boxes, zone_centers
         from include.weather.source import IMERG_FINAL, IMERG_LATE, PRODUCTS, weather_source
 
         get_current_context()["chunk_label"] = chunk["label"]
@@ -156,13 +156,17 @@ def weather_ingest():
         # Skipped tasks don't update the asset, so weather_dbt isn't triggered for nothing.
         from airflow.sdk.exceptions import AirflowSkipException
 
-        keep = None
+        keep = boxes = None
         if WEATHER_KEEP == "fires":
             zone = fire_zone(start, end)
-            print(f"Fire zone of {start}..{end}: {len(zone)} H3 cells")
             if not zone:
                 raise AirflowSkipException("No fire detections in these dates: no weather to keep")
+            # Download only the boxes around the fires; then keep the exact cells near them.
+            boxes = zone_boxes(zone_centers(zone))
             keep = near_fire_filter(zone)
+            area_deg2 = sum((e - w) * (n - s) for w, s, e, n in boxes)
+            print(f"Fire zone of {start}..{end}: {len(zone)} H3 cells, {len(boxes)} boxes to download "
+                  f"({100 * area_deg2 / 64800:.0f} % of the globe)")
 
         granules = search_granules(product.short_name, product.version, start, end)
         if product is IMERG_LATE:  # never Late for a day Final has
@@ -177,7 +181,8 @@ def weather_ingest():
         os.environ["NORMALIZE__PARQUET_NORMALIZER__ADD_DLT_LOAD_ID"] = "true"
         pipeline = raw_pipeline(f"weather_{product.table}", dataset=WEATHER_RAW_DATASET)
         load_info = pipeline.run(
-            weather_source(session=get_earthdata_session(), plan={product: granules}, area=params["area"], keep=keep)
+            weather_source(session=get_earthdata_session(), plan={product: granules}, area=params["area"],
+                           keep=keep, boxes=boxes)
         )
         print(load_info)
         print(pipeline.last_trace.last_normalize_info)

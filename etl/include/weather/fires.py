@@ -111,7 +111,9 @@ def near_fire_filter(zone: list[int]):
     import pyarrow as pa
 
     con = duckdb.connect()
-    con.execute("INSTALL h3 FROM community; LOAD h3;")
+    # UTC session: DuckDB returns timestamps with time zone in the session's zone (the
+    # machine's by default). Same instant either way, but bronze stays in UTC.
+    con.execute("SET TimeZone = 'UTC'; INSTALL h3 FROM community; LOAD h3;")
     con.register("zone", pa.table({"cell": pa.array(zone, type=pa.uint64())}))
 
     def keep(table):
@@ -125,3 +127,57 @@ def near_fire_filter(zone: list[int]):
             con.unregister("grid")
 
     return keep
+
+
+# ------------------------------------------------------------ what to download ---
+# OPeNDAP returns rectangles of the grid, so the fire zone is turned into a few boxes
+# and only those are requested: the download, not just what's stored, follows the fires.
+
+ZONE_TILE_DEG = 10  # boxes are built from tiles of this size
+ZONE_MARGIN_DEG = 1.0  # a zone cell's center can be ~0.7° from its edge: tiles that close count too
+
+
+def zone_centers(zone: list[int]) -> list[tuple[float, float]]:
+    """(lat, lon) of each res-FIRE_ZONE_RES cell of a fire zone."""
+    import duckdb
+    import pyarrow as pa
+
+    if not zone:
+        return []
+    con = duckdb.connect()
+    con.execute("INSTALL h3 FROM community; LOAD h3;")
+    con.register("zone", pa.table({"cell": pa.array(zone, type=pa.uint64())}))
+    return con.execute("select h3_cell_to_lat(cell), h3_cell_to_lng(cell) from zone").fetchall()
+
+
+def zone_boxes(centers: list[tuple[float, float]], tile: float = ZONE_TILE_DEG,
+               margin: float = ZONE_MARGIN_DEG) -> list[tuple[float, float, float, float]]:
+    """Boxes (west, south, east, north) covering a fire zone, to request from OPeNDAP.
+
+    Every tile a zone cell's center falls in, or within `margin` of, is needed; the
+    needed tiles of each row are merged into runs of contiguous tiles, one box each.
+    """
+    import math
+
+    rows = math.ceil(180 / tile)
+    cols = math.ceil(360 / tile)
+    needed: set[tuple[int, int]] = set()
+    for lat, lon in centers:
+        for dlat in (-margin, 0, margin):
+            for dlon in (-margin, 0, margin):
+                r = min(rows - 1, max(0, int((lat + dlat + 90) // tile)))
+                c = min(cols - 1, max(0, int((lon + dlon + 180) // tile)))
+                needed.add((r, c))
+    boxes = []
+    for r in sorted({r for r, _ in needed}):
+        row = sorted(c for rr, c in needed if rr == r)
+        start = prev = row[0]
+        for c in [*row[1:], None]:
+            if c is not None and c == prev + 1:
+                prev = c
+                continue
+            south = -90 + r * tile
+            boxes.append((-180 + start * tile, south, min(180, -180 + (prev + 1) * tile), min(90, south + tile)))
+            if c is not None:
+                start = prev = c
+    return boxes

@@ -215,15 +215,25 @@ def constraint(variables: list[str], layout: Layout, windows: dict[str, tuple[in
 
 
 class OpendapReader:
-    """Subsets the granules of one collection to an area and a list of variables."""
+    """Subsets the granules of one collection to an area and a list of variables.
 
-    def __init__(self, session: requests.Session, variables: list[str], area: Area, decode_times: bool = True):
+    `boxes` (west, south, east, north), when given, are the only parts requested
+    (e.g. the boxes around fires, see fires.zone_boxes), each clipped to the area:
+    one OPeNDAP request per box and granule, PARALLEL_REQUESTS at a time. Without
+    boxes, the whole area in one request.
+    """
+
+    PARALLEL_REQUESTS = 6
+
+    def __init__(self, session: requests.Session, variables: list[str], area: Area, decode_times: bool = True,
+                 boxes: list[tuple[float, float, float, float]] | None = None):
         self.session = session
         self.variables = variables
         self.area = area
         self.decode_times = decode_times  # False: leave the time axis as numbers (see source.Product.daily)
+        self.boxes = boxes
         self._layout: Layout | None = None
-        self._windows: dict[str, tuple[int, int]] | None = None
+        self._windows: list[dict[str, tuple[int, int]]] | None = None
 
     def _get(self, url: str, **params) -> requests.Response:
         response = self.session.get(url, params=params, timeout=REQUEST_TIMEOUT)
@@ -244,25 +254,43 @@ class OpendapReader:
         return response
 
     def _prepare(self, granule: Granule) -> None:
-        """Once per collection: dimension order (DMR) and the lat/lon index window."""
+        """Once per collection: dimension order (DMR) and the lat/lon index windows."""
         import xarray as xr
 
         self._layout = parse_dmr(self._get(f"{granule.opendap_url}.dmr").text)
         coords = self._get(f"{granule.opendap_url}.dap.nc4", **{"dap4.ce": "/lat;/lon"}).content
         with xr.open_dataset(io.BytesIO(coords), engine="h5netcdf", decode_times=False) as ds:
             lats, lons = ds["lat"].values.tolist(), ds["lon"].values.tolist()
-        self._windows = {
-            "lat": index_window(lats, self.area.south, self.area.north),
-            "lon": index_window(lons, self.area.west, self.area.east),
-        }
-        logger.info("Grid window for %s: %s", self.area, self._windows)
+        a = self.area
+        boxes = self.boxes if self.boxes is not None else [(a.west, a.south, a.east, a.north)]
+        self._windows = []
+        for west, south, east, north in boxes:
+            # Clip to the area (None bounds = the whole globe).
+            if a.west is not None:
+                west, south, east, north = max(west, a.west), max(south, a.south), min(east, a.east), min(north, a.north)
+                if west >= east or south >= north:
+                    continue
+            try:
+                self._windows.append({"lat": index_window(lats, south, north), "lon": index_window(lons, west, east)})
+            except ValueError:  # no grid cell in that box
+                continue
+        cells = sum((w["lat"][1] - w["lat"][0] + 1) * (w["lon"][1] - w["lon"][0] + 1) for w in self._windows)
+        logger.info("%s windows, %s of %s grid cells per time step", len(self._windows), cells, len(lats) * len(lons))
 
-    def read(self, granule: Granule):
-        """The granule's subset as an in-memory xarray Dataset."""
+    def _read_window(self, granule: Granule, window: dict[str, tuple[int, int]]):
         import xarray as xr
+
+        ce = constraint(self.variables, self._layout, window)
+        content = self._get(f"{granule.opendap_url}.dap.nc4", **{"dap4.ce": ce}).content
+        return xr.open_dataset(io.BytesIO(content), engine="h5netcdf", decode_times=self.decode_times).load()
+
+    def read(self, granule: Granule) -> list:
+        """The granule's subset: one in-memory xarray Dataset per window."""
+        from concurrent.futures import ThreadPoolExecutor
 
         if self._layout is None:
             self._prepare(granule)
-        ce = constraint(self.variables, self._layout, self._windows)
-        content = self._get(f"{granule.opendap_url}.dap.nc4", **{"dap4.ce": ce}).content
-        return xr.open_dataset(io.BytesIO(content), engine="h5netcdf", decode_times=self.decode_times).load()
+        if not self._windows:
+            return []
+        with ThreadPoolExecutor(max_workers=self.PARALLEL_REQUESTS) as pool:
+            return list(pool.map(lambda w: self._read_window(granule, w), self._windows))
