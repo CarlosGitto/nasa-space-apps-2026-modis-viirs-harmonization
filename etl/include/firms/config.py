@@ -39,6 +39,11 @@ RAW_DATASET = "firms_raw"
 # Single writer for the DuckLake catalog (defined in airflow_settings.yaml for local dev).
 LAKE_WRITER_POOL = "ducklake"
 
+# Area the ingest DAGs request from FIRMS by default: "world" or a "west,south,east,north"
+# bbox. Set FIRMS_AREA in etl/.env to work on a region (e.g. the local dev dataset), so the
+# scheduled NRT/SP runs keep the same coverage as the seeded data.
+FIRMS_AREA = os.getenv("FIRMS_AREA", "world")
+
 # HTTP connection whose password is the FIRMS MAP_KEY.
 FIRMS_CONN_ID = "firms_default"
 
@@ -104,11 +109,32 @@ def raw_pipeline(name: str):
     )
 
 
+def catalog_initialized() -> bool:
+    """Whether DuckLake has created its tables in the catalog yet.
+
+    ensure_catalog() creates an empty SQLite file (to set WAL mode) before the
+    first write; a READ_ONLY attach refuses that file ("creating a new DuckLake
+    is explicitly disabled"), so readers must check first.
+    """
+    import sqlite3
+
+    if not os.path.exists(CATALOG_PATH):
+        return False
+    con = sqlite3.connect(f"file:{CATALOG_PATH}?mode=ro", uri=True)
+    try:
+        row = con.execute(
+            "select 1 from sqlite_master where type = 'table' and name = 'ducklake_metadata'"
+        ).fetchone()
+    finally:
+        con.close()
+    return row is not None
+
+
 def last_loaded_dates(tables: list[str]) -> dict[str, "date"]:  # noqa: F821
     """table -> max(acq_date) in the bronze tables that exist and have rows."""
     import duckdb
 
-    if not os.path.exists(CATALOG_PATH):
+    if not catalog_initialized():  # nothing loaded yet
         return {}
     out = {}
     with duckdb.connect() as con:

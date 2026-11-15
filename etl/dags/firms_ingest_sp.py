@@ -28,7 +28,7 @@ from datetime import date, timedelta
 import pendulum
 from airflow.sdk import Param, dag, task
 
-from include.firms.config import FIRMS_RAW_SP, LAKE_WRITER_POOL
+from include.firms.config import FIRMS_AREA, FIRMS_RAW_SP, LAKE_WRITER_POOL
 
 # First day loaded when a product has nothing in the lake yet.
 SP_DEFAULT_START = date(2025, 1, 1)
@@ -42,7 +42,7 @@ SP_DEFAULT_START = date(2025, 1, 1)
     doc_md=__doc__,
     default_args={"owner": "etl", "retries": 2, "retry_delay": timedelta(minutes=10)},
     params={
-        "area": Param("world", type="string", description='"world" or "west,south,east,north"'),
+        "area": Param(FIRMS_AREA, type="string", description='"world" or "west,south,east,north" (default: FIRMS_AREA)'),
         "start_date": Param(None, type=["null", "string"], format="date",
                             description="Empty = resume after the last loaded day"),
         "end_date": Param(None, type=["null", "string"], format="date",
