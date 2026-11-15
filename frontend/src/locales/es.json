@@ -10,7 +10,7 @@
     "hidePanel": "Ocultar el panel",
     "showPanel": "Mostrar el panel",
     "railSummary": "{period}",
-    "moreControls": "Dataset, fechas exactas, mapa base y capas"
+    "moreControls": "Dataset, mapa base y capas"
   },
   "common": {
     "loading": "Cargando…",
@@ -173,7 +173,7 @@
     "linear": "Lineal",
     "log": "Log",
     "hintYears": "Click en un mes para ver en el mapa dónde se quemó · doble click (o en un año) para abrir sus días.",
-    "hintDays": "Click en un día para verlo en el mapa · arrastrá sobre los días (o Shift + click) para elegir un rango.",
+    "hintDays": "Click en un día para verlo en el mapa · arrastrá sobre los días (o Shift + click), o escribí Desde / Hasta abajo, para elegir un rango.",
     "yearsLabel": "Focos por mes y año",
     "total": "Año",
     "openYear": "{year}: abrir sus días y mostrar el año entero en el mapa",

@@ -1,6 +1,6 @@
 <script setup>
-// Dataset ("release") for the raw values and the points up close, exact dates, basemap, weather layers and zone
-// status. Folded under the fire calendar, which picks the period and the region.
+// Dataset ("release") for the raw values and the points up close, basemap, weather layers and zone
+// status. Folded under the fire calendar, which picks the period (grid or From / To) and the region.
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { date, num } from '../format'
@@ -48,25 +48,6 @@ const groups = computed(() =>
         n: num(store.currentDataset.rows), start: date(store.currentDataset.start_date), end: date(store.currentDataset.end_date),
       }) }}
     </p>
-
-    <div class="dates">
-      <label>
-        {{ $t('controls.from') }}
-        <input
-          type="date" :value="store.start"
-          :min="store.currentDataset?.start_date" :max="store.end"
-          @change="store.setDates($event.target.value, store.end)"
-        />
-      </label>
-      <label>
-        {{ $t('controls.to') }}
-        <input
-          type="date" :value="store.end"
-          :min="store.start" :max="store.currentDataset?.end_date"
-          @change="store.setDates(store.start, $event.target.value)"
-        />
-      </label>
-    </div>
 
     <label v-if="store.view === 'map'">
       {{ $t('controls.basemap') }}
@@ -116,7 +97,6 @@ select, input {
   border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
 }
 .meta { margin: -4px 0 0; font-size: 0.75rem; color: var(--muted); }
-.dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .weather { border: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .weather legend { font-size: 0.75rem; color: var(--muted); padding: 0; margin-bottom: 4px; width: 100%; }
 .weather .check { flex-direction: row; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--text); cursor: pointer; }

@@ -10,7 +10,7 @@
     "hidePanel": "Hide the panel",
     "showPanel": "Show the panel",
     "railSummary": "{period}",
-    "moreControls": "Dataset, exact dates, basemap and layers"
+    "moreControls": "Dataset, basemap and layers"
   },
   "common": {
     "loading": "Loading…",
@@ -173,7 +173,7 @@
     "linear": "Linear",
     "log": "Log",
     "hintYears": "Click a month to see where it burned on the map · double-click it (or a year) to open its days.",
-    "hintDays": "Click a day to see it on the map · drag over days (or Shift + click) to pick a range.",
+    "hintDays": "Click a day to see it on the map · drag over days (or Shift + click), or type From / To below, to pick a range.",
     "yearsLabel": "Hotspots per month and year",
     "total": "Year",
     "openYear": "{year}: open its days and show the whole year on the map",

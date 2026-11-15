@@ -122,8 +122,9 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
     month: which years and which seasons burn most), *Year* (twelve month calendars, one square per day) and
     *Month* (a big calendar with each day's count). ‹ › step a year or a month.
   - **Picking**: click a month (or a year label) to show it on the map, double-click to open its days; click a
-    day to show it (its month becomes the slider's range); drag over days or Shift + click for a range. Arrow
-    keys move between cells, Enter picks.
+    day to show it (its month becomes the slider's range); drag over days or Shift + click for a range, or type
+    it in the *From / To* fields of the *On the map* box (both stay in sync). Arrow keys move between cells,
+    Enter picks.
   - **Color**: hotspots or FRP, linear or log, relative to the busiest cell in view; or *vs. typical*: each month
     against the same month of the other years (a day against a typical day of its month), blue below, red above.
   - **Region** ([src/regions.js](src/regions.js)): *Follow the map* (default: the calendar counts what is on

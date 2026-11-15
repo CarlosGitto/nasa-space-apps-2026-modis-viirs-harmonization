@@ -245,6 +245,12 @@ function pickDay(iso) {
   if (store.start !== store.end && inRange(iso)) return store.setDay(store.day === iso ? null : iso)
   store.setRange(first(yearOf(iso), monthOf(iso)), last(yearOf(iso), monthOf(iso)), iso)
 }
+// From / To fields: the same period as the grid, typed. Clamped to the data; reversed dates are swapped.
+function typeDate(which, value) {
+  if (!value) return
+  const [s, e] = which === 'start' ? [value, store.end ?? value] : [store.start ?? value, value]
+  pickDays(s, e)
+}
 function pickDays(a, b) {
   const [s, e] = [a, b].sort()
   store.setRange(s, e)
@@ -618,6 +624,16 @@ const legendStyle = computed(() => ({
         <b>{{ period(store.start, store.end) }}</b>
         <span class="muted"> · {{ regionLabel }}</span>
       </div>
+      <div class="dates">
+        <label>
+          {{ $t('controls.from') }}
+          <input type="date" :value="store.start" :min="span?.start" :max="span?.end" @change="typeDate('start', $event.target.value)" />
+        </label>
+        <label>
+          {{ $t('controls.to') }}
+          <input type="date" :value="store.end" :min="span?.start" :max="span?.end" @change="typeDate('end', $event.target.value)" />
+        </label>
+      </div>
       <p v-if="summary?.total !== null" class="sum-line">
         {{ $t('common.detections', { n: num(summary.total, store.harmonized ? 1 : 0) }) }}{{ units }}
         · {{ $t('common.mw', { v: num(summary.frp) }) }}
@@ -739,6 +755,12 @@ const legendStyle = computed(() => ({
 }
 .sum-label { display: block; font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .sum-head b { font-size: 0.9375rem; }
+.dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 2px 0; }
+.dates label { display: flex; flex-direction: column; gap: 2px; font-size: 0.6875rem; color: var(--muted); }
+.dates input {
+  font: inherit; font-size: 0.8125rem; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; min-width: 0;
+}
 .sum-line { margin: 0; font-size: 0.75rem; }
 .compare.up { color: #b91c1c; }
 .compare.down { color: #1d4ed8; }
