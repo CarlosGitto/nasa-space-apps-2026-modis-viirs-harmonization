@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mdi/js": "7.4.47",
     "echarts": "6.1.0",
     "h3-js": "4.5.0",
     "maplibre-gl": "6.16.0",

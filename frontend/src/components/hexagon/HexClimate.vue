@@ -70,33 +70,33 @@ const fireChart = computed(() => {
   const bars = sensors.map((s) => {
     const n = Object.fromEntries(s.daily.map((d) => [d.date, d.detections]))
     return { name: SENSOR_LABELS[s.sensor], type: 'bar', data: dates.value.map((d) => n[d] ?? 0),
-             color: SENSOR_COLORS[s.sensor], unit: 'detecciones', digits: 0 }
+             color: SENSOR_COLORS[s.sensor], digits: 0 }
   })
   return dailyChart(dates.value, [
     ...bars,
     { name: 'VPD máx', type: 'line', axis: 1, data: series('vpd_max_kpa'), color: C.vpd, unit: 'kPa', digits: 2 },
-  ], { axes: ['detecciones', 'kPa'], mark: mark.value })
+  ], { axes: 2, mark: mark.value })
 })
 
 const temperatureChart = computed(() => dailyChart(dates.value, [
   { name: 'Máx', type: 'line', data: series('t2m_max_c'), color: C.tmax, unit: '°C' },
   { name: 'Mín', type: 'line', data: series('t2m_min_c'), color: C.tmin, unit: '°C' },
-  { name: 'Punto de rocío', type: 'line', data: series('dewpoint_mean_c'), color: C.dew, unit: '°C' },
-], { axes: ['°C'], mark: mark.value }))
+  { name: 'Rocío', type: 'line', data: series('dewpoint_mean_c'), color: C.dew, unit: '°C', dashed: true },
+], { scale: true, mark: mark.value }))
 
 const humidityWindChart = computed(() => dailyChart(dates.value, [
   { name: 'Humedad mín', type: 'line', data: series('rh_min_pct'), color: C.rh, unit: '%', digits: 0 },
   { name: 'Viento máx', type: 'line', axis: 1, data: series('wind_speed_max_ms'), color: C.wind, unit: 'm/s' },
 ], {
-  axes: ['%', 'm/s'], mark: mark.value,
+  axes: 2, mark: mark.value,
   tooltipExtra: (i) => (days.value[i].wind_dir_mean_deg != null ? `Viento desde: <b>${compass(days.value[i].wind_dir_mean_deg)}</b>` : null),
 }))
 
 const rainChart = computed(() => dailyChart(dates.value, [
-  { name: 'Lluvia del día', type: 'bar', data: series('precipitation_mm'), color: C.rain, unit: 'mm' },
-  { name: 'Últimos 30 días', type: 'line', axis: 1, data: series('precipitation_30d_mm'), color: C.rain30, unit: 'mm' },
+  { name: 'Del día', type: 'bar', data: series('precipitation_mm'), color: C.rain, unit: 'mm' },
+  { name: 'Acumulada 30 días', type: 'line', axis: 1, data: series('precipitation_30d_mm'), color: C.rain30, unit: 'mm' },
 ], {
-  axes: ['mm', 'mm 30 d'], mark: mark.value,
+  axes: 2, mark: mark.value,
   tooltipExtra: (i) => (days.value[i].days_since_rain != null ? `Días sin lluvia: <b>${days.value[i].days_since_rain}</b>` : null),
 }))
 </script>
@@ -117,7 +117,10 @@ const rainChart = computed(() => dailyChart(dates.value, [
       <template v-if="hasWeather">
         <dl class="kpis">
           <div v-for="k in kpis" :key="k.label">
-            <dt>{{ k.label }}</dt>
+            <dt>
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path :d="k.icon" :fill="k.color" /></svg>
+              {{ k.label }}
+            </dt>
             <dd>{{ k.value }}</dd>
             <dd v-if="k.note" class="note">{{ k.note }}</dd>
           </div>

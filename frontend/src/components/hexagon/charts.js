@@ -75,17 +75,24 @@ export function dayRange(start, end) {
 
 // Daily chart with up to two value axes: bars and lines over the same days.
 // series: [{ name, type: 'bar' | 'line', data, axis: 0 | 1, color, unit, digits, stack }]
-// axes: ['mm', 'kPa'] (names of the left and right axis); mark: a 'YYYY-MM-DD' to highlight.
-export function dailyChart(dates, series, { axes = [''], mark = null, tooltipExtra = null } = {}) {
-  const categories = dates.map((d) => d.slice(5))
-  const axis = (name, i) => ({
-    type: 'value', name, nameTextStyle: { color: MUTED, fontSize: 10 }, scale: name === '°C',
-    axisLabel: { color: MUTED, fontSize: 10 }, splitLine: { show: i === 0, lineStyle: { color: GRID } },
+// The unit goes in the legend ("VPD máx · kPa"), not as an axis name: axis names sat right
+// under the legend and overlapped it. axes: 1 or 2 value axes; scale: don't force zero
+// (temperatures); mark: a 'YYYY-MM-DD' to highlight (the time slider's day).
+export function dailyChart(dates, series, { axes = 1, scale = false, mark = null, tooltipExtra = null } = {}) {
+  const categories = dates.map((d) => `${d.slice(8)}/${d.slice(5, 7)}`)
+  const axis = (i) => ({
+    type: 'value', scale,
+    axisLabel: { color: MUTED, fontSize: 10, hideOverlap: true },
+    splitLine: { show: i === 0, lineStyle: { color: GRID } },
   })
+  const legendName = (s) => (s.unit ? `${s.name} · ${s.unit}` : s.name)
   return {
     animation: false,
-    grid: { left: 40, right: axes.length > 1 ? 40 : 10, top: 30, bottom: 22 },
-    legend: { top: 0, left: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: TEXT, fontSize: 11 } },
+    grid: { left: 34, right: axes > 1 ? 34 : 8, top: 30, bottom: 22, containLabel: false },
+    legend: {
+      top: 0, left: 0, right: 0, itemWidth: 10, itemHeight: 8, itemGap: 10, icon: 'roundRect',
+      textStyle: { color: TEXT, fontSize: 11 },
+    },
     tooltip: {
       trigger: 'axis',
       formatter: (items) => {
@@ -104,11 +111,13 @@ export function dailyChart(dates, series, { axes = [''], mark = null, tooltipExt
       axisLabel: { color: MUTED, fontSize: 10, hideOverlap: true },
       axisLine: { lineStyle: { color: GRID } }, axisTick: { show: false },
     },
-    yAxis: axes.map(axis),
+    yAxis: Array.from({ length: axes }, (_, i) => axis(i)),
     series: series.map((s, i) => ({
-      name: s.name, type: s.type, data: s.data, yAxisIndex: s.axis ?? 0, stack: s.stack,
+      name: legendName(s), type: s.type, data: s.data, yAxisIndex: s.axis ?? 0, stack: s.stack,
       itemStyle: { color: s.color, borderRadius: s.type === 'bar' ? [3, 3, 0, 0] : 0 },
-      ...(s.type === 'bar' ? { barMaxWidth: 10 } : { showSymbol: false, connectNulls: false, lineStyle: { color: s.color, width: 2 } }),
+      ...(s.type === 'bar'
+        ? { barMaxWidth: 10 }
+        : { showSymbol: false, connectNulls: false, smooth: 0.2, lineStyle: { color: s.color, width: 2, type: s.dashed ? 'dashed' : 'solid' } }),
       // The time slider's day, once per chart.
       ...(i === 0 && mark && dates.includes(mark)
         ? { markLine: { symbol: 'none', silent: true, label: { show: false }, lineStyle: { color: MUTED, type: 'dashed' },
@@ -118,10 +127,12 @@ export function dailyChart(dates, series, { axes = [''], mark = null, tooltipExt
   }
 }
 
-// Colors of the weather variables (fixed per variable across charts).
+// Colors of the weather variables, the same in every chart. Where fire is in the same
+// chart (VPD next to MODIS orange / VIIRS blue bars) they avoid fire colors; the
+// temperature chart, fire-free, uses the usual red (max) / blue (min).
 export const WEATHER_COLORS = {
-  rain: '#2563eb', rain30: '#93c5fd', vpd: '#ea580c', tmax: '#dc2626', tmin: '#f59e0b', dew: '#0891b2',
-  rh: '#0d9488', wind: '#7c3aed',
+  rain: '#60a5fa', rain30: '#1e40af', vpd: '#7c3aed', tmax: '#dc2626', tmin: '#3b82f6', dew: '#14b8a6',
+  rh: '#0d9488', wind: '#475569',
 }
 
 // Compact chart of the period ficha: daily rain (mm) vs. the daily maximum VPD (kPa).
@@ -129,6 +140,6 @@ export const weatherChart = (days) =>
   dailyChart(days.map((d) => d.date), [
     { name: 'Lluvia', type: 'bar', data: days.map((d) => d.precipitation_mm), color: WEATHER_COLORS.rain, unit: 'mm' },
     { name: 'VPD máx', type: 'line', axis: 1, data: days.map((d) => d.vpd_max_kpa), color: WEATHER_COLORS.vpd, unit: 'kPa', digits: 2 },
-  ], { axes: ['mm', 'kPa'] })
+  ], { axes: 2 })
 
 export const monthLabel = (iso) => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${iso.slice(2, 4)}`

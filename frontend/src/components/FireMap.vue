@@ -23,9 +23,8 @@ import {
 } from '../mapShared'
 import { latLngToCell } from 'h3-js'
 import {
-  ARROW_COLOR, ARROW_SIZE, RAIN_COLOR, RAIN_RADIUS, WEATHER_LAYERS, arrowSize, colorRamp, fireArrows, fireHalo,
-  fireNeighborhood, fireRainDots, legendGradient, rainDots, rainRadius, responseCache, weatherGrid, weatherRaster,
-  weatherRequest, weatherTooltip, windArrowImage, windArrows,
+  RAIN_SIZE, TEMPERATURE_SIZE, WEATHER_LAYERS, WIND_SIZE, colorAt, colorRamp, fireCandidates, fireNeighborhood, gridCandidates,
+  iconImage, rainSize, responseCache, weatherGrid, weatherPoints, weatherRequest, weatherTooltip, windSize,
 } from '../mapWeather'
 import { useFiltersStore } from '../stores/filters'
 
@@ -54,7 +53,7 @@ let gridShown = null // area (and resolution) of the grid on screen
 let draftFrame = null // pending preview redraw (one per animation frame)
 const weatherCache = responseCache() // GET /weather/map responses, by layer, day and bbox
 let weatherGrids = {} // layer id -> grid of the day shown (see weatherGrid)
-let neighborhood = new Set() // fire hexagons on screen and their neighbors: where weather is drawn
+let neighborhood = new Map() // h3 -> ring distance to a fire hexagon on screen: where weather is drawn
 
 // Smallest zoom showing a finer grid than `res`: clicking a coarse hexagon always goes down a level.
 const NEXT_LEVEL_ZOOM = { 0: 3, 1: 3, 2: 3, 3: 4.5, 4: 6, 5: 7.5 }
@@ -159,33 +158,24 @@ function prefetchNextDay(on, date) {
 const HEX_OPACITY = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.65, DETAIL_ZOOM + 1, 0.3]
 const HEX_OPACITY_OVER_WEATHER = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.9, DETAIL_ZOOM + 1, 0.55]
 
-// Draw the loaded grids in the chosen scope (no request: grids and hexagons are in memory).
+// Draw the loaded grids in the chosen scope (no request: grids and hexagons are in memory):
+// one group of icons per place, thinned to the zoom, fading away from the fires.
 function renderWeather() {
   if (!mapReady) return
-  const on = new Set(store.weatherLayers.filter((id) => weatherGrids[id]))
-  const around = store.weatherScope === 'fires'
+  const grids = Object.fromEntries(store.weatherLayers.filter((id) => weatherGrids[id]).map((id) => [id, weatherGrids[id]]))
   const active = store.weatherLayers.length > 0
   map.setPaintProperty('hex-fill', 'fill-opacity', active ? HEX_OPACITY_OVER_WEATHER : HEX_OPACITY)
   map.setLayoutProperty('hex-fire-line', 'visibility', active ? 'visible' : 'none')
   map.setPaintProperty('hex-line', 'line-opacity', active ? 0.15 : 0.4)
 
+  const any = Object.keys(grids).length > 0
   const fireCells = [...hexById.values()].filter((f) => f.properties.detections > 0).map((f) => f.properties.h3)
-  neighborhood = around && on.size ? fireNeighborhood(fireCells) : new Set()
-
-  const temperature = on.has('temperature') ? weatherGrids.temperature : null
-  map.getSource('wx-hex-temperature').setData(temperature && around ? fireHalo(neighborhood, temperature) : EMPTY)
-  map.setLayoutProperty('wx-hex-temperature', 'visibility', temperature && around ? 'visible' : 'none')
-  if (temperature && !around) map.getSource('wx-img-temperature').updateImage(weatherRaster('temperature', temperature))
-  map.setLayoutProperty('wx-img-temperature', 'visibility', temperature && !around ? 'visible' : 'none')
-
-  const zoom = map.getZoom()
-  const rain = on.has('precipitation') ? weatherGrids.precipitation : null
-  map.getSource('wx-rain').setData(!rain ? EMPTY : around ? fireRainDots(neighborhood, rain) : rainDots(rain.response, zoom))
-  map.setLayoutProperty('wx-rain', 'visibility', rain ? 'visible' : 'none')
-
-  const wind = on.has('wind') ? weatherGrids.wind : null
-  map.getSource('wx-wind').setData(!wind ? EMPTY : around ? fireArrows(fireCells, wind, zoom) : windArrows(wind.response, zoom))
-  map.setLayoutProperty('wx-wind', 'visibility', wind ? 'visible' : 'none')
+  neighborhood = any && store.weatherScope === 'fires' ? fireNeighborhood(fireCells) : new Map()
+  const candidates = !any ? [] : store.weatherScope === 'fires' ? fireCandidates(neighborhood) : gridCandidates(grids)
+  map.getSource('wx-points').setData(any ? weatherPoints(candidates, grids, map.getZoom()) : EMPTY)
+  for (const id of ['temperature', 'precipitation', 'wind']) {
+    map.setLayoutProperty(`wx-${id}`, 'visibility', grids[id] ? 'visible' : 'none')
+  }
 }
 
 // Jump to the last week with data for a layer (from its "no data" note).
@@ -238,22 +228,11 @@ function addLayers() {
     paint: { 'raster-brightness-max': 0.65, 'raster-saturation': -0.3 },
   }, labels)
 
-  // Weather (hidden until turned on), all below the fire hexagons: the whole field as an
-  // image ("Everywhere"), or the fire hexagons' neighborhood as hexagons ("Around fires").
-  const TRANSPARENT = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
-  map.addSource('wx-img-temperature', { type: 'image', url: TRANSPARENT, coordinates: [[-1, 1], [1, 1], [1, -1], [-1, -1]] })
-  map.addLayer({
-    id: 'wx-img-temperature', type: 'raster', source: 'wx-img-temperature', layout: { visibility: 'none' },
-    paint: { 'raster-opacity': WEATHER_LAYERS.temperature.opacity, 'raster-resampling': 'linear', 'raster-fade-duration': 0 },
-  }, labels)
-  map.addSource('wx-hex-temperature', { type: 'geojson', data: EMPTY })
-  map.addLayer({
-    id: 'wx-hex-temperature', type: 'fill', source: 'wx-hex-temperature', layout: { visibility: 'none' },
-    paint: { 'fill-color': colorRamp('temperature'), 'fill-opacity': WEATHER_LAYERS.temperature.opacity + 0.1 },
-  }, labels)
-  map.addSource('wx-rain', { type: 'geojson', data: EMPTY })
-  map.addSource('wx-wind', { type: 'geojson', data: EMPTY })
-  map.addImage('wind-arrow', windArrowImage(), { sdf: true })
+  // Weather icons (hidden until turned on): one point per place with t / rain / wind.
+  map.addSource('wx-points', { type: 'geojson', data: EMPTY })
+  for (const id of ['temperature', 'precipitation', 'wind']) {
+    map.addImage(`wx-${id}`, iconImage(WEATHER_LAYERS[id].icon), { sdf: true })
+  }
 
   map.addSource('grid', { type: 'geojson', data: EMPTY })
   map.addSource('hex', { type: 'geojson', data: EMPTY })
@@ -308,28 +287,32 @@ function addLayers() {
     },
   }, labels)
 
-  // Rain dots: one blue, sized by mm, translucent. Above the hexagons (around fires they
-  // sit on the fire hexagons too), below the wind arrows.
-  map.addLayer({
-    id: 'wx-rain', type: 'circle', source: 'wx-rain', layout: { visibility: 'none' },
-    paint: {
-      'circle-radius': RAIN_RADIUS, 'circle-color': RAIN_COLOR, 'circle-opacity': 0.45,
-      'circle-stroke-color': '#ffffff', 'circle-stroke-width': 0.6, 'circle-stroke-opacity': 0.8,
+  // Weather icons above the hexagons (they don't paint the ground): thermometer left,
+  // drop right, wind arrow in the middle. Opacity fades with the distance to the fire.
+  const icon = (id, extra) => ({
+    id: `wx-${id}`, type: 'symbol', source: 'wx-points',
+    layout: {
+      visibility: 'none', 'icon-image': `wx-${id}`, 'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      ...extra.layout,
     },
-  }, labels)
-  // Wind arrows: neutral gray, sized by speed, rotated to where the wind blows. Above the
-  // hexagons but translucent: around fires they sit on the fire hexagons themselves.
-  map.addLayer({
-    id: 'wx-wind', type: 'symbol', source: 'wx-wind', layout: {
-      visibility: 'none',
-      'icon-image': 'wind-arrow',
-      'icon-rotate': ['get', 'to'],
-      'icon-rotation-alignment': 'map',
-      'icon-size': ARROW_SIZE,
-      'icon-allow-overlap': true, // already thinned to one per ~45 px
-    },
-    paint: { 'icon-color': ARROW_COLOR, 'icon-opacity': 0.75, 'icon-halo-color': '#ffffff', 'icon-halo-width': 1 },
-  }, labels)
+    paint: { 'icon-opacity': ['get', 'fade'], 'icon-halo-color': '#ffffff', 'icon-halo-width': 1.5, ...extra.paint },
+    filter: extra.filter,
+  })
+  map.addLayer(icon('temperature', {
+    filter: ['has', 't'],
+    layout: { 'icon-size': TEMPERATURE_SIZE },
+    paint: { 'icon-color': colorRamp('temperature', 't'), 'icon-translate': [-13, 0] },
+  }), labels)
+  map.addLayer(icon('precipitation', {
+    filter: ['has', 'rain'],
+    layout: { 'icon-size': RAIN_SIZE },
+    paint: { 'icon-color': WEATHER_LAYERS.precipitation.color, 'icon-translate': [13, 0] },
+  }), labels)
+  map.addLayer(icon('wind', {
+    filter: ['has', 'wind'],
+    layout: { 'icon-size': WIND_SIZE, 'icon-rotate': ['get', 'to'], 'icon-rotation-alignment': 'map' },
+    paint: { 'icon-color': colorRamp('wind', 'wind') },
+  }), labels)
 
   // Drawn area: outline of the hexagons it selects (it snaps to the grid).
   map.addSource('zone', { type: 'geojson', data: EMPTY })
@@ -601,26 +584,17 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
     <div v-if="store.weatherLayers.length" class="legend" aria-label="Weather legend">
       <div v-for="id in store.weatherLayers" :key="id" class="legend-item">
         <span class="legend-title">{{ WEATHER_LAYERS[id].title }}</span>
-        <template v-if="WEATHER_LAYERS[id].stops">
-          <span class="legend-bar" :style="{ background: legendGradient(id) }"></span>
-          <span class="legend-ticks">
-            <span v-for="[v] in WEATHER_LAYERS[id].stops" :key="v">{{ v }}</span>
-          </span>
-        </template>
-        <span v-else-if="WEATHER_LAYERS[id].dots" class="legend-arrows">
-          <span v-for="mm in WEATHER_LAYERS[id].dots" :key="mm">
-            <svg :width="2 * rainRadius(mm) + 2" :height="2 * rainRadius(mm) + 2" aria-hidden="true">
-              <circle :cx="rainRadius(mm) + 1" :cy="rainRadius(mm) + 1" :r="rainRadius(mm)" :fill="RAIN_COLOR" fill-opacity="0.45" stroke="#fff" />
+        <span class="legend-icons">
+          <span v-for="v in WEATHER_LAYERS[id].legend" :key="v">
+            <svg
+              viewBox="0 0 24 24" aria-hidden="true"
+              :width="id === 'temperature' ? 16 : 26 * (id === 'precipitation' ? rainSize(v) : windSize(v))"
+              :height="id === 'temperature' ? 16 : 26 * (id === 'precipitation' ? rainSize(v) : windSize(v))"
+              :style="id === 'wind' ? { transform: 'rotate(45deg)' } : null"
+            >
+              <path :d="WEATHER_LAYERS[id].icon" :fill="id === 'precipitation' ? WEATHER_LAYERS[id].color : colorAt(id, v)" />
             </svg>
-            {{ mm }} mm
-          </span>
-        </span>
-        <span v-else class="legend-arrows">
-          <span v-for="[v, label] in WEATHER_LAYERS[id].arrows" :key="v">
-            <svg :width="24 * arrowSize(v)" :height="24 * arrowSize(v)" viewBox="0 0 32 32" aria-hidden="true">
-              <path d="M16 2 L25 14.4 L18.9 14.4 L18.9 29 L13.1 29 L13.1 14.4 L7 14.4 Z" :fill="ARROW_COLOR" transform="rotate(45 16 16)" />
-            </svg>
-            {{ v }} m/s {{ label }}
+            {{ v }}{{ id === 'temperature' ? '°' : id === 'precipitation' ? ' mm' : ' m/s' }}
           </span>
         </span>
         <span v-if="weatherNotes[id]" class="legend-note">
@@ -632,6 +606,9 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
           <template v-else>No data loaded yet (weather_ingest DAG)</template>
         </span>
       </div>
+      <span v-if="store.weatherScope === 'fires'" class="legend-fade">
+        Around the fires on screen, fading out over 3 rings of neighbors. Hover for values.
+      </span>
     </div>
 
     <div v-if="loading || error || info || imageryNote" class="status">
@@ -672,8 +649,9 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
 .legend-bar { height: 8px; border-radius: 4px; }
 .legend-ticks { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
 .legend-note { color: var(--muted); }
-.legend-arrows { display: flex; gap: 10px; align-items: center; color: var(--muted); }
-.legend-arrows span { display: inline-flex; align-items: center; gap: 2px; }
+.legend-icons { display: flex; gap: 10px; align-items: center; color: var(--muted); flex-wrap: wrap; }
+.legend-icons span { display: inline-flex; align-items: center; gap: 2px; }
+.legend-fade { color: var(--muted); }
 .legend-note button {
   margin-top: 3px; display: block; font: inherit; font-size: 11px; background: none; color: var(--accent);
   border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; cursor: pointer;

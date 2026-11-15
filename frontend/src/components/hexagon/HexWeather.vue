@@ -56,7 +56,10 @@ const chart = computed(() => (days.value.length ? weatherChart(days.value) : nul
       <template v-if="days.length">
         <dl class="kpis">
           <div v-for="k in kpis" :key="k.label">
-            <dt>{{ k.label }}</dt>
+            <dt>
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path :d="k.icon" :fill="k.color" /></svg>
+              {{ k.label }}
+            </dt>
             <dd>{{ k.value }}</dd>
             <dd v-if="k.note" class="note">{{ k.note }}</dd>
           </div>

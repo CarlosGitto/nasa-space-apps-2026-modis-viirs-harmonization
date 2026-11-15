@@ -48,17 +48,18 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   GPM IMERG, from the grid cell nearest to the hexagon. With
   several hexagons, "Detalle" shows one ficha each; "Agrupado" is a work in progress.
 - **Weather layers**: "Weather layers" in the side panel adds the weather of the day the
-  map shows (the time slider's day, else the end of the range), keeping fire the
-  protagonist: no fire colors (temperature goes blue → white → purple), drawn under the
-  fire hexagons, which turn more opaque and get a dark outline while weather is on.
-  **Temperature** (daily max, NASA MERRA-2) is a color fill; **Rain** (daily total, NASA
-  GPM IMERG) is blue dots sized by mm; **Wind** (daily mean, MERRA-2) is gray arrows
-  pointing where it blows, sized by speed. Two scopes:
-  - **Around fires** (default): only the fire hexagons on screen and their neighbors
-    (H3 k=1 ring), each with the value of the weather cell under its center; wind arrows
-    on the fire hexagons. Computed in the browser from the hexagons already loaded.
-  - **Everywhere**: the whole field; temperature as one image (not thousands of
-    polygons), rain dots and arrows thinned to the zoom.
+  map shows (the time slider's day, else the end of the range) as icons that never paint
+  the ground, so fire stays the protagonist (fire hexagons also turn more opaque and get
+  a dark outline while weather is on). Material Design Icons (`@mdi/js`), drawn as SDF
+  images so MapLibre colors them per value:
+  **Temperature**: a thermometer colored by the daily max (usual temperature-map colors);
+  **Rain**: a drop sized by the daily total (none where it's dry); **Wind**: an arrow
+  pointing where it blows, sized and colored by speed. NASA MERRA-2 and GPM IMERG.
+  Each place gets one group (thermometer, arrow, drop), thinned to ~72 px. Two scopes:
+  - **Around fires** (default): around the fire hexagons on screen, out to 3 rings of
+    neighbors (H3), fading with the distance, and placed on the neighbors so the fire
+    itself stays uncovered. Computed in the browser from the hexagons already loaded.
+  - **Everywhere**: the same icons over the whole loaded area.
 
   Responses are cached per layer and day (temperature and wind come for the whole area,
   rain too until zoom 5.5, then per 5° tile), requests in flight are shared, and the
