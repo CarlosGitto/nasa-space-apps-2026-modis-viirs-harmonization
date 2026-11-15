@@ -44,7 +44,7 @@ export const daysBefore = (iso, days) => {
   return d.toISOString().slice(0, 10)
 }
 
-const PRODUCTS = { power: 'NASA POWER' }
+const PRODUCTS = { power: 'POWER' }
 
 // "NASA POWER: 1981-01-01 → 2026-11-13": the days available for this place.
 export const coverageLabel = (weather) =>

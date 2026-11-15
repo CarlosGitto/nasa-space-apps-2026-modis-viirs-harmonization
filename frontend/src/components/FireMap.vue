@@ -308,7 +308,7 @@ function addLayers() {
     tileSize: 256,
     maxzoom: 9, // GIBS resolution; MapLibre upscales beyond this zoom
     tiles: [gibsUrl('VIIRS_NOAA20_CorrectedReflectance_TrueColor', '2025-01-01')], // replaced by syncImagery()
-    attribution: 'Imagery: <a href="https://www.earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a>',
+    attribution: 'Imagery: <a href="https://www.earthdata.nasa.gov/gibs">EOSDIS GIBS</a>',
   })
   map.addLayer({
     id: 'gibs',

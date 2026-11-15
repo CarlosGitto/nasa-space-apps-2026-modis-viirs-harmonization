@@ -9,7 +9,7 @@ import mlcontour from 'maplibre-contour'
 import { maplibregl } from './mapShared'
 
 const TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
-const ATTRIBUTION = 'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">SRTM (NASA) · AWS Terrain Tiles</a>'
+const ATTRIBUTION = 'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/">SRTM · AWS Terrain Tiles</a>'
 const LAYERS = ['contour-lines', 'contour-labels']
 const CONTOURS_MINZOOM = 6 // below this, a continent of lines is just noise
 const DEM_MAXZOOM = 12 // ~30 m pixels: enough for 50 m contours

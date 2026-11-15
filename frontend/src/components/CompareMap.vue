@@ -92,7 +92,7 @@ function createMap(el, side) {
 function addLayers(map) {
   const labels = labelLayerId(map)
   map.addSource('img', { type: 'raster', tileSize: 256, maxzoom: 9, tiles: [gibsUrl(GIBS_LAYERS[0].id, '2025-01-01')],
-    attribution: 'Imagery: <a href="https://www.earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a>' })
+    attribution: 'Imagery: <a href="https://www.earthdata.nasa.gov/gibs">EOSDIS GIBS</a>' })
   map.addLayer({ id: 'img', type: 'raster', source: 'img', layout: { visibility: 'none' },
     paint: { 'raster-brightness-max': 0.8 } }, labels)
   for (const id of ['hex', 'modis', 'viirs', 'zone']) map.addSource(id, { type: 'geojson', data: EMPTY })

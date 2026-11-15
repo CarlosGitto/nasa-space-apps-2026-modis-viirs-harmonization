@@ -23,7 +23,7 @@ export default [
       // Symbols, numbers and technical names (sensor names, language codes) are not translated.
       '@intlify/vue-i18n/no-raw-text': ['error', {
         ignorePattern: '^[\\s\\-–—·:/%|()+×▶◀▾▸▼▲❚✕▱⚠⛰*.,0-9]*$',
-        ignoreText: ['MODIS', 'VIIRS', 'ES', 'EN', '· NASA POWER'],
+        ignoreText: ['MODIS', 'VIIRS', 'ES', 'EN', '· POWER'],
       }],
       '@intlify/vue-i18n/no-missing-keys': 'error',
       // Keys built on purpose from a value (`panel.tabs.${id}`) can't be seen statically:
