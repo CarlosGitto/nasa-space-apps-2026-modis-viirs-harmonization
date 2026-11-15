@@ -32,6 +32,8 @@ export const useFiltersStore = defineStore('filters', () => {
   const selectedHexes = ref([]) // H3 res-6 ids open in the hexagon panel, in click order
   // Weather layers drawn on the map ('temperature' | 'precipitation' | 'wind'), for imageryDate.
   const weatherLayers = ref([])
+  // Where they're drawn: 'fires' (fire hexagons and their neighbors) or 'all' (the whole field).
+  const weatherScope = ref('fires')
   // Maps still loading a change (data and imagery): the time slider waits for them before
   // showing the next day, so the picture always matches the day on the slider.
   const busy = ref({}) // view -> true while loading
@@ -140,6 +142,7 @@ export const useFiltersStore = defineStore('filters', () => {
   const removeHex = (id) => { selectedHexes.value = selectedHexes.value.filter((h) => h !== id) }
   const clearSelection = () => { selectedHexes.value = [] }
   const setCamera = (center, zoom) => { camera.value = { center, zoom } }
+  const setWeatherScope = (scope) => { weatherScope.value = scope }
   const toggleWeatherLayer = (id) => {
     weatherLayers.value = weatherLayers.value.includes(id)
       ? weatherLayers.value.filter((l) => l !== id)
@@ -147,10 +150,10 @@ export const useFiltersStore = defineStore('filters', () => {
   }
 
   return {
-    datasets, dataset, start, end, zone, zoneCells, error, basemap, day, view, camera, selectedHexes, weatherLayers,
+    datasets, dataset, start, end, zone, zoneCells, error, basemap, day, view, camera, selectedHexes, weatherLayers, weatherScope,
     currentDataset, queryParams, imagery, compareSides, imageryDate, isBusy, setBusy,
     loadDatasets, setDataset, setDates, setDay, setMonth, setArea, clearZone, setBasemap, setView, setCamera,
-    toggleWeatherLayer,
+    toggleWeatherLayer, setWeatherScope,
     selectHex, removeHex, clearSelection,
   }
 })

@@ -21,8 +21,11 @@ import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
   fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
+import { latLngToCell } from 'h3-js'
 import {
-  WEATHER_IDS, WEATHER_LAYERS, colorRamp, legendGradient, weatherFeatures, weatherTooltip, windArrowImage,
+  ARROW_COLOR, ARROW_SIZE, RAIN_COLOR, RAIN_RADIUS, WEATHER_LAYERS, arrowSize, colorRamp, fireArrows, fireHalo,
+  fireNeighborhood, fireRainDots, legendGradient, rainDots, rainRadius, responseCache, weatherGrid, weatherRaster,
+  weatherRequest, weatherTooltip, windArrowImage, windArrows,
 } from '../mapWeather'
 import { useFiltersStore } from '../stores/filters'
 
@@ -41,7 +44,7 @@ const weatherNotes = ref({}) // layer id -> { first, last } when that day has no
 let map = null
 let mapReady = false // set on 'load'; isStyleLoaded() flips to false while sources update
 let controller = null
-let weatherController = null
+let weatherToken = 0 // increases with every refreshWeather call
 let debounce = null
 let resizer = null
 let tooltip = null
@@ -49,6 +52,9 @@ let currentRes = null // resolution of the hexagons on screen
 let hexById = new Map() // h3 -> feature on screen (whole polygon, not the tiled one MapLibre returns)
 let gridShown = null // area (and resolution) of the grid on screen
 let draftFrame = null // pending preview redraw (one per animation frame)
+const weatherCache = responseCache() // GET /weather/map responses, by layer, day and bbox
+let weatherGrids = {} // layer id -> grid of the day shown (see weatherGrid)
+let neighborhood = new Set() // fire hexagons on screen and their neighbors: where weather is drawn
 
 // Smallest zoom showing a finer grid than `res`: clicking a coarse hexagon always goes down a level.
 const NEXT_LEVEL_ZOOM = { 0: 3, 1: 3, 2: 3, 3: 4.5, 4: 6, 5: 7.5 }
@@ -73,6 +79,7 @@ async function refresh() {
     currentRes = res
     hexById = new Map(fc.features.map((f) => [f.properties.h3, f]))
     map.getSource('hex').setData(fc)
+    renderWeather() // the halo follows the fire hexagons on screen
     map.getSource('points').setData(points ?? EMPTY)
     const total = fc.features.reduce((s, f) => s + f.properties.detections, 0)
     const grid = res === BASE_RES ? 'base grid, H3 res 6' : `H3 res ${res}`
@@ -90,37 +97,95 @@ async function refresh() {
   }
 }
 
-// Weather layers for the map's day (the slider's, else the end of the range) over the
-// visible area. Turned-off layers are hidden and emptied; a day without data for a layer
+// Weather layers for the map's day (the slider's, else the end of the range). Responses
+// are cached: temperature and wind come for the whole area (one request per day), rain
+// too until RAIN_DETAIL_ZOOM, then per snapped bbox. A day without data for a layer
 // leaves a note saying which days it has.
+// The cache holds promises, not responses: a request already on its way (another layer
+// toggled, the prefetch, a quick pan) is shared instead of cancelled and sent again.
+// Responses are small; a stale one is just ignored by refreshWeather.
+function loadWeather(id, date) {
+  const request = weatherRequest(id, date, map.getZoom(), map.getBounds())
+  const key = `${id}|${request.date}|${request.bbox ?? ''}`
+  let pending = weatherCache.get(key)
+  if (!pending) {
+    pending = getWeatherMap(id, request).catch((e) => { weatherCache.delete(key); throw e })
+    weatherCache.set(key, pending)
+  }
+  return pending
+}
+
 async function refreshWeather() {
   if (!mapReady || store.view !== 'map') return
-  weatherController?.abort()
-  weatherController = new AbortController()
-  const { signal } = weatherController
+  const token = ++weatherToken // only the newest call draws
   const on = store.weatherLayers
-  for (const id of WEATHER_IDS) {
-    map.setLayoutProperty(`wx-${id}`, 'visibility', on.includes(id) ? 'visible' : 'none')
-    if (!on.includes(id)) map.getSource(`wx-${id}`).setData(EMPTY)
+  if (!on.length) {
+    weatherGrids = {}
+    weatherNotes.value = {}
+    renderWeather()
+    return
   }
-  if (!on.length) { weatherNotes.value = {}; return }
   store.setBusy('weather', true)
   try {
     const date = store.imageryDate
-    const bbox = viewportBbox(map)
-    const results = await Promise.all(on.map((id) => getWeatherMap(id, { date, bbox }, signal).then((r) => [id, r])))
+    const results = await Promise.all(on.map((id) => loadWeather(id, date).then((r) => [id, r])))
+    if (token !== weatherToken) return
     const notes = {}
+    weatherGrids = {}
     for (const [id, r] of results) {
-      map.getSource(`wx-${id}`).setData(weatherFeatures(id, r))
+      weatherGrids[id] = weatherGrid(r)
       if (!r.cells.length) notes[id] = r.coverage ? { first: r.coverage.first_date, last: r.coverage.last_date } : {}
     }
     weatherNotes.value = notes
+    renderWeather()
     await whenIdle(map)
+    prefetchNextDay(on, date)
   } catch (e) {
-    if (e.name === 'AbortError') return
-    weatherNotes.value = Object.fromEntries(on.map((id) => [id, { error: e.message }]))
+    if (token === weatherToken) weatherNotes.value = Object.fromEntries(on.map((id) => [id, { error: e.message }]))
   }
-  if (!signal.aborted) store.setBusy('weather', false)
+  if (token === weatherToken) store.setBusy('weather', false)
+}
+
+// While the time slider steps through days, have the next one ready.
+function prefetchNextDay(on, date) {
+  if (!store.day || date >= store.end) return
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  const next = d.toISOString().slice(0, 10)
+  for (const id of on) loadWeather(id, next).catch(() => {})
+}
+
+// Fire hexagons a bit stronger while weather is on, so they stay the protagonists.
+const HEX_OPACITY = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.65, DETAIL_ZOOM + 1, 0.3]
+const HEX_OPACITY_OVER_WEATHER = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.9, DETAIL_ZOOM + 1, 0.55]
+
+// Draw the loaded grids in the chosen scope (no request: grids and hexagons are in memory).
+function renderWeather() {
+  if (!mapReady) return
+  const on = new Set(store.weatherLayers.filter((id) => weatherGrids[id]))
+  const around = store.weatherScope === 'fires'
+  const active = store.weatherLayers.length > 0
+  map.setPaintProperty('hex-fill', 'fill-opacity', active ? HEX_OPACITY_OVER_WEATHER : HEX_OPACITY)
+  map.setLayoutProperty('hex-fire-line', 'visibility', active ? 'visible' : 'none')
+  map.setPaintProperty('hex-line', 'line-opacity', active ? 0.15 : 0.4)
+
+  const fireCells = [...hexById.values()].filter((f) => f.properties.detections > 0).map((f) => f.properties.h3)
+  neighborhood = around && on.size ? fireNeighborhood(fireCells) : new Set()
+
+  const temperature = on.has('temperature') ? weatherGrids.temperature : null
+  map.getSource('wx-hex-temperature').setData(temperature && around ? fireHalo(neighborhood, temperature) : EMPTY)
+  map.setLayoutProperty('wx-hex-temperature', 'visibility', temperature && around ? 'visible' : 'none')
+  if (temperature && !around) map.getSource('wx-img-temperature').updateImage(weatherRaster('temperature', temperature))
+  map.setLayoutProperty('wx-img-temperature', 'visibility', temperature && !around ? 'visible' : 'none')
+
+  const zoom = map.getZoom()
+  const rain = on.has('precipitation') ? weatherGrids.precipitation : null
+  map.getSource('wx-rain').setData(!rain ? EMPTY : around ? fireRainDots(neighborhood, rain) : rainDots(rain.response, zoom))
+  map.setLayoutProperty('wx-rain', 'visibility', rain ? 'visible' : 'none')
+
+  const wind = on.has('wind') ? weatherGrids.wind : null
+  map.getSource('wx-wind').setData(!wind ? EMPTY : around ? fireArrows(fireCells, wind, zoom) : windArrows(wind.response, zoom))
+  map.setLayoutProperty('wx-wind', 'visibility', wind ? 'visible' : 'none')
 }
 
 // Jump to the last week with data for a layer (from its "no data" note).
@@ -173,15 +238,22 @@ function addLayers() {
     paint: { 'raster-brightness-max': 0.65, 'raster-saturation': -0.3 },
   }, labels)
 
-  // Weather (hidden until turned on): cells under the hexagons, wind arrows above them.
-  for (const id of WEATHER_IDS) map.addSource(`wx-${id}`, { type: 'geojson', data: EMPTY })
+  // Weather (hidden until turned on), all below the fire hexagons: the whole field as an
+  // image ("Everywhere"), or the fire hexagons' neighborhood as hexagons ("Around fires").
+  const TRANSPARENT = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+  map.addSource('wx-img-temperature', { type: 'image', url: TRANSPARENT, coordinates: [[-1, 1], [1, 1], [1, -1], [-1, -1]] })
+  map.addLayer({
+    id: 'wx-img-temperature', type: 'raster', source: 'wx-img-temperature', layout: { visibility: 'none' },
+    paint: { 'raster-opacity': WEATHER_LAYERS.temperature.opacity, 'raster-resampling': 'linear', 'raster-fade-duration': 0 },
+  }, labels)
+  map.addSource('wx-hex-temperature', { type: 'geojson', data: EMPTY })
+  map.addLayer({
+    id: 'wx-hex-temperature', type: 'fill', source: 'wx-hex-temperature', layout: { visibility: 'none' },
+    paint: { 'fill-color': colorRamp('temperature'), 'fill-opacity': WEATHER_LAYERS.temperature.opacity + 0.1 },
+  }, labels)
+  map.addSource('wx-rain', { type: 'geojson', data: EMPTY })
+  map.addSource('wx-wind', { type: 'geojson', data: EMPTY })
   map.addImage('wind-arrow', windArrowImage(), { sdf: true })
-  for (const id of ['temperature', 'precipitation']) {
-    map.addLayer({
-      id: `wx-${id}`, type: 'fill', source: `wx-${id}`, layout: { visibility: 'none' },
-      paint: { 'fill-color': colorRamp(id), 'fill-opacity': id === 'precipitation' ? 0.6 : 0.5, 'fill-antialias': false },
-    }, labels)
-  }
 
   map.addSource('grid', { type: 'geojson', data: EMPTY })
   map.addSource('hex', { type: 'geojson', data: EMPTY })
@@ -196,6 +268,12 @@ function addLayers() {
       // Lighter when zoomed in, so streets and the detections on top stay readable.
       'fill-opacity': ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.65, DETAIL_ZOOM + 1, 0.3],
     },
+  }, labels)
+  // While weather is on: a dark outline around the fire hexagons so they stand out.
+  map.addLayer({
+    id: 'hex-fire-line', type: 'line', source: 'hex', layout: { visibility: 'none' },
+    filter: ['>', ['get', 'detections'], 0],
+    paint: { 'line-color': '#7f1d1d', 'line-width': 1, 'line-opacity': 0.8 },
   }, labels)
   // Borders come from the full grid, so empty cells show them too.
   map.addLayer({
@@ -230,18 +308,27 @@ function addLayers() {
     },
   }, labels)
 
-  // Wind arrows above the hexagons: rotated to where the wind blows, colored and sized by
-  // speed. MapLibre drops overlapping ones, so zoomed out it thins them out on its own.
+  // Rain dots: one blue, sized by mm, translucent. Above the hexagons (around fires they
+  // sit on the fire hexagons too), below the wind arrows.
+  map.addLayer({
+    id: 'wx-rain', type: 'circle', source: 'wx-rain', layout: { visibility: 'none' },
+    paint: {
+      'circle-radius': RAIN_RADIUS, 'circle-color': RAIN_COLOR, 'circle-opacity': 0.45,
+      'circle-stroke-color': '#ffffff', 'circle-stroke-width': 0.6, 'circle-stroke-opacity': 0.8,
+    },
+  }, labels)
+  // Wind arrows: neutral gray, sized by speed, rotated to where the wind blows. Above the
+  // hexagons but translucent: around fires they sit on the fire hexagons themselves.
   map.addLayer({
     id: 'wx-wind', type: 'symbol', source: 'wx-wind', layout: {
       visibility: 'none',
       'icon-image': 'wind-arrow',
       'icon-rotate': ['get', 'to'],
       'icon-rotation-alignment': 'map',
-      'icon-size': ['interpolate', ['linear'], ['get', 'value'], 0, 0.35, 15, 0.9],
-      'icon-padding': 1,
+      'icon-size': ARROW_SIZE,
+      'icon-allow-overlap': true, // already thinned to one per ~45 px
     },
-    paint: { 'icon-color': colorRamp('wind'), 'icon-halo-color': '#ffffff', 'icon-halo-width': 1 },
+    paint: { 'icon-color': ARROW_COLOR, 'icon-opacity': 0.75, 'icon-halo-color': '#ffffff', 'icon-halo-width': 1 },
   }, labels)
 
   // Drawn area: outline of the hexagons it selects (it snaps to the grid).
@@ -395,8 +482,10 @@ function onHover(e) {
     return
   }
   const [hit] = map.queryRenderedFeatures(e.point, { layers: ['points', 'hex-fill'] })
-  const weatherLayers = store.weatherLayers.map((id) => `wx-${id}`)
-  const weather = weatherLayers.length ? weatherTooltip(map.queryRenderedFeatures(e.point, { layers: weatherLayers })) : ''
+  // Weather under the cursor: anywhere ("Everywhere"), or inside the fires' neighborhood.
+  const { lng, lat } = e.lngLat
+  const shown = store.weatherScope === 'all' || (currentRes !== null && neighborhood.has(latLngToCell(lat, lng, currentRes)))
+  const weather = store.weatherLayers.length && shown ? weatherTooltip(weatherGrids, lng, lat) : ''
   if (!hit && !weather) return hideTooltip()
   map.getCanvas().style.cursor = hit ? 'pointer' : ''
   const html = !hit ? '' : hit.layer.id === 'points'
@@ -460,7 +549,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   controller?.abort()
-  weatherController?.abort()
+  weatherToken++
   store.setBusy('map', false)
   store.setBusy('weather', false)
   clearTimeout(debounce)
@@ -485,6 +574,7 @@ watch(() => store.view, (view) => {
 })
 // Layers turned on/off, or another day: reload the weather.
 watch(() => [store.weatherLayers, store.imageryDate], refreshWeather)
+watch(() => store.weatherScope, renderWeather)
 // Image type, satellite or day changed: update the imagery.
 // Watch id and date separately: pickLayer() returns a new object every time.
 watch(() => [store.basemap, store.imagery?.layer.id, store.imagery?.date], syncImagery)
@@ -511,9 +601,27 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
     <div v-if="store.weatherLayers.length" class="legend" aria-label="Weather legend">
       <div v-for="id in store.weatherLayers" :key="id" class="legend-item">
         <span class="legend-title">{{ WEATHER_LAYERS[id].title }}</span>
-        <span class="legend-bar" :style="{ background: legendGradient(id) }"></span>
-        <span class="legend-ticks">
-          <span v-for="[v] in WEATHER_LAYERS[id].stops" :key="v">{{ v }}</span>
+        <template v-if="WEATHER_LAYERS[id].stops">
+          <span class="legend-bar" :style="{ background: legendGradient(id) }"></span>
+          <span class="legend-ticks">
+            <span v-for="[v] in WEATHER_LAYERS[id].stops" :key="v">{{ v }}</span>
+          </span>
+        </template>
+        <span v-else-if="WEATHER_LAYERS[id].dots" class="legend-arrows">
+          <span v-for="mm in WEATHER_LAYERS[id].dots" :key="mm">
+            <svg :width="2 * rainRadius(mm) + 2" :height="2 * rainRadius(mm) + 2" aria-hidden="true">
+              <circle :cx="rainRadius(mm) + 1" :cy="rainRadius(mm) + 1" :r="rainRadius(mm)" :fill="RAIN_COLOR" fill-opacity="0.45" stroke="#fff" />
+            </svg>
+            {{ mm }} mm
+          </span>
+        </span>
+        <span v-else class="legend-arrows">
+          <span v-for="[v, label] in WEATHER_LAYERS[id].arrows" :key="v">
+            <svg :width="24 * arrowSize(v)" :height="24 * arrowSize(v)" viewBox="0 0 32 32" aria-hidden="true">
+              <path d="M16 2 L25 14.4 L18.9 14.4 L18.9 29 L13.1 29 L13.1 14.4 L7 14.4 Z" :fill="ARROW_COLOR" transform="rotate(45 16 16)" />
+            </svg>
+            {{ v }} m/s {{ label }}
+          </span>
         </span>
         <span v-if="weatherNotes[id]" class="legend-note">
           <template v-if="weatherNotes[id].error">{{ weatherNotes[id].error }}</template>
@@ -564,6 +672,8 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
 .legend-bar { height: 8px; border-radius: 4px; }
 .legend-ticks { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
 .legend-note { color: var(--muted); }
+.legend-arrows { display: flex; gap: 10px; align-items: center; color: var(--muted); }
+.legend-arrows span { display: inline-flex; align-items: center; gap: 2px; }
 .legend-note button {
   margin-top: 3px; display: block; font: inherit; font-size: 11px; background: none; color: var(--accent);
   border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; cursor: pointer;
