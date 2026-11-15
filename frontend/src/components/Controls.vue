@@ -21,6 +21,10 @@ const fmt = (n) => n.toLocaleString('en-US')
 
 <template>
   <section class="controls">
+    <div class="view" role="group" aria-label="View">
+      <button :class="{ on: store.view === 'map' }" @click="store.setView('map')">Map</button>
+      <button :class="{ on: store.view === 'compare' }" @click="store.setView('compare')">Compare MODIS | VIIRS</button>
+    </div>
     <label>
       Dataset
       <select :value="store.dataset" @change="store.setDataset($event.target.value)">
@@ -55,14 +59,14 @@ const fmt = (n) => n.toLocaleString('en-US')
       </label>
     </div>
 
-    <label>
+    <label v-if="store.view === 'map'">
       Basemap
       <select :value="store.basemap" @change="store.setBasemap($event.target.value)">
         <option value="vector">Map (OpenFreeMap)</option>
         <option v-for="(t, key) in IMAGE_TYPES" :key="key" :value="key">{{ t.label }}</option>
       </select>
     </label>
-    <p v-if="store.basemap !== 'vector'" class="meta">
+    <p v-if="store.view === 'map' && store.basemap !== 'vector'" class="meta">
       <template v-if="store.imagery">
         {{ store.imagery.layer.label }} · {{ store.imagery.date }} (UTC, {{ store.day ? 'slider day' : 'end of range' }})
       </template>
@@ -78,6 +82,12 @@ const fmt = (n) => n.toLocaleString('en-US')
 
 <style scoped>
 .controls { display: flex; flex-direction: column; gap: 10px; }
+.view { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.view button {
+  flex: 1; border: none; background: none; padding: 6px 8px; border-radius: 6px;
+  font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+}
+.view button.on { background: var(--accent); color: #fff; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 select, input {
   font: inherit; font-size: 14px; color: var(--text); background: var(--bg);

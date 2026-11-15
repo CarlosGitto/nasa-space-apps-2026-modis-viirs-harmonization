@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted } from 'vue'
 import BurnCalendar from './components/BurnCalendar.vue'
+import CompareMap from './components/CompareMap.vue'
 import Controls from './components/Controls.vue'
 import FireMap from './components/FireMap.vue'
 import TimeSlider from './components/TimeSlider.vue'
@@ -22,7 +23,11 @@ onMounted(() => store.loadDatasets())
       <BurnCalendar />
     </aside>
     <main class="map-area">
-      <div class="map-slot"><FireMap /></div>
+      <div class="map-slot">
+        <!-- The main map stays alive (keeps its drawn zone); the curtain is built on demand. -->
+        <FireMap v-show="store.view === 'map'" />
+        <CompareMap v-if="store.view === 'compare'" />
+      </div>
       <TimeSlider />
     </main>
   </div>

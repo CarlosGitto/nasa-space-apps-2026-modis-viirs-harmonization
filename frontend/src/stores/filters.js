@@ -26,8 +26,20 @@ export const useFiltersStore = defineStore('filters', () => {
   const error = ref(null)
   const basemap = ref('vector') // 'vector' (OpenFreeMap) or an image type: 'truecolor' | 'fire'
   const day = ref(null) // one day within start..end picked on the time slider, or null = the whole range
+  const view = ref('map') // 'map' | 'compare' (MODIS | VIIRS curtain)
+  const camera = ref({ center: [0, 20], zoom: 1.5 }) // shared by both views
 
   const currentDataset = computed(() => datasets.value.find((d) => d.id === dataset.value) ?? null)
+
+  // Curtain: MODIS on the left, VIIRS on the right, same product (NRT or SP) as the chosen dataset.
+  const compareSides = computed(() => {
+    const product = currentDataset.value?.product ?? 'nrt'
+    const side = (sensor) => datasets.value.find((d) => d.id === `${sensor}_${product}`) ?? { id: `${sensor}_${product}`, available: false }
+    return { product, left: side('modis'), right: side('viirs') }
+  })
+
+  // The single day both curtain sides show imagery for: the slider's day, else the end of the range.
+  const imageryDate = computed(() => day.value ?? end.value)
 
   // Filters sent to the backend for the map. No zone -> no `zone` param -> whole world.
   // A day picked on the time slider narrows the range to that day.
@@ -93,10 +105,12 @@ export const useFiltersStore = defineStore('filters', () => {
   const setZone = (geometry) => { zone.value = geometry }
   const clearZone = () => { zone.value = null }
   const setBasemap = (type) => { basemap.value = type }
+  const setView = (v) => { view.value = v }
+  const setCamera = (center, zoom) => { camera.value = { center, zoom } }
 
   return {
-    datasets, dataset, start, end, zone, error, basemap, day,
-    currentDataset, queryParams, imagery,
-    loadDatasets, setDataset, setDates, setDay, setMonth, setZone, clearZone, setBasemap,
+    datasets, dataset, start, end, zone, error, basemap, day, view, camera,
+    currentDataset, queryParams, imagery, compareSides, imageryDate,
+    loadDatasets, setDataset, setDates, setDay, setMonth, setZone, clearZone, setBasemap, setView, setCamera,
   }
 })
