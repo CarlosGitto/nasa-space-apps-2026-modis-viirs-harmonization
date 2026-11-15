@@ -10,11 +10,13 @@ const minOf = (days, key) => (present(days, key).length ? Math.min(...present(da
 export function weatherKpis(days) {
   const rain = present(days, 'precipitation_mm')
   const last = days.at(-1)
+  // '–' alone when there is no value, never '– °C'.
+  const withUnit = (v, digits, unit) => (v === null ? '–' : `${num(v, digits)} ${unit}`)
   return [
-    { label: 'Temp. máx', value: `${num(maxOf(days, 't2m_max_c'), 1)} °C` },
-    { label: 'Humedad mín', value: `${num(minOf(days, 'rh_min_pct'))} %` },
-    { label: 'VPD máx', value: `${num(maxOf(days, 'vpd_max_kpa'), 1)} kPa` },
-    { label: 'Viento máx', value: `${num(maxOf(days, 'wind_speed_max_ms'), 1)} m/s` },
+    { label: 'Temp. máx', value: withUnit(maxOf(days, 't2m_max_c'), 1, '°C') },
+    { label: 'Humedad mín', value: withUnit(minOf(days, 'rh_min_pct'), 0, '%') },
+    { label: 'VPD máx', value: withUnit(maxOf(days, 'vpd_max_kpa'), 1, 'kPa') },
+    { label: 'Viento máx', value: withUnit(maxOf(days, 'wind_speed_max_ms'), 1, 'm/s') },
     { label: 'Lluvia total', value: rain.length ? `${num(rain.reduce((a, b) => a + b, 0), 1)} mm` : '–' },
     { label: 'Días sin lluvia', value: num(last?.days_since_rain), note: last ? `al ${last.date}` : '' },
   ]
@@ -38,4 +40,26 @@ export const daysBefore = (iso, days) => {
   const d = new Date(`${iso}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() - days)
   return d.toISOString().slice(0, 10)
+}
+
+const PRODUCTS = { merra2: 'MERRA-2 (temperatura, humedad, viento)', imerg: 'IMERG (lluvia)' }
+
+// "MERRA-2 (…) 2025-01-01 → 2025-01-31 · IMERG (lluvia) 2025-01-01 → 2025-03-03": the
+// days loaded for this place, per product.
+export const coverageLabel = (weather) =>
+  (weather?.cells ?? [])
+    .filter((c) => c.first_date)
+    .map((c) => `${PRODUCTS[c.product]}: ${c.first_date} → ${c.last_date}`)
+    .join(' · ')
+
+export const hasTemperature = (days) => days.some((d) => d.t2m_max_c !== null && d.t2m_max_c !== undefined)
+
+// Dates to jump to when the selected ones have no weather: the last `days` days that have
+// MERRA-2 (it lags, so they also have rain), else the last ones with any product.
+export function suggestedRange(weather, days = 30) {
+  const cells = (weather?.cells ?? []).filter((c) => c.last_date)
+  const cell = cells.find((c) => c.product === 'merra2') ?? cells[0]
+  if (!cell) return null
+  const start = daysBefore(cell.last_date, days - 1)
+  return { start: start > cell.first_date ? start : cell.first_date, end: cell.last_date }
 }

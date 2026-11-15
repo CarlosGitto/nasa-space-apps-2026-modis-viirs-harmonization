@@ -7,8 +7,9 @@ import { getHexagonPeriod, getHexagonWeather } from '../../api'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import { useFiltersStore } from '../../stores/filters'
 import MiniChart from './MiniChart.vue'
+import WeatherCoverage from './WeatherCoverage.vue'
 import { dailyChart, dayRange, WEATHER_COLORS as C } from './charts'
-import { cellsLabel, compass, daysBefore, merraMissing, weatherKpis } from './weather'
+import { cellsLabel, compass, daysBefore, hasTemperature, merraMissing, weatherKpis } from './weather'
 import './ficha.css'
 
 const MIN_DAYS = 30
@@ -58,6 +59,7 @@ const byDate = computed(() => Object.fromEntries((weather.value?.days ?? []).map
 const days = computed(() => dates.value.map((d) => byDate.value[d] ?? { date: d }))
 const series = (key) => days.value.map((d) => d[key] ?? null)
 const hasWeather = computed(() => (weather.value?.days ?? []).length > 0)
+const withTemperature = computed(() => hasTemperature(weather.value?.days ?? []))
 const mark = computed(() => store.day)
 
 const kpis = computed(() => weatherKpis(weather.value?.days ?? []))
@@ -111,8 +113,8 @@ const rainChart = computed(() => dailyChart(dates.value, [
     </p>
     <p v-else-if="error" class="error">{{ error }}</p>
     <template v-else-if="weather">
-      <p v-if="!hasWeather" class="muted">Sin datos meteorológicos para este lugar en estas fechas.</p>
-      <template v-else>
+      <WeatherCoverage :weather="weather" :days="weather.days" />
+      <template v-if="hasWeather">
         <dl class="kpis">
           <div v-for="k in kpis" :key="k.label">
             <dt>{{ k.label }}</dt>
@@ -126,14 +128,16 @@ const rainChart = computed(() => dailyChart(dates.value, [
           <MiniChart :option="fireChart" height="170px" />
           <p v-if="!period" class="muted small">Este hexágono no tiene detecciones: solo se muestra el VPD.</p>
         </section>
-        <section>
-          <h4>Temperatura</h4>
-          <MiniChart :option="temperatureChart" height="150px" />
-        </section>
-        <section>
-          <h4>Humedad y viento</h4>
-          <MiniChart :option="humidityWindChart" height="150px" />
-        </section>
+        <template v-if="withTemperature">
+          <section>
+            <h4>Temperatura</h4>
+            <MiniChart :option="temperatureChart" height="150px" />
+          </section>
+          <section>
+            <h4>Humedad y viento</h4>
+            <MiniChart :option="humidityWindChart" height="150px" />
+          </section>
+        </template>
         <section>
           <h4>Lluvia</h4>
           <MiniChart :option="rainChart" height="150px" />
@@ -142,7 +146,7 @@ const rainChart = computed(() => dailyChart(dates.value, [
         <p class="muted small">
           Celda más cercana: {{ cellsLabel(weather) }}. VPD = déficit de presión de vapor: cuánto seca
           el aire al combustible; sube con calor y baja humedad. Viento: medias horarias a 10 m, no ráfagas.
-          <template v-if="merraMissing(days)"> Los últimos días todavía no tienen MERRA-2 (se publica con semanas de demora).</template>
+          <template v-if="withTemperature && merraMissing(days)"> Los últimos días todavía no tienen MERRA-2 (se publica con semanas de demora).</template>
         </p>
       </template>
     </template>

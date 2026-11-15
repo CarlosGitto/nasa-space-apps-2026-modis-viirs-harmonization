@@ -471,6 +471,9 @@ def test_hexagon_weather_takes_the_nearest_cell_of_each_grid(client):
     assert cells["merra2"]["center"] == [-58.125, -34.5]
     assert cells["imerg"]["center"] == [-58.45, -34.55]  # not the one at -34.75
     assert cells["imerg"]["distance_km"] < 10
+    # What each product covers, so the UI can say which dates to pick.
+    assert (cells["merra2"]["first_date"], cells["merra2"]["last_date"]) == ("2026-10-01", "2026-11-11")
+    assert (cells["imerg"]["first_date"], cells["imerg"]["last_date"]) == ("2026-10-01", "2026-11-12")
     # Default range: 90 days up to the last day with any weather (IMERG, Nov 12).
     assert (body["start"], body["end"]) == ("2026-08-15", "2026-11-12")
     assert body["days"][0]["date"] == "2026-10-01" and body["days"][-1]["date"] == "2026-11-12"
