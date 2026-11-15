@@ -32,8 +32,10 @@ starts, with every dataset `available: false`.
 | `GET /health` | `{"status": "ok"}` |
 | `GET /datasets` | Every dataset with `available`, `rows` (wildfire detections), `start_date`, `end_date` |
 | `GET /datasets/{dataset}/detections` | GeoJSON points, most recent first, each with `product` and `is_static_source`. `limit` (default 5000, max 50000); `truncated: true` when more matched |
+| `GET /datasets/{dataset}/detections.csv` | The same detections as a CSV download (lat, lon, date, time, satellite, product, confidence, day/night, FRP, brightness, static flag, H3), oldest first, up to `limit` (default and max 1,000,000); header `X-Truncated` |
 | `GET /datasets/{dataset}/stats/daily` | Detections, day/night and FRP per date |
 | `GET /datasets/{dataset}/stats/monthly` | Detections and FRP per year and month (burn calendar) |
+| `GET /stats/harmonized/daily` | The harmonized series (MODIS units, 2000 onward) per date: same shape as `stats/daily` (fire calendar, day and month views). 404 until `make etl-harmonize` has run |
 | `GET /datasets/{dataset}/stats/hex` | GeoJSON H3 hexagons with detections and FRP, resolution `res` (0–6: 6 is the base cell, coarser levels are its parents). Cells crossing the antimeridian are dropped |
 | `GET /datasets/{dataset}/stats/grid` | GeoJSON polygons with detections and FRP per `cell` degrees (0.1–10) |
 | `GET /hexagons/{h3}` | One res-6 hexagon: identity (center, area, boundary, parents, static source) and its **whole-history profile** per sensor |

@@ -6,13 +6,15 @@ flares, industry, volcanoes) is reported apart as `static_detections`.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
 import duckdb
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pydantic import BaseModel, Field
 
 from app import db, power
@@ -291,10 +293,69 @@ def detections(
     return DetectionCollection(features=features, truncated=len(rows) > limit)
 
 
+CSV_MAX_ROWS = 1_000_000
+CSV_COLUMNS = (
+    "latitude", "longitude", "acq_date", "acq_datetime_utc", "satellite", "product", "confidence", "daynight",
+    "frp", "brightness", "is_static_source", "h3_r6",
+)
+
+
+@router.get("/datasets/{dataset}/detections.csv")
+def detections_csv(
+    dataset: DatasetId,
+    cur: Cursor,
+    filters: FiltersDep,
+    limit: Annotated[int, Query(ge=1, le=CSV_MAX_ROWS)] = CSV_MAX_ROWS,
+) -> Response:
+    """Every detection matching the filters as a CSV download (the hotspots of a calendar search), oldest first.
+    Static sources are kept and flagged. `X-Truncated: true` when more matched than `limit`."""
+    ds = _dataset(cur, dataset)
+    base = _relation(db.points_relation, cur, ds)
+    where, params = filters.where()
+    rows = cur.execute(
+        f"""
+        select latitude, longitude, acq_date, acq_datetime_utc, satellite, product, confidence, daynight,
+               frp, brightness, is_static_source, h3_h3_to_string(h3_r6)
+        from {base}
+        where {where}
+        order by acq_datetime_utc
+        limit ?
+        """,
+        [*params, limit + 1],
+    ).fetchall()
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(CSV_COLUMNS)
+    writer.writerows(rows[:limit])
+    span = "_".join(str(d) for d in (filters.start, filters.end) if d) or "all"
+    return Response(
+        out.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="hotspots_{dataset}_{span}.csv"',
+            "X-Truncated": "true" if len(rows) > limit else "false",
+        },
+    )
+
+
 @router.get("/datasets/{dataset}/stats/daily")
 def daily_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[DailyStat]:
     """Detections and FRP per acquisition date."""
-    base = _cells(cur, dataset, filters)
+    return _daily(cur, _cells(cur, dataset, filters), filters)
+
+
+@router.get("/stats/harmonized/daily")
+def harmonized_daily_stats(cur: Cursor, filters: FiltersDep) -> list[DailyStat]:
+    """Daily calendar of the harmonized series (MODIS before 2012-02, VIIRS S-NPP / k after), in MODIS units.
+    Detections are fractional. Same shape as /datasets/{dataset}/stats/daily."""
+    if not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    base = db.harmonized_series_relation(with_center=filters.bbox is not None or filters.zone is not None)
+    return _daily(cur, base, filters)
+
+
+def _daily(cur: duckdb.DuckDBPyConnection, base: str, filters: Filters) -> list[DailyStat]:
+    """Rows of `base` (acq_date, daynight, detections, frp_sum, static_detections) summed per date."""
     where, params = filters.where()
     rows = cur.execute(
         f"""

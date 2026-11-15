@@ -216,6 +216,17 @@ def test_detections_limit_sets_truncated(client):
     assert body["truncated"] is True
 
 
+def test_detections_csv(client):
+    r = client.get("/datasets/modis_sp/detections.csv", params={"start": "2026-11-01", "end": "2026-11-30"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    assert 'filename="hotspots_modis_sp_2026-11-01_2026-11-30.csv"' in r.headers["content-disposition"]
+    lines = r.text.strip().split("\n")
+    assert lines[0].split(",")[:4] == ["latitude", "longitude", "acq_date", "acq_datetime_utc"]
+    assert len(lines) - 1 == len(client.get("/datasets/modis_sp/detections?start=2026-11-01&end=2026-11-30").json()["features"])
+    assert r.headers["x-truncated"] == "false"
+    assert client.get("/datasets/modis_sp/detections.csv?limit=1").headers["x-truncated"] == "true"
+
+
 def test_harmonized_with_minimum_columns(client):
     body = client.get("/datasets/harmonized_nrt/detections").json()
     props = body["features"][0]["properties"]
@@ -685,6 +696,12 @@ def test_power_regional_boxes_are_between_2_and_10_degrees():
 def test_harmonized_calendar_needs_the_harmonized_layer(client):
     # the test lake has no fct_hexagon_harmonized_daily: clear 404, not a SQL error
     r = client.get("/stats/harmonized/monthly")
+    assert r.status_code == 404 and "not been built" in r.json()["detail"]
+
+
+def test_harmonized_daily_calendar_needs_the_harmonized_layer(client):
+    # the calendar's day and month views ask for the harmonized series per day: same clear 404 while it isn't built
+    r = client.get("/stats/harmonized/daily", params={"start": "2019-01-01", "end": "2019-12-31"})
     assert r.status_code == 404 and "not been built" in r.json()["detail"]
 
 
