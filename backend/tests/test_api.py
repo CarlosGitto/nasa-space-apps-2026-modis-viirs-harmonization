@@ -512,6 +512,41 @@ def test_hexagon_weather_rejects_bad_ranges(client, query):
     assert client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?{query}").status_code == 422
 
 
+# -------------------------------------------------------------- weather maps ---
+
+@pytest.mark.parametrize(("layer", "first"), [("temperature", [-58.125, -34.5, 30.0]), ("wind", [-58.125, -34.5, 5.0, 270.0])])
+def test_weather_map_merra2_layers(client, layer, first):
+    body = client.get(f"/weather/map?layer={layer}&date=2026-11-11").json()
+    assert (body["product"], body["cell"], body["cells"]) == ("merra2", [0.5, 0.625], [first])
+    assert body["coverage"] is None
+
+
+def test_weather_map_precipitation_leaves_dry_cells_out(client):
+    wet = client.get("/weather/map?layer=precipitation&date=2026-11-10").json()
+    assert (wet["unit"], wet["cell"]) == ("mm", [0.1, 0.1])
+    assert sorted(c[1] for c in wet["cells"]) == [-34.75, -34.55] and {c[2] for c in wet["cells"]} == {12.0}
+    assert {c[2] for c in client.get("/weather/map?layer=precipitation&date=2026-11-11").json()["cells"]} == {0.5}
+    assert client.get("/weather/map?layer=precipitation&date=2026-11-12").json()["cells"] == []  # 0 mm: dry, left out
+
+
+def test_weather_map_bbox_and_a_day_without_data_tells_what_exists(client):
+    outside = client.get("/weather/map?layer=temperature&date=2026-11-11&bbox=0,0,10,10").json()
+    assert outside["cells"] == []
+    later = client.get("/weather/map?layer=temperature&date=2026-11-12").json()  # MERRA-2 lags
+    assert later["cells"] == [] and later["coverage"] == {"first_date": "2026-10-01", "last_date": "2026-11-11"}
+
+
+def test_weather_map_averages_into_coarser_cells_when_the_area_is_big(monkeypatch, client):
+    monkeypatch.setattr(db, "MAX_MAP_CELLS", 2)  # three 0.1° cells (two IMERG ones 0.2° apart) no longer fit
+    body = client.get("/weather/map?layer=precipitation&date=2026-11-10").json()
+    assert body["cell"] == [0.2, 0.2] and {c[2] for c in body["cells"]} == {12.0}
+
+
+@pytest.mark.parametrize("query", ["layer=snow&date=2026-11-11", "layer=wind", "layer=wind&date=2026-11-11&bbox=1,2,3"])
+def test_weather_map_rejects_bad_input(client, query):
+    assert client.get(f"/weather/map?{query}").status_code == 422
+
+
 # ---------------------------------------------------------- a selection ---
 
 def test_selection_summary_includes_only_hexagons_with_history(client):
