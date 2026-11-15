@@ -15,10 +15,10 @@ One Cosmos task per model and test; every task writes through the single-writer
 # safe mode). This file builds its DAG through Cosmos, so this comment keeps it visible.
 
 import pendulum
-from cosmos import DbtDag, RenderConfig
+from cosmos import DbtDag
 
 from include.firms.config import FIRMS_RAW_SP
-from include.firms.dbt import execution_config, operator_args, profile_config, project_config
+from include.firms.dbt import execution_config, operator_args, profile_config, project_config, render_config
 
 firms_dbt_sp = DbtDag(
     dag_id="firms_dbt_sp",
@@ -29,7 +29,7 @@ firms_dbt_sp = DbtDag(
     project_config=project_config,
     profile_config=profile_config,
     execution_config=execution_config,
-    render_config=RenderConfig(select=["tag:sp+"]),  # its branch + everything downstream (gold)
+    render_config=render_config(["tag:sp+"]),  # its branch + everything downstream (gold)
     operator_args=dict(operator_args),
     default_args={"owner": "etl", "retries": 1},
     doc_md=__doc__,

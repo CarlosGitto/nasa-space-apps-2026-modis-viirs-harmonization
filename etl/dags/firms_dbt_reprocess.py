@@ -20,9 +20,9 @@ One Cosmos task per model and test; every task writes through the single-writer
 # safe mode). This file builds its DAG through Cosmos, so this comment keeps it visible.
 
 import pendulum
-from cosmos import DbtDag, RenderConfig
+from cosmos import DbtDag
 
-from include.firms.dbt import execution_config, operator_args, profile_config, project_config
+from include.firms.dbt import execution_config, operator_args, profile_config, project_config, render_config
 
 firms_dbt_reprocess = DbtDag(
     dag_id="firms_dbt_reprocess",
@@ -33,7 +33,7 @@ firms_dbt_reprocess = DbtDag(
     project_config=project_config,
     profile_config=profile_config,
     execution_config=execution_config,
-    render_config=RenderConfig(),  # every model: silver and gold
+    render_config=render_config(),  # every model: silver and gold
     # Incremental models rebuilt from scratch (Cosmos ignores it on test tasks).
     operator_args={**operator_args, "full_refresh": True},
     default_args={"owner": "etl", "retries": 1},
