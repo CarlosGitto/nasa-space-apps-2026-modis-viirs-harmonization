@@ -667,6 +667,8 @@ class WeatherCell(BaseModel):
     product: Literal["merra2", "imerg"]
     center: tuple[float, float]  # lon, lat
     distance_km: float  # from the hexagon's center
+    first_date: date | None  # days with data in this cell: what a range can ask for
+    last_date: date | None
 
 
 class HexagonWeatherDay(BaseModel):
@@ -730,12 +732,14 @@ def hexagon_weather(
     products = {db.WEATHER: "merra2", db.PRECIPITATION: "imerg"}
     found = {t: db.nearest_cell(cur, t, lat, lon) for t in tables}
     cells = {t: (c[0], c[1]) for t, c in found.items() if c}
+    coverage = {t: db.weather_coverage(cur, t, c) for t, c in cells.items()}
     info = [
-        WeatherCell(product=products[t], center=(c[1], c[0]), distance_km=round(c[2], 1))
+        WeatherCell(product=products[t], center=(c[1], c[0]), distance_km=round(c[2], 1),
+                    first_date=(coverage[t] or (None, None))[0], last_date=(coverage[t] or (None, None))[1])
         for t, c in sorted(found.items(), key=lambda kv: products[kv[0]]) if c
     ]
 
-    end = end or db.weather_last_date(cur, cells)
+    end = end or max((cov[1] for cov in coverage.values() if cov), default=None)
     if end is None:  # outside the loaded area
         return HexagonWeather(h3=h3_id, center=(lon, lat), start=None, end=None,
                               rain_day_mm=db.RAIN_DAY_MM, cells=info, days=[])

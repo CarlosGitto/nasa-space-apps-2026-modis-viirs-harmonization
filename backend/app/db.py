@@ -660,13 +660,12 @@ def nearest_cell(cur: duckdb.DuckDBPyConnection, table: str, lat: float, lon: fl
     ).fetchone()
 
 
-def weather_last_date(cur: duckdb.DuckDBPyConnection, cells: dict[str, tuple[float, float]]) -> date | None:
-    """Last day with data in any of the cells ({table: (cell_lat, cell_lon)})."""
-    last = [
-        cur.execute(f"select max(obs_date) from {t} where cell_lat = ? and cell_lon = ?", list(c)).fetchone()[0]
-        for t, c in cells.items()
-    ]
-    return max((d for d in last if d), default=None)
+def weather_coverage(cur: duckdb.DuckDBPyConnection, table: str, cell: tuple[float, float]) -> tuple[date, date] | None:
+    """(first, last) day with data in one cell of a weather table."""
+    first, last = cur.execute(
+        f"select min(obs_date), max(obs_date) from {table} where cell_lat = ? and cell_lon = ?", list(cell)
+    ).fetchone()
+    return (first, last) if first else None
 
 
 def weather_days(cur: duckdb.DuckDBPyConnection, cell: tuple[float, float], start: date, end: date) -> dict[date, dict]:

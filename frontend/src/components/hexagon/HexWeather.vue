@@ -5,8 +5,9 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getHexagonWeather } from '../../api'
 import MiniChart from './MiniChart.vue'
+import WeatherCoverage from './WeatherCoverage.vue'
 import { weatherChart } from './charts'
-import { cellsLabel, merraMissing, weatherKpis } from './weather'
+import { cellsLabel, hasTemperature, merraMissing, weatherKpis } from './weather'
 import './ficha.css'
 
 const props = defineProps({
@@ -40,7 +41,7 @@ onBeforeUnmount(() => controller?.abort())
 const days = computed(() => weather.value?.days ?? [])
 const kpis = computed(() => weatherKpis(days.value))
 const cells = computed(() => cellsLabel(weather.value))
-const lagging = computed(() => merraMissing(days.value))
+const lagging = computed(() => hasTemperature(days.value) && merraMissing(days.value))
 const chart = computed(() => (days.value.length ? weatherChart(days.value) : null))
 </script>
 
@@ -51,8 +52,8 @@ const chart = computed(() => (days.value.length ? weatherChart(days.value) : nul
     <p v-else-if="error?.startsWith('no weather')" class="muted">Todavía no hay datos meteorológicos cargados.</p>
     <p v-else-if="error" class="error">{{ error }}</p>
     <template v-else-if="weather">
-      <p v-if="!days.length" class="muted">Sin datos meteorológicos para este lugar en estas fechas.</p>
-      <template v-else>
+      <WeatherCoverage :weather="weather" :days="days" />
+      <template v-if="days.length">
         <dl class="kpis">
           <div v-for="k in kpis" :key="k.label">
             <dt>{{ k.label }}</dt>
