@@ -1,5 +1,5 @@
 <script setup>
-// Clima tab: the hexagon's weather next to its fire, day by day (NASA MERRA-2 + GPM IMERG).
+// Clima tab: the hexagon's weather next to its fire, day by day (NASA POWER, on demand).
 // Covers the selected dates, widened to at least MIN_DAYS so a short range still shows the
 // dry spell before a fire; the time slider's day is marked on every chart.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -105,7 +105,7 @@ const rainChart = computed(() => dailyChart(dates.value, [
   <article class="ficha">
     <header class="identity">
       <code>{{ h3 }}</code>
-      <span class="muted">{{ range.start }} → {{ range.end }} · días UTC · NASA MERRA-2 + GPM IMERG</span>
+      <span class="muted">{{ range.start }} → {{ range.end }} · días UTC · NASA POWER (MERRA-2 / GEOS-IT)</span>
     </header>
     <p v-if="loading && !weather" class="muted">Cargando…</p>
     <p v-else-if="error?.startsWith('no weather')" class="muted">
@@ -149,7 +149,7 @@ const rainChart = computed(() => dailyChart(dates.value, [
         <p class="muted small">
           Celda más cercana: {{ cellsLabel(weather) }}. VPD = déficit de presión de vapor: cuánto seca
           el aire al combustible; sube con calor y baja humedad. Viento: medias horarias a 10 m, no ráfagas.
-          <template v-if="withTemperature && merraMissing(days)"> Los últimos días todavía no tienen MERRA-2 (se publica con semanas de demora).</template>
+          <template v-if="withTemperature && merraMissing(days)"> Los últimos días todavía no tienen todos los valores (NASA POWER los completa en ~2 días).</template>
         </p>
       </template>
     </template>

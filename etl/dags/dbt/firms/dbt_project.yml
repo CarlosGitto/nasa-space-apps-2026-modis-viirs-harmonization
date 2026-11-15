@@ -8,7 +8,7 @@ macro-paths: ["macros"]
 # Layers (all in the DuckLake attached as `lake`, see profiles.yml):
 #
 #   bronze   lake.firms_raw.*        dlt, append-only (sources.yml)
-#            lake.weather_raw.*      dlt, append-only: NASA Earthdata weather grids
+#            lake.weather_raw.*      dlt, append-only: NASA POWER daily weather near fires
 #   silver   staging/                one view per bronze table: cleaning, types,
 #                                    dq_issue, origin columns, hexagon (h3_r6)
 #            intermediate/           one table per product (SP, NRT): satellites
@@ -17,8 +17,8 @@ macro-paths: ["macros"]
 #   gold     gold/                   everything about the hexagon, the canonical
 #                                    entity: dim_hexagon, fct_hexagon_detections
 #                                    (detail), fct_hexagon_daily (metrics)
-#                                    plus weather per grid cell and day:
-#                                    fct_weather_daily (MERRA-2), fct_precipitation_daily (IMERG)
+#                                    plus weather per grid cell and day near fires:
+#                                    fct_weather_daily (NASA POWER)
 #
 # Incremental models recompute only the acquisition months touched by new loads
 # (macros/incremental.sql). `dbt build --full-refresh` rebuilds everything.

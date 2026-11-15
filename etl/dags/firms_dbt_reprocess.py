@@ -2,13 +2,13 @@
 ## FIRMS dbt — reprocess
 
 Rebuilds every dbt model from the raw data **already in the lake**, without
-downloading anything from FIRMS or Earthdata: `dbt build --full-refresh`, model
+downloading anything from FIRMS or NASA POWER: `dbt build --full-refresh`, model
 by model in dependency order, so each change cascades downstream:
 
 bronze `firms_raw` (untouched) → silver (`stg_firms__*`, `int_detections_*`,
 `int_static_sources`) → gold (`fct_hexagon_*`, `dim_hexagon`); and likewise
-bronze `weather_raw` → `stg_weather__*`, `int_weather_*` → `fct_weather_daily`,
-`fct_precipitation_daily`.
+bronze `weather_raw` → `stg_weather__power_daily`, `int_weather_power_daily` →
+`fct_weather_daily`.
 
 Use it after changing a model or a macro (new column, new rule, a fix), or when
 silver/gold look inconsistent. Manual only (`make etl-reprocess` or ▶ in the UI);

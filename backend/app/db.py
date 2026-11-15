@@ -78,9 +78,8 @@ HEXAGONS = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.dim_hexagon"
 MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_monthly"
 PROFILE = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_profile"
 HEXAGON_TABLES = ("fct_hexagon_detections", "fct_hexagon_daily", "dim_hexagon")
-# Weather (NASA Earthdata), keyed by grid cell and UTC day: see data/README.md.
-WEATHER = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_weather_daily"  # MERRA-2
-PRECIPITATION = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_precipitation_daily"  # GPM IMERG
+# Weather near fires (NASA POWER daily), keyed by grid cell and UTC day: see data/README.md.
+WEATHER = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_weather_daily"  # NASA POWER, near fires (map layers)
 
 # Harmonized datasets (own relation) must have these columns (same names in the lake).
 REQUIRED_COLUMNS = ("latitude", "longitude", "acq_date", "acq_datetime_utc", "frp", "daynight")
@@ -611,101 +610,22 @@ def selection_detections(
 
 
 # ------------------------------------------------------------------ weather ---
-# Weather gold is keyed by grid cell (its center) and UTC day, not by hexagon: a
-# hexagon takes the cell of each grid whose center is nearest to its own.
+# The hexagon panel asks NASA POWER for its point on demand (app/power.py); the lake's
+# weather (gold fct_weather_daily, near fires) only feeds the map layers below.
 
 # A day with at least this much precipitation (mm) counts as a rain day.
 RAIN_DAY_MM = 1.0
-# Half-width (degrees) of the box searched for the nearest cell: wider than half
-# the coarsest grid cell (MERRA-2, 0.5° x 0.625°), so the nearest is always inside.
-CELL_SEARCH_DEG = 0.5
-
-WEATHER_COLUMNS = (
-    "t2m_max_c", "t2m_min_c", "t2m_mean_c", "dewpoint_mean_c", "rh_min_pct", "rh_mean_pct",
-    "vpd_max_kpa", "vpd_mean_kpa", "wind_speed_max_ms", "wind_speed_mean_ms", "wind_dir_mean_deg", "hours",
-)
 
 
-def weather_tables(cur: duckdb.DuckDBPyConnection) -> set[str]:
-    """Which weather gold relations the lake has (catalog lookup, no data scan)."""
-    if not _attached:
-        return set()
-    return {WEATHER, PRECIPITATION} & {f"{LAKE_ALIAS}.{GOLD_SCHEMA}.{t}" for t in _tables(cur)}
+def weather_ready(cur: duckdb.DuckDBPyConnection) -> bool:
+    """Whether the lake has the weather gold relation (catalog lookup, no data scan)."""
+    return _attached and "fct_weather_daily" in _tables(cur)
 
 
 def hexagon_center(cur: duckdb.DuckDBPyConnection, key: int) -> tuple[float, float]:
     """(lat, lon) of a hexagon's center: computed by H3, the hexagon needn't have detections."""
     lat, lon = cur.execute("select h3_cell_to_latlng(?)[1], h3_cell_to_latlng(?)[2]", [key, key]).fetchone()
     return lat, lon
-
-
-def nearest_cell(cur: duckdb.DuckDBPyConnection, table: str, lat: float, lon: float) -> tuple[float, float, float] | None:
-    """(cell_lat, cell_lon, distance_km) of the cell of `table` nearest to a point, or None
-    if the lake has no cell around it (outside the loaded area).
-
-    The BETWEENs let DuckDB skip files by their min/max statistics; the ordering is
-    an equirectangular distance, exact enough at this scale.
-    """
-    d = CELL_SEARCH_DEG
-    return cur.execute(
-        f"""
-        select cell_lat, cell_lon,
-               111.2 * sqrt(power(cell_lat - ?, 2) + power((cell_lon - ?) * cos(radians(?)), 2)) as km
-        from (select distinct cell_lat, cell_lon from {table}
-              where cell_lat between ? and ? and cell_lon between ? and ?)
-        order by km
-        limit 1
-        """,
-        [lat, lon, lat, lat - d, lat + d, lon - d, lon + d],
-    ).fetchone()
-
-
-def weather_coverage(cur: duckdb.DuckDBPyConnection, table: str, cell: tuple[float, float]) -> tuple[date, date] | None:
-    """(first, last) day with data in one cell of a weather table."""
-    first, last = cur.execute(
-        f"select min(obs_date), max(obs_date) from {table} where cell_lat = ? and cell_lon = ?", list(cell)
-    ).fetchone()
-    return (first, last) if first else None
-
-
-def weather_days(cur: duckdb.DuckDBPyConnection, cell: tuple[float, float], start: date, end: date) -> dict[date, dict]:
-    """MERRA-2 daily rows of one cell in [start, end], by date."""
-    rel = cur.execute(
-        f"select obs_date, {', '.join(WEATHER_COLUMNS)} from {WEATHER} "
-        "where cell_lat = ? and cell_lon = ? and obs_date between ? and ? order by obs_date",
-        [*cell, start, end],
-    )
-    return {row[0]: dict(zip(WEATHER_COLUMNS, row[1:])) for row in rel.fetchall()}
-
-
-def precipitation_days(
-    cur: duckdb.DuckDBPyConnection, cell: tuple[float, float], start: date, end: date
-) -> dict[date, dict]:
-    """IMERG daily rows of one cell in [start, end], by date, with the accumulations:
-    precipitation over the last 7 / 30 days (that day included) and days since the
-    last rain day (>= RAIN_DAY_MM; null if none in the cell's history).
-
-    Computed over the cell's whole history up to `end` (hundreds of rows), so the
-    first days of the range see the rain before it. Missing days count as no rain.
-    """
-    rel = cur.execute(
-        f"""
-        with series as (
-            select obs_date, precipitation_mm, imerg_run,
-                   sum(precipitation_mm) over (order by obs_date range between interval 6 days preceding and current row) as p7,
-                   sum(precipitation_mm) over (order by obs_date range between interval 29 days preceding and current row) as p30,
-                   max(obs_date) filter (where precipitation_mm >= ?) over (order by obs_date) as last_rain
-            from {PRECIPITATION}
-            where cell_lat = ? and cell_lon = ? and obs_date <= ?
-        )
-        select obs_date, precipitation_mm, p7, p30, obs_date - last_rain, imerg_run
-        from series where obs_date >= ?
-        order by obs_date
-        """,
-        [RAIN_DAY_MM, *cell, end, start],
-    )
-    cols = ("precipitation_mm", "precipitation_7d_mm", "precipitation_30d_mm", "days_since_rain", "imerg_run")
-    return {row[0]: dict(zip(cols, row[1:])) for row in rel.fetchall()}
 
 
 # ------------------------------------------------------------- weather maps ---
@@ -717,21 +637,22 @@ class WeatherLayer:
     table: str
     value: str  # column drawn (color)
     direction: str | None  # column with a direction in degrees (wind arrows), else None
-    product: str  # merra2 | imerg
     cell: tuple[float, float]  # native cell size (lat, lon) in degrees
     min_value: float | None  # cells below it are left out (dry cells for rain), else None
 
 
+# All from NASA POWER daily, on the MERRA-2 grid (0.5° x 0.625°).
 WEATHER_LAYERS = {
     # Daily maximum: the hottest hour is the one that matters for fire.
-    "temperature": WeatherLayer(WEATHER, "t2m_max_c", None, "merra2", (0.5, 0.625), None),
-    # Daily mean wind vector: speed and the direction it comes from.
-    "wind": WeatherLayer(WEATHER, "wind_speed_mean_ms", "wind_dir_mean_deg", "merra2", (0.5, 0.625), None),
-    "precipitation": WeatherLayer(PRECIPITATION, "precipitation_mm", None, "imerg", (0.1, 0.1), 0.1),
+    "temperature": WeatherLayer(WEATHER, "t2m_max_c", None, (0.5, 0.625), None),
+    # Daily mean wind: speed and the direction it comes from.
+    "wind": WeatherLayer(WEATHER, "wind_speed_mean_ms", "wind_dir_mean_deg", (0.5, 0.625), None),
+    # Daily total; dry cells (< 0.1 mm) are left out.
+    "precipitation": WeatherLayer(WEATHER, "precipitation_mm", None, (0.5, 0.625), 0.1),
 }
 
-# At most about this many cells per response: finer grids are averaged into coarser
-# cells (IMERG, 0.1°: ~330 k cells per day over South America).
+# At most about this many cells per response: zoomed far out over a big area, cells are
+# averaged into coarser ones.
 MAX_MAP_CELLS = 20_000
 MAP_STEPS = (0.2, 0.25, 0.5, 1.0, 2.0)
 

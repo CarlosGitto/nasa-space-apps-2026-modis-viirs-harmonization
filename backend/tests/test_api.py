@@ -100,24 +100,17 @@ PROFILE = """
 """
 
 
-# Weather gold (etl/dags/dbt/firms/models/gold/fct_weather_daily.sql, fct_precipitation_daily.sql):
-# one MERRA-2 cell (0.5° x 0.625°) and two IMERG cells (0.1°) near Buenos Aires.
-# MERRA-2 ends Nov 11 (it lags); IMERG goes on to Nov 12, with rain on Oct 20 and Nov 10.
+# Weather gold (etl/dags/dbt/firms/models/gold/fct_weather_daily.sql, NASA POWER near fires):
+# two cells of the MERRA-2 grid near Buenos Aires, October to November 11 (POWER lags ~2 days
+# in reality; here it simply ends there). Rain on Nov 10 in one cell, 0.05 mm (dry) in the other.
 WEATHER = """
-    select -34.5 as cell_lat, -58.125 as cell_lon, d::date as obs_date, date_trunc('month', d)::date as obs_month,
-           30.0 as t2m_max_c, 15.0 as t2m_min_c, 22.0 as t2m_mean_c, 8.0 as dewpoint_mean_c,
-           25.0 as rh_min_pct, 50.0 as rh_mean_pct, 3.1 as vpd_max_kpa, 1.4 as vpd_mean_kpa,
-           9.0 as wind_speed_max_ms, 5.0 as wind_speed_mean_ms, 270.0 as wind_dir_mean_deg, 24 as hours,
-           '1' as last_load_id
-    from range(date '2026-10-01', date '2026-11-12', interval 1 day) t(d)
-"""
-
-PRECIPITATION = """
-    select cell_lat, -58.45 as cell_lon, d::date as obs_date, date_trunc('month', d)::date as obs_month,
-           case when d::date in (date '2026-10-20', date '2026-11-10') then 12.0
-                when d::date = date '2026-11-11' then 0.5 else 0.0 end as precipitation_mm,
-           case when d::date < date '2026-11-01' then 'final' else 'late' end as imerg_run, '1' as last_load_id
-    from range(date '2026-10-01', date '2026-11-13', interval 1 day) t(d), (values (-34.55), (-34.75)) c(cell_lat)
+    select cell_lat, cell_lon, d::date as obs_date, date_trunc('month', d)::date as obs_month,
+           30.0 as t2m_max_c,
+           case when d::date = date '2026-11-10' and cell_lat = -34.5 then 12.0
+                when d::date = date '2026-11-10' then 0.05 else 0.0 end as precipitation_mm,
+           5.0 as wind_speed_mean_ms, 270.0 as wind_dir_mean_deg, '1' as last_load_id
+    from range(date '2026-10-01', date '2026-11-12', interval 1 day) t(d),
+         (values (-34.5::double, -58.125::double), (-35.0::double, -58.125::double)) c(cell_lat, cell_lon)
 """
 
 
@@ -134,7 +127,6 @@ def _build_lake(root: Path) -> None:
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_monthly AS {MONTHLY}")
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_profile AS {PROFILE}")
     con.execute(f"CREATE TABLE lake.gold.fct_weather_daily AS {WEATHER}")
-    con.execute(f"CREATE TABLE lake.gold.fct_precipitation_daily AS {PRECIPITATION}")
     # Harmonized gold with only the minimum contract: no satellite/confidence/brightness, no dlt columns.
     con.execute(
         """
@@ -464,32 +456,50 @@ def test_hexagon_without_data_is_404(client):
 
 
 # ------------------------------------------------------ weather of a hexagon ---
+# NASA POWER is faked (app.power._fetch): no network in tests.
 
-def test_hexagon_weather_takes_the_nearest_cell_of_each_grid(client):
-    body = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather").json()
-    cells = {c["product"]: c for c in body["cells"]}
-    assert cells["merra2"]["center"] == [-58.125, -34.5]
-    assert cells["imerg"]["center"] == [-58.45, -34.55]  # not the one at -34.75
-    assert cells["imerg"]["distance_km"] < 10
-    # What each product covers, so the UI can say which dates to pick.
-    assert (cells["merra2"]["first_date"], cells["merra2"]["last_date"]) == ("2026-10-01", "2026-11-11")
-    assert (cells["imerg"]["first_date"], cells["imerg"]["last_date"]) == ("2026-10-01", "2026-11-12")
-    # Default range: 90 days up to the last day with any weather (IMERG, Nov 12).
-    assert (body["start"], body["end"]) == ("2026-08-15", "2026-11-12")
-    assert body["days"][0]["date"] == "2026-10-01" and body["days"][-1]["date"] == "2026-11-12"
+def _power_day(day, rain=0.0):
+    return {"t2m_max_c": 30.0, "t2m_min_c": 15.0, "t2m_mean_c": 22.0, "dewpoint_mean_c": 8.0, "rh_mean_pct": 45.0,
+            "wind_speed_mean_ms": 5.0, "wind_speed_max_ms": 9.0, "wind_dir_mean_deg": 270.0, "precipitation_mm": rain}
 
 
-def test_hexagon_weather_merges_both_products_by_day(client):
-    days = {d["date"]: d for d in client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather").json()["days"]}
-    nov11, nov12 = days["2026-11-11"], days["2026-11-12"]
-    assert (nov11["vpd_max_kpa"], nov11["wind_dir_mean_deg"], nov11["imerg_run"]) == (3.1, 270.0, "late")
-    assert nov12["t2m_max_c"] is None and nov12["precipitation_mm"] == 0.0  # MERRA-2 lags, IMERG doesn't
+@pytest.fixture
+def fake_power(tmp_path, monkeypatch):
+    """POWER answering a daily series (rain 12 mm on Oct 20 and Nov 10), counting requests."""
+    from datetime import date, timedelta
+
+    from app import power
+
+    monkeypatch.setenv("POWER_CACHE_PATH", str(tmp_path / "power.sqlite"))
+    monkeypatch.setattr(power.time, "sleep", lambda s: None)
+    calls = []
+
+    def fetch(lat, lon, start, end):
+        calls.append((lat, lon, start, end))
+        rain = {date(2026, 10, 20): 12.0, date(2026, 11, 10): 12.0, date(2026, 11, 11): 0.5}
+        return {start + timedelta(days=i): _power_day(start + timedelta(days=i), rain.get(start + timedelta(days=i), 0.0))
+                for i in range((end - start).days + 1)}
+
+    monkeypatch.setattr(power, "_fetch", fetch)
+    return calls
 
 
-def test_hexagon_weather_accumulations_see_rain_before_the_range(client):
-    url = f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-08&end=2026-11-12"
-    days = {d["date"]: d for d in client.get(url).json()["days"]}
-    assert list(days) == ["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]
+def test_hexagon_weather_comes_from_power_for_the_hexagon_cell(client, fake_power):
+    body = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-08&end=2026-11-12").json()
+    (cell,) = body["cells"]
+    assert cell["product"] == "power" and cell["center"] == [-58.125, -34.5] and cell["distance_km"] < 40
+    assert [d["date"] for d in body["days"]] == ["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]
+    day = body["days"][0]
+    assert (day["t2m_max_c"], day["wind_dir_mean_deg"], day["wind_speed_max_ms"]) == (30.0, 270.0, 9.0)
+    # Derived: VPD and minimum RH from the max temperature and the dew point (Magnus).
+    assert day["vpd_max_kpa"] == pytest.approx(4.24 - 1.07, abs=0.02) and 20 < day["rh_min_pct"] < 30
+    # One POWER request, snapped to the cell, with 60 days of history for the accumulations.
+    assert len(fake_power) == 1 and fake_power[0][:2] == (-34.5, -58.125)
+    assert str(fake_power[0][2]) == "2026-09-09" and str(fake_power[0][3]) == "2026-11-12"
+
+
+def test_hexagon_weather_accumulations_see_rain_before_the_range(client, fake_power):
+    days = {d["date"]: d for d in client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-08&end=2026-11-12").json()["days"]}
     assert days["2026-11-09"]["days_since_rain"] == 20  # rain on Oct 20, before the range
     assert days["2026-11-10"]["days_since_rain"] == 0
     assert days["2026-11-12"]["days_since_rain"] == 2  # 0.5 mm on Nov 11 is not a rain day
@@ -497,49 +507,68 @@ def test_hexagon_weather_accumulations_see_rain_before_the_range(client):
     assert days["2026-11-12"]["precipitation_30d_mm"] == 24.5
 
 
-def test_hexagon_weather_outside_the_loaded_area_is_empty(client):
-    body = client.get(f"/hexagons/{_cell(0.0, 0.0)}/weather").json()
-    assert (body["cells"], body["days"], body["start"]) == ([], [], None)
+def test_hexagon_weather_is_cached_per_power_cell(client, fake_power):
+    url = "/hexagons/{}/weather?start=2026-10-01&end=2026-10-31"
+    client.get(url.format(_cell(*BUENOS_AIRES)))
+    client.get(url.format(_cell(*BUENOS_AIRES)))  # same hexagon again
+    client.get(url.format(_cell(-34.52, -58.2)))  # a neighbor hexagon in the same POWER cell
+    assert len(fake_power) == 1  # POWER asked once: "requesting the same location" again is avoided
 
 
-def test_hexagon_weather_before_any_weather_load_is_404(client, monkeypatch):
-    monkeypatch.setattr(db, "weather_tables", lambda cur: set())
-    assert client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather").status_code == 404
+def test_hexagon_weather_works_anywhere_without_fires(client, fake_power):
+    body = client.get(f"/hexagons/{_cell(0.0, 0.0)}/weather?start=2026-11-01&end=2026-11-02").json()
+    assert len(body["days"]) == 2 and body["cells"][0]["center"] == [0.0, 0.0]
+
+
+def test_hexagon_weather_when_power_is_down_is_503(client, monkeypatch, tmp_path):
+    from app import power
+
+    monkeypatch.setenv("POWER_CACHE_PATH", str(tmp_path / "power.sqlite"))
+
+    def down(*args):
+        raise power.PowerUnavailable("NASA POWER answered 429")
+
+    monkeypatch.setattr(power, "_fetch", down)
+    r = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-01&end=2026-11-02")
+    assert r.status_code == 503 and "429" in r.json()["detail"]
 
 
 @pytest.mark.parametrize("query", ["start=2026-11-12&end=2026-11-11", "start=2020-01-01&end=2026-11-11"])
-def test_hexagon_weather_rejects_bad_ranges(client, query):
+def test_hexagon_weather_rejects_bad_ranges(client, fake_power, query):
     assert client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?{query}").status_code == 422
 
 
 # -------------------------------------------------------------- weather maps ---
 
-@pytest.mark.parametrize(("layer", "first"), [("temperature", [-58.125, -34.5, 30.0]), ("wind", [-58.125, -34.5, 5.0, 270.0])])
-def test_weather_map_merra2_layers(client, layer, first):
+@pytest.mark.parametrize(("layer", "first"), [("temperature", [-58.125, -35.0, 30.0]), ("wind", [-58.125, -35.0, 5.0, 270.0])])
+def test_weather_map_layers(client, layer, first):
     body = client.get(f"/weather/map?layer={layer}&date=2026-11-11").json()
-    assert (body["product"], body["cell"], body["cells"]) == ("merra2", [0.5, 0.625], [first])
+    assert (body["product"], body["cell"]) == ("power", [0.5, 0.625])
+    assert sorted(body["cells"])[0] == first and len(body["cells"]) == 2
     assert body["coverage"] is None
 
 
 def test_weather_map_precipitation_leaves_dry_cells_out(client):
     wet = client.get("/weather/map?layer=precipitation&date=2026-11-10").json()
-    assert (wet["unit"], wet["cell"]) == ("mm", [0.1, 0.1])
-    assert sorted(c[1] for c in wet["cells"]) == [-34.75, -34.55] and {c[2] for c in wet["cells"]} == {12.0}
-    assert {c[2] for c in client.get("/weather/map?layer=precipitation&date=2026-11-11").json()["cells"]} == {0.5}
-    assert client.get("/weather/map?layer=precipitation&date=2026-11-12").json()["cells"] == []  # 0 mm: dry, left out
+    assert wet["unit"] == "mm" and wet["cells"] == [[-58.125, -34.5, 12.0]]  # 0.05 mm in the other cell: dry
+    assert client.get("/weather/map?layer=precipitation&date=2026-11-09").json()["cells"] == []
 
 
 def test_weather_map_bbox_and_a_day_without_data_tells_what_exists(client):
-    outside = client.get("/weather/map?layer=temperature&date=2026-11-11&bbox=0,0,10,10").json()
-    assert outside["cells"] == []
-    later = client.get("/weather/map?layer=temperature&date=2026-11-12").json()  # MERRA-2 lags
+    assert client.get("/weather/map?layer=temperature&date=2026-11-11&bbox=0,0,10,10").json()["cells"] == []
+    later = client.get("/weather/map?layer=temperature&date=2026-11-14").json()
     assert later["cells"] == [] and later["coverage"] == {"first_date": "2026-10-01", "last_date": "2026-11-11"}
 
 
 def test_weather_map_averages_into_coarser_cells_when_the_area_is_big(monkeypatch, client):
-    monkeypatch.setattr(db, "MAX_MAP_CELLS", 2)  # three 0.1° cells (two IMERG ones 0.2° apart) no longer fit
-    body = client.get("/weather/map?layer=precipitation&date=2026-11-10").json()
-    assert body["cell"] == [0.2, 0.2] and {c[2] for c in body["cells"]} == {12.0}
+    monkeypatch.setattr(db, "MAX_MAP_CELLS", 1)  # the two cells no longer fit
+    body = client.get("/weather/map?layer=temperature&date=2026-11-10").json()
+    assert body["cell"][0] > 0.5 and body["cells"][0][2] == 30.0
+
+
+def test_weather_map_before_any_weather_load_is_404(client, monkeypatch):
+    monkeypatch.setattr(db, "weather_ready", lambda cur: False)
+    assert client.get("/weather/map?layer=wind&date=2026-11-11").status_code == 404
 
 
 @pytest.mark.parametrize("query", ["layer=snow&date=2026-11-11", "layer=wind", "layer=wind&date=2026-11-11&bbox=1,2,3"])

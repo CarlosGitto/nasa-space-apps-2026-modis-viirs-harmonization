@@ -190,73 +190,30 @@ models:
       - {name: static_share, data_type: double}
       - {name: satellites, data_type: bigint}
 
-  # ---------------- weather (NASA Earthdata): keyed by grid cell, not by hexagon ----------------
-  - name: int_weather_merra2_hourly
-    description: MERRA-2 hourly weather per grid cell, latest version per cell and hour. Invalid rows kept, flagged in dq_issue.
-    data_tests:
-      - unique_combination:
-          arguments: {columns: [cell_lat, cell_lon, time_utc], recent_only: true, month_col: obs_month}
-    columns:
-      - name: dq_issue
-        data_tests:
-          - accepted_values:
-              arguments: {values: [missing_key, missing_value, invalid_temperature]}
-
-  - name: int_weather_imerg_daily
-    description: GPM IMERG daily precipitation per grid cell, Final where published, else Late (imerg_run).
+  # ---------------- weather (NASA POWER): keyed by grid cell, not by hexagon ----------------
+  - name: int_weather_power_daily
+    description: NASA POWER daily weather per grid cell and UTC day near fires, latest version. Invalid rows kept, flagged in dq_issue.
     data_tests:
       - unique_combination:
           arguments: {columns: [cell_lat, cell_lon, obs_date], recent_only: true, month_col: obs_month}
     columns:
-      - name: imerg_run
-        data_tests: [{accepted_values: {arguments: {values: [final, late]}}}]
       - name: dq_issue
         data_tests:
           - accepted_values:
-              arguments: {values: [missing_key, missing_value, invalid_precipitation]}
+              arguments: {values: [missing_key, invalid_temperature, invalid_precipitation, invalid_wind]}
 
   - name: fct_weather_daily
     description: >
-      Daily weather of a MERRA-2 grid cell (UTC day): temperature, humidity, vapour
-      pressure deficit and wind. Keyed by the cell center; the backend picks the cell
-      nearest to a hexagon.
-    data_tests:
-      - unique_combination:
-          arguments:
-            columns: [cell_lat, cell_lon, obs_date]
-            recent_only: true
-            load_col: last_load_id
-            month_col: obs_month
+      Daily weather of a grid cell near fires (NASA POWER, MERRA-2 grid, UTC day): what
+      the map's weather layers draw. Keyed by the cell center.
     # Contract: the backend relies on these columns and types.
     columns:
-      - {name: cell_lat, data_type: double, description: "Cell center latitude (MERRA-2 grid, 0.5°).", data_tests: [not_null]}
-      - {name: cell_lon, data_type: double, description: "Cell center longitude (MERRA-2 grid, 0.625°).", data_tests: [not_null]}
-      - {name: obs_date, data_type: date, description: UTC day, like FIRMS acq_date., data_tests: [not_null]}
+      - {name: cell_lat, data_type: double, description: "Cell center latitude (0.5°)."}
+      - {name: cell_lon, data_type: double, description: "Cell center longitude (0.625°)."}
+      - {name: obs_date, data_type: date, description: UTC day, like FIRMS acq_date.}
       - {name: obs_month, data_type: date}
       - {name: t2m_max_c, data_type: double, description: Maximum 2 m air temperature (°C).}
-      - {name: t2m_min_c, data_type: double}
-      - {name: t2m_mean_c, data_type: double}
-      - {name: dewpoint_mean_c, data_type: double, description: Mean 2 m dew point (°C).}
-      - {name: rh_min_pct, data_type: double, description: Minimum relative humidity (%), from temperature and dew point.}
-      - {name: rh_mean_pct, data_type: double}
-      - {name: vpd_max_kpa, data_type: double, description: Maximum vapour pressure deficit (kPa), the air's drying power.}
-      - {name: vpd_mean_kpa, data_type: double}
-      - {name: wind_speed_max_ms, data_type: double, description: Maximum hourly-mean 10 m wind speed (m/s). Not gusts.}
-      - {name: wind_speed_mean_ms, data_type: double}
-      - {name: wind_dir_mean_deg, data_type: double, description: "Direction of the mean wind vector, where it comes from (0 = north, 90 = east)."}
-      - {name: hours, data_type: bigint, description: Hours behind the day (24 = complete).}
-      - {name: last_load_id, data_type: varchar}
-
-  - name: fct_precipitation_daily
-    description: >
-      Daily precipitation of a GPM IMERG grid cell (UTC day), Final where published,
-      else Late. Keyed by the cell center; the backend picks the cell nearest to a hexagon.
-    # Contract: the backend relies on these columns and types.
-    columns:
-      - {name: cell_lat, data_type: double, description: "Cell center latitude (IMERG grid, 0.1°)."}
-      - {name: cell_lon, data_type: double, description: "Cell center longitude (IMERG grid, 0.1°)."}
-      - {name: obs_date, data_type: date, description: UTC day (00:00-24:00 UTC).}
-      - {name: obs_month, data_type: date}
       - {name: precipitation_mm, data_type: double, description: Total precipitation of the day (mm).}
-      - {name: imerg_run, data_type: varchar, description: "final (research grade) or late (near real time)."}
+      - {name: wind_speed_mean_ms, data_type: double, description: Daily mean 10 m wind speed (m/s).}
+      - {name: wind_dir_mean_deg, data_type: double, description: "Where the wind comes from (0 = north, 90 = east)."}
       - {name: last_load_id, data_type: varchar}

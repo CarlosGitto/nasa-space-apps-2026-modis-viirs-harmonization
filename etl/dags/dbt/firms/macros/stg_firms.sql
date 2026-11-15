@@ -1,7 +1,7 @@
 {#
   Whether a bronze table exists yet. A product that never returned rows has no
-  table: e.g. VIIRS S-NPP NRT (retired in Nov 2026), or IMERG Final while NASA
-  hasn't published the days we loaded. At parse time (execute = false) assume
+  table: e.g. VIIRS S-NPP NRT (retired in Nov 2026), or weather before its first
+  load. At parse time (execute = false) assume
   it does, so dbt registers the source dependency.
 #}
 {% macro source_table_exists(source_name, table) %}

@@ -13,7 +13,7 @@ DATA_DIR     := data
 #
 # The whole world instead: FIRMS_AREA=world in etl/.env, `make etl-restart`, then
 #   make etl-seed-dev DEV_AREA=world && make etl-seed-weather-dev DEV_AREA=world
-# (hours of downloads; weather keeps only the cells near fires, see data/README.md).
+# (hours of fire downloads; weather is NASA POWER daily near the fires, see data/README.md).
 #
 # KEEP FIRE AND WEATHER IN SYNC. If you change the region or the dates, change both:
 # DEV_AREA / DEV_START (used by both seeds), FIRMS_AREA in etl/.env (the weather DAG
@@ -61,7 +61,7 @@ etl-seed-dev: ## Load the dev dataset (fire): SP from DEV_START to the latest + 
 	cd $(ETL_DIR) && astro dev run dags trigger firms_ingest_nrt \
 		--conf "{\"area\": \"$(DEV_AREA)\", \"start_date\": \"$(DEV_NRT_START)\"}"
 
-etl-seed-weather-dev: ## Load the weather around the dev dataset's fires: MERRA-2 + IMERG, same area and dates
+etl-seed-weather-dev: ## Load the weather around the dev dataset's fires (NASA POWER daily), same area and dates
 	@# One run; it plans the days since DEV_START whose fires (same area) are already in gold.
 	@# Weather waits for FIRMS: as more fires land, the daily schedule (or a trigger without
 	@# conf) resumes where this stopped. Don't re-run this target: it starts over from DEV_START.

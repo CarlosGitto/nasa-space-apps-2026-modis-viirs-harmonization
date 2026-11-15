@@ -1,45 +1,37 @@
 """
-## Weather ingest — NASA Earthdata (dlt)
+## Weather ingest — NASA POWER (dlt)
 
-Loads gridded weather from NASA Earthdata into the bronze tables of the DuckLake
-(`lake.weather_raw.*`), subset to the configured area through OPeNDAP:
+Loads the daily weather the map shows around fires into the bronze table
+`lake.weather_raw.power_daily`, from the [NASA POWER](https://power.larc.nasa.gov)
+daily regional API: max temperature, total rain and mean wind (speed and
+direction) per MERRA-2 grid cell (0.5° x 0.625°) and UTC day. POWER serves
+MERRA-2 meteorology (GEOS-IT for the latest days) already aggregated per day,
+~2 days behind real time, with no login.
 
-| Product | Variables | Grid | Bronze table |
-|---|---|---|---|
-| MERRA-2 `M2T1NXSLV` (hourly) | 2 m temperature and dew point, 10 m wind (u, v) | 0.5° x 0.625° | `merra2_slv_hourly` |
-| GPM IMERG daily Final (`GPM_3IMERGDF`) | precipitation | 0.1° | `imerg_final_daily` |
-| GPM IMERG daily Late (`GPM_3IMERGDL`) | precipitation | 0.1° | `imerg_late_daily` |
+The hexagon panel doesn't depend on this DAG: the backend asks POWER for one
+point on demand. This table only feeds the map layers.
 
-**Every run loads everything missing**, in chunks: `plan` lists, per product,
-the days from the day after the last one loaded (or `WEATHER_DEFAULT_START`,
-2025-01-01) up to the last day available, split into `chunk_days` pieces; then
-one `load` task per chunk (dynamic task mapping). Each chunk commits on its own,
-so a long backfill shows up month by month, a failure retries only its chunk,
-and other lake writers get the single-writer pool between chunks.
+**Every run loads everything missing**, in chunks: `plan` lists the days from
+the day after the last one loaded (or `WEATHER_DEFAULT_START`, 2025-01-01) to
+yesterday, split into `chunk_days` pieces; then one `load` task per chunk
+(dynamic task mapping), each committing on its own and releasing the
+single-writer pool in between. Days POWER hasn't published yet come back empty
+and are asked again the next day.
 
-**Weather follows the fires** (`WEATHER_KEEP=fires`, the default): each chunk
-keeps only the grid cells near the fire hexagons of the same dates (see
-`include/weather/fires.py`), so the whole world fits in a few GB; and only days
-whose fires, loaded with the same `area`, are already in gold get planned,
-without gaps: weather waits for FIRMS and catches up on the next run.
-`WEATHER_KEEP=all` keeps every cell of the area.
+**Only around fires**: each chunk takes the fire hexagons of its dates from gold,
+turns them into boxes of at most 10° (the API limit; `include/weather/fires.py`)
+and downloads only those, one parameter per request (the API limit), one request
+at a time with a pause and back-off on HTTP 429 (`include/weather/power.py`); it
+then keeps the exact cells near the fires. Only days whose fires, loaded with
+the same `area`, are already in gold get planned, without gaps: weather waits
+for FIRMS and catches up on the next run. `WEATHER_KEEP=all` keeps every cell
+of the area (boxes still at most 10°).
 
-Days not published yet are skipped: MERRA-2 lags ~3–6 weeks (the gap is
-accepted), IMERG Late ~14 hours, IMERG Final months. IMERG: Final wherever NASA
-has published it; Late only after its last published day (and, in a backfill,
-for the days Final doesn't have). Silver prefers Final.
+**Backfill / other area:** set `start_date` (and `end_date`) and `area`, e.g. the
+whole world from 2025: `{"area": "world", "start_date": "2025-01-01"}`. Area
+follows `WEATHER_AREA`, default `FIRMS_AREA`.
 
-**Backfill / other area:** set `start_date` (and `end_date`) and `area`, e.g.
-the whole world from 2025: `{"area": "world", "start_date": "2025-01-01"}`.
-Area follows `WEATHER_AREA`, default `FIRMS_AREA`: change fire and weather
-together (data/README.md, "Changing the region or the dates").
-
-Append-only: reloading a range adds a new version; dbt silver keeps the latest.
 Each successful chunk updates the `weather_raw` asset, which triggers `weather_dbt`.
-
-Needs the Airflow connection `earthdata_default` (Earthdata Login username and
-password, or a token as the password) and the GES DISC and OPeNDAP applications
-approved in the Earthdata profile (README, "NASA Earthdata Login").
 """
 
 from datetime import timedelta
@@ -64,75 +56,41 @@ from include.weather.config import WEATHER_AREA, WEATHER_RAW
         "start_date": Param(None, type=["null", "string"], format="date",
                             description="Backfill: first day (empty = resume after the last loaded day)"),
         "end_date": Param(None, type=["null", "string"], format="date",
-                          description="Backfill: last day (empty = everything available)"),
+                          description="Backfill: last day (empty = yesterday)"),
         "chunk_days": Param(31, type="integer", minimum=1, maximum=92,
                             description="Days per load task (one task per chunk)"),
     },
-    tags=["weather", "earthdata", "dlt", "ingest"],
+    tags=["weather", "power", "dlt", "ingest"],
 )
 def weather_ingest():
     @task
     def plan(params=None) -> list[dict]:
-        """Chunks to load: [{product, start, end, label}], every product, oldest first."""
+        """Chunks to load: [{start, end, label}], oldest first."""
         from datetime import date
 
         from include.firms.config import last_loaded_dates
         from include.weather.config import WEATHER_DEFAULT_START, WEATHER_RAW_DATASET
-        from include.weather.earthdata import latest_granule_day
         from include.weather.fires import WEATHER_KEEP, covered_until, fire_days
-        from include.weather.source import IMERG_FINAL, IMERG_LATE, MERRA2_SLV, chunk_range, plan_range
+        from include.weather.source import TABLE, chunk_range, plan_range
 
         yesterday = pendulum.now("UTC").date() - timedelta(days=1)
         forced_start = date.fromisoformat(params["start_date"]) if params["start_date"] else None
         forced_end = date.fromisoformat(params["end_date"]) if params["end_date"] else None
-        until = yesterday
-        fires = None
-        if WEATHER_KEEP == "fires":
+        last = last_loaded_dates([TABLE], dataset=WEATHER_RAW_DATASET, date_column="obs_date").get(TABLE)
+        days = plan_range(last, WEATHER_DEFAULT_START, yesterday, forced_start, forced_end)
+
+        if days and WEATHER_KEEP == "fires":
             fires = fire_days(params["area"])
-            if not fires:
-                print(f"No fires in gold loaded for area {params['area']!r} yet: weather waits for them")
+            covered = covered_until(fires, days[0]) if fires else None
+            if covered is None:
+                print(f"No fires in gold loaded for area {params['area']!r} from {days[0]}: weather waits for them")
                 return []
-        last = last_loaded_dates([p.table for p in (MERRA2_SLV, IMERG_FINAL, IMERG_LATE)],
-                                 dataset=WEATHER_RAW_DATASET, date_column="obs_date")
-        # Each product goes as far as NASA has published it (CMR), never past `until`.
-        published = {p: latest_granule_day(p.short_name, p.version) for p in (MERRA2_SLV, IMERG_FINAL, IMERG_LATE)}
-        cap = lambda p: min(until, published[p]) if published[p] else None  # noqa: E731
-        final_published = published[IMERG_FINAL]
-
-        def product_range(p, last_loaded, first=None):
-            if cap(p) is None:
-                return None
-            start = max(forced_start, first) if forced_start and first else forced_start
-            return plan_range(last_loaded, WEATHER_DEFAULT_START, cap(p),
-                              start, min(forced_end, cap(p)) if forced_end else None)
-
-        ranges = {
-            MERRA2_SLV: product_range(MERRA2_SLV, last.get(MERRA2_SLV.table)),
-            IMERG_FINAL: product_range(IMERG_FINAL, last.get(IMERG_FINAL.table)),
-            # Late only after Final's last published day, in a backfill too (the load
-            # still drops any day Final has).
-            IMERG_LATE: product_range(
-                IMERG_LATE,
-                max([d for d in (last.get(IMERG_LATE.table), last.get(IMERG_FINAL.table), final_published) if d],
-                    default=None),
-                first=final_published + timedelta(days=1) if final_published else None,
-            ),
-        }
-        if fires is not None:
-            # Only days whose fires (same area) are already in gold, without gaps.
-            for product, days in ranges.items():
-                if days:
-                    covered = covered_until(fires, days[0])
-                    ranges[product] = (days[0], min(days[1], covered)) if covered else None
-                    if covered is None or covered < days[1]:
-                        print(f"{product.collection}: fires of {params['area']!r} only cover up to {covered}")
-        chunks = []
-        for product, days in ranges.items():
-            print(f"{product.collection}: {days or 'nothing to load'}")
-            for start, end in chunk_range(*days, int(params["chunk_days"])) if days else []:
-                chunks.append({"product": product.table, "start": start.isoformat(), "end": end.isoformat(),
-                               "label": f"{product.table} {start}..{end}"})
-        return chunks
+            if covered < days[1]:
+                print(f"Fires of {params['area']!r} only cover up to {covered}")
+            days = (days[0], min(days[1], covered))
+        print(f"POWER daily: {days or 'nothing to load'}")
+        return [{"start": s.isoformat(), "end": e.isoformat(), "label": f"{s}..{e}"}
+                for s, e in (chunk_range(*days, int(params["chunk_days"])) if days else [])]
 
     # One writer at a time on the DuckLake catalog: chunks run one after the other,
     # and other writers (FIRMS loads, dbt) get the pool between them.
@@ -142,48 +100,38 @@ def weather_ingest():
         from datetime import date
 
         from airflow.sdk import get_current_context
-
-        from include.firms.config import raw_pipeline
-        from include.weather.config import WEATHER_RAW_DATASET, get_earthdata_session
-        from include.weather.earthdata import search_granules
-        from include.weather.fires import WEATHER_KEEP, fire_zone, near_fire_filter, zone_boxes, zone_centers
-        from include.weather.source import IMERG_FINAL, IMERG_LATE, PRODUCTS, weather_source
-
-        get_current_context()["chunk_label"] = chunk["label"]
-        product = next(p for p in PRODUCTS if p.table == chunk["product"])
-        start, end = date.fromisoformat(chunk["start"]), date.fromisoformat(chunk["end"])
-
-        # Skipped tasks don't update the asset, so weather_dbt isn't triggered for nothing.
         from airflow.sdk.exceptions import AirflowSkipException
 
-        keep = boxes = None
+        from include.firms.config import raw_pipeline
+        from include.weather.config import WEATHER_RAW_DATASET
+        from include.weather.fires import WEATHER_KEEP, fire_zone, near_fire_filter, zone_boxes, zone_centers
+        from include.weather.power import Area, split_box
+        from include.weather.source import weather_source
+
+        get_current_context()["chunk_label"] = chunk["label"]
+        start, end = date.fromisoformat(chunk["start"]), date.fromisoformat(chunk["end"])
+        area = Area.parse(params["area"])
+
+        keep = None
         if WEATHER_KEEP == "fires":
             zone = fire_zone(start, end)
             if not zone:
+                # Skipped tasks don't update the asset, so weather_dbt isn't triggered for nothing.
                 raise AirflowSkipException("No fire detections in these dates: no weather to keep")
-            # Download only the boxes around the fires; then keep the exact cells near them.
             boxes = zone_boxes(zone_centers(zone))
             keep = near_fire_filter(zone)
-            area_deg2 = sum((e - w) * (n - s) for w, s, e, n in boxes)
-            print(f"Fire zone of {start}..{end}: {len(zone)} H3 cells, {len(boxes)} boxes to download "
-                  f"({100 * area_deg2 / 64800:.0f} % of the globe)")
-
-        granules = search_granules(product.short_name, product.version, start, end)
-        if product is IMERG_LATE:  # never Late for a day Final has
-            final_days = {g.day for g in search_granules(IMERG_FINAL.short_name, IMERG_FINAL.version, start, end)}
-            granules = [g for g in granules if g.day not in final_days]
-        print(f"{chunk['label']}: {len(granules)} granules published")
-        if not granules:
-            raise AirflowSkipException("Nothing published for this chunk")
+        else:
+            boxes = [area.box()]
+        # POWER takes boxes of at most 10° a side; clip them to the area first.
+        boxes = [piece for box in area.clip(boxes) for piece in split_box(box)]
+        print(f"{chunk['label']}: {len(boxes)} boxes of <= 10° ({4 * len(boxes)} POWER requests), "
+              f"{100 * sum((e - w) * (n - s) for w, s, e, n in boxes) / 64800:.1f} % of the globe")
 
         # dlt doesn't add _dlt_load_id to Arrow tables by default; silver's
         # incremental logic and dedup rely on it, as for FIRMS.
         os.environ["NORMALIZE__PARQUET_NORMALIZER__ADD_DLT_LOAD_ID"] = "true"
-        pipeline = raw_pipeline(f"weather_{product.table}", dataset=WEATHER_RAW_DATASET)
-        load_info = pipeline.run(
-            weather_source(session=get_earthdata_session(), plan={product: granules}, area=params["area"],
-                           keep=keep, boxes=boxes)
-        )
+        pipeline = raw_pipeline("weather_power", dataset=WEATHER_RAW_DATASET)
+        load_info = pipeline.run(weather_source(boxes=boxes, start=start, end=end, area=params["area"], keep=keep))
         print(load_info)
         print(pipeline.last_trace.last_normalize_info)
 

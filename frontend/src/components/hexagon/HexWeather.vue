@@ -1,7 +1,7 @@
 <script setup>
 // Weather of one hexagon over the selected dates, compact (Ficha · período); the Clima tab
-// has the full view (HexClimate). NASA Earthdata: MERRA-2 + GPM IMERG, per grid cell: the
-// backend takes the cell nearest to the hexagon's center.
+// has the full view (HexClimate). NASA POWER, asked on demand by the backend for the
+// hexagon's center (cached).
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getHexagonWeather } from '../../api'
 import MiniChart from './MiniChart.vue'
@@ -47,7 +47,7 @@ const chart = computed(() => (days.value.length ? weatherChart(days.value) : nul
 
 <template>
   <section class="weather">
-    <h4>Clima <span class="muted">· NASA MERRA-2 + GPM IMERG</span></h4>
+    <h4>Clima <span class="muted">· NASA POWER</span></h4>
     <p v-if="loading && !weather" class="muted">Cargando…</p>
     <p v-else-if="error?.startsWith('no weather')" class="muted">Todavía no hay datos meteorológicos cargados.</p>
     <p v-else-if="error" class="error">{{ error }}</p>
@@ -67,7 +67,7 @@ const chart = computed(() => (days.value.length ? weatherChart(days.value) : nul
         <MiniChart v-if="chart" :option="chart" height="180px" />
         <p class="muted small">
           Celda más cercana: {{ cells }}. Días UTC; VPD = déficit de presión de vapor (cuánto seca el aire).
-          <template v-if="lagging"> Los últimos días todavía no tienen MERRA-2 (se publica con semanas de demora).</template>
+          <template v-if="lagging"> Los últimos días todavía no tienen MERRA-2 (NASA POWER los completa en ~2 días).</template>
         </p>
       </template>
     </template>

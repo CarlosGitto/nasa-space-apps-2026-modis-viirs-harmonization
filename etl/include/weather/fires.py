@@ -1,7 +1,7 @@
 """Weather only where there is fire: which grid cells to keep.
 
 Weather explains fires, and the map only shows it around them; a global grid every
-day would be billions of rows (MERRA-2 hourly: ~5 M per day; IMERG daily: ~6.5 M).
+day of the whole world is ~200 k cells, and most are nowhere near a fire.
 So each chunk of weather keeps only the cells near the fires of the same dates:
 
     fire hexagons (gold, res 6, any detection in [start, end])
@@ -13,7 +13,7 @@ Fire data must be there first, and for the same area: the weather DAG only plans
 days that gold already has fire detections for, loaded with the same area
 (`_firms_area`), walking forward from each product's start and stopping at the
 first gap (covered_until). Fires and weather have different ranges (FIRMS SP lags
-months and NRT covers the last ones, MERRA-2 lags weeks, IMERG Late a day), and a
+months and NRT covers the last ones, POWER ~2 days), and a
 backfill of another area (e.g. South America -> world) lands month by month: so
 weather for a month never runs with only part of its fires, and catches up on
 the next run once FIRMS has filled the gap.
@@ -130,7 +130,7 @@ def near_fire_filter(zone: list[int]):
 
 
 # ------------------------------------------------------------ what to download ---
-# OPeNDAP returns rectangles of the grid, so the fire zone is turned into a few boxes
+# POWER returns rectangles of the grid, so the fire zone is turned into a few boxes
 # and only those are requested: the download, not just what's stored, follows the fires.
 
 ZONE_TILE_DEG = 10  # boxes are built from tiles of this size
@@ -152,7 +152,8 @@ def zone_centers(zone: list[int]) -> list[tuple[float, float]]:
 
 def zone_boxes(centers: list[tuple[float, float]], tile: float = ZONE_TILE_DEG,
                margin: float = ZONE_MARGIN_DEG) -> list[tuple[float, float, float, float]]:
-    """Boxes (west, south, east, north) covering a fire zone, to request from OPeNDAP.
+    """Boxes (west, south, east, north) covering a fire zone, to request from POWER
+    (split to <= 10° a side before asking).
 
     Every tile a zone cell's center falls in, or within `margin` of, is needed; the
     needed tiles of each row are merged into runs of contiguous tiles, one box each.
