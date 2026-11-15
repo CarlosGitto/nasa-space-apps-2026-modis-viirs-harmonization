@@ -7,7 +7,7 @@ flares, industry, volcanoes) is reported apart as `static_detections`.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
 import duckdb
@@ -650,6 +650,109 @@ def hexagon_detections(
     return HexagonDetections(
         h3=h3_id, dataset=dataset, truncated=len(rows) > limit,
         rows=[HexagonDetection(**r) for r in rows[:limit]],
+    )
+
+
+# ----------------------------------------------------- weather of a hexagon ---
+# NASA Earthdata weather is keyed by grid cell: the hexagon takes the nearest cell
+# of each grid (MERRA-2 for temperature, humidity and wind; IMERG for precipitation).
+
+WEATHER_DEFAULT_DAYS = 90
+WEATHER_MAX_DAYS = 731
+
+
+class WeatherCell(BaseModel):
+    """Grid cell whose values stand for the hexagon."""
+
+    product: Literal["merra2", "imerg"]
+    center: tuple[float, float]  # lon, lat
+    distance_km: float  # from the hexagon's center
+
+
+class HexagonWeatherDay(BaseModel):
+    """Weather of one UTC day. Fields of a product without data that day are null."""
+
+    date: date
+    # MERRA-2
+    t2m_max_c: float | None = None
+    t2m_min_c: float | None = None
+    t2m_mean_c: float | None = None
+    dewpoint_mean_c: float | None = None
+    rh_min_pct: float | None = None
+    rh_mean_pct: float | None = None
+    vpd_max_kpa: float | None = None  # vapour pressure deficit: how hard the air dries fuel
+    vpd_mean_kpa: float | None = None
+    wind_speed_max_ms: float | None = None  # hourly means at 10 m, not gusts
+    wind_speed_mean_ms: float | None = None
+    wind_dir_mean_deg: float | None = None  # where the wind comes from, 0 = north
+    hours: int | None = None  # 24 = complete day
+    # IMERG
+    precipitation_mm: float | None = None
+    precipitation_7d_mm: float | None = None  # last 7 days, this one included
+    precipitation_30d_mm: float | None = None
+    days_since_rain: int | None = None  # since the last day with >= rain_day_mm
+    imerg_run: Literal["final", "late"] | None = None
+
+
+class HexagonWeather(BaseModel):
+    h3: str
+    center: tuple[float, float]  # lon, lat
+    start: date | None  # null when there is no weather for this place
+    end: date | None
+    rain_day_mm: float
+    cells: list[WeatherCell]
+    days: list[HexagonWeatherDay]
+
+
+@router.get("/hexagons/{h3_id}/weather")
+def hexagon_weather(
+    h3_id: HexId,
+    cur: Cursor,
+    start: Annotated[date | None, Query(description="First UTC day (default: 90 days before end)")] = None,
+    end: Annotated[date | None, Query(description="Last UTC day (default: the last day with weather)")] = None,
+) -> HexagonWeather:
+    """Daily weather of the hexagon: temperature, humidity, VPD and wind (MERRA-2), and
+    precipitation with its 7 / 30-day accumulations and days since rain (IMERG).
+
+    Works for any hexagon, with or without detections, inside the loaded area.
+    """
+    if start and end and end < start:
+        raise HTTPException(422, "end must be on or after start")
+    try:
+        key = db.hexagon_key(cur, h3_id)
+    except db.InvalidHexagon as e:
+        raise HTTPException(422, str(e)) from None
+    tables = db.weather_tables(cur)
+    if not tables:
+        raise HTTPException(404, "no weather data in the lake yet")
+
+    lat, lon = db.hexagon_center(cur, key)
+    products = {db.WEATHER: "merra2", db.PRECIPITATION: "imerg"}
+    found = {t: db.nearest_cell(cur, t, lat, lon) for t in tables}
+    cells = {t: (c[0], c[1]) for t, c in found.items() if c}
+    info = [
+        WeatherCell(product=products[t], center=(c[1], c[0]), distance_km=round(c[2], 1))
+        for t, c in sorted(found.items(), key=lambda kv: products[kv[0]]) if c
+    ]
+
+    end = end or db.weather_last_date(cur, cells)
+    if end is None:  # outside the loaded area
+        return HexagonWeather(h3=h3_id, center=(lon, lat), start=None, end=None,
+                              rain_day_mm=db.RAIN_DAY_MM, cells=info, days=[])
+    start = start or end - timedelta(days=WEATHER_DEFAULT_DAYS - 1)
+    if (end - start).days + 1 > WEATHER_MAX_DAYS:
+        raise HTTPException(422, f"at most {WEATHER_MAX_DAYS} days per request")
+
+    days: dict[date, dict] = {}
+    if db.WEATHER in cells:
+        for d, row in db.weather_days(cur, cells[db.WEATHER], start, end).items():
+            days.setdefault(d, {}).update(row)
+    if db.PRECIPITATION in cells:
+        for d, row in db.precipitation_days(cur, cells[db.PRECIPITATION], start, end).items():
+            days.setdefault(d, {}).update(row)
+    return HexagonWeather(
+        h3=h3_id, center=(lon, lat), start=start, end=end, rain_day_mm=db.RAIN_DAY_MM, cells=info,
+        days=[HexagonWeatherDay(date=d, **row) for d, row in sorted(days.items())],
     )
 
 
