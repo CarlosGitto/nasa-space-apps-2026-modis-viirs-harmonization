@@ -81,8 +81,13 @@ const fmt = (n) => n.toLocaleString('en-US')
         {{ l.label }}
       </label>
     </fieldset>
+    <div v-if="store.view === 'map' && store.weatherLayers.length" class="scope" role="group" aria-label="Where to show weather">
+      <button :class="{ on: store.weatherScope === 'fires' }" @click="store.setWeatherScope('fires')">Around fires</button>
+      <button :class="{ on: store.weatherScope === 'all' }" @click="store.setWeatherScope('all')">Everywhere</button>
+    </div>
     <p v-if="store.view === 'map' && store.weatherLayers.length" class="meta">
       NASA MERRA-2 + GPM IMERG · {{ store.imageryDate }} (UTC, {{ store.day ? 'slider day' : 'end of range' }})
+      <template v-if="store.weatherScope === 'fires'"> · fire hexagons and their neighbors</template>
     </p>
 
     <div class="zone">
@@ -111,6 +116,12 @@ select, input {
 .weather legend { font-size: 12px; color: var(--muted); padding: 0; margin-bottom: 4px; width: 100%; }
 .weather .check { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
 .weather .check input { padding: 0; margin: 0; }
+.scope { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; margin-top: -4px; }
+.scope button {
+  flex: 1; border: none; background: none; padding: 4px 6px; border-radius: 4px;
+  font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.scope button.on { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
 .zone { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 .zone button {
   font: inherit; font-size: 12px; background: none; border: 1px solid var(--border); border-radius: 6px;

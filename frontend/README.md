@@ -47,14 +47,25 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   tooltip), daily rain with its 30-day total and days since rain. NASA MERRA-2 and
   GPM IMERG, from the grid cell nearest to the hexagon. With
   several hexagons, "Detalle" shows one ficha each; "Agrupado" is a work in progress.
-- **Weather layers**: "Weather layers" in the side panel turns on, over the hexagons,
-  the day the map shows (the time slider's day, else the end of the range):
-  **Temperature** (daily max, NASA MERRA-2 cells), **Rain** (daily total, NASA GPM
-  IMERG; dry cells hidden) and **Wind** (arrows pointing where it blows, colored and
-  sized by speed; overlapping ones are dropped when zoomed out). Each has a legend;
-  hovering shows the values. A day without data for a layer says which days it has,
-  with a button to jump there. Playing the time slider animates them. See
-  [src/mapWeather.js](src/mapWeather.js) and `GET /weather/map`.
+- **Weather layers**: "Weather layers" in the side panel adds the weather of the day the
+  map shows (the time slider's day, else the end of the range), keeping fire the
+  protagonist: no fire colors (temperature goes blue → white → purple), drawn under the
+  fire hexagons, which turn more opaque and get a dark outline while weather is on.
+  **Temperature** (daily max, NASA MERRA-2) is a color fill; **Rain** (daily total, NASA
+  GPM IMERG) is blue dots sized by mm; **Wind** (daily mean, MERRA-2) is gray arrows
+  pointing where it blows, sized by speed. Two scopes:
+  - **Around fires** (default): only the fire hexagons on screen and their neighbors
+    (H3 k=1 ring), each with the value of the weather cell under its center; wind arrows
+    on the fire hexagons. Computed in the browser from the hexagons already loaded.
+  - **Everywhere**: the whole field; temperature as one image (not thousands of
+    polygons), rain dots and arrows thinned to the zoom.
+
+  Responses are cached per layer and day (temperature and wind come for the whole area,
+  rain too until zoom 5.5, then per 5° tile), requests in flight are shared, and the
+  next day is prefetched while the slider plays: panning and replaying days don't hit
+  the backend again. Hovering shows the values; a day without data says which days a
+  layer has, with a button to jump there. See [src/mapWeather.js](src/mapWeather.js)
+  and `GET /weather/map`.
 - **Area**: "Area (4 points)" on the map: click 4 points and every res-6 hexagon
   whose center is inside is selected, empty ones too (up to 5000; a bigger area only
   filters). The area snaps to those hexagons, filters the map, calendar and slider,
