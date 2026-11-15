@@ -87,3 +87,5 @@ html[data-easy-reading] :is(button, input, select, textarea) {
   letter-spacing: inherit;
   word-spacing: inherit;
 }
+/* Separator between the hexagon and the weather parts of a map tooltip. */
+.popup-rule { margin: 4px 0; border: none; border-top: 1px solid var(--border); }

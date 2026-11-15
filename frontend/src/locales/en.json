@@ -19,7 +19,8 @@
     "404": "No data for this request",
     "422": "Invalid request",
     "500": "Server error",
-    "other": "Something went wrong (error {status})"
+    "other": "Something went wrong (error {status})",
+    "503": "NASA POWER isn't answering; try again in a minute"
   },
   "controls": {
     "view": "View",
@@ -74,7 +75,8 @@
       "staticSource": "Static source (not a wildfire)",
       "confidence": "Confidence",
       "day": "Day",
-      "night": "Night"
+      "night": "Night",
+      "density": "{n} per 1,000 km² per day"
     },
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
@@ -132,7 +134,8 @@
     "tabs": {
       "obs": "Observations",
       "history": "Profile · history",
-      "period": "Profile · period"
+      "period": "Profile · period",
+      "weather": "Weather"
     },
     "view": "View",
     "detail": "Detail",
@@ -175,7 +178,9 @@
   "chart": {
     "label": "{title}. {summary}",
     "sensorSummary": "{sensor}: {total} detections in total, highest {max} ({when})",
-    "empty": "no detections"
+    "empty": "no detections",
+    "seriesTotal": "{name}: {total} in total",
+    "seriesRange": "{name}: from {min} to {max}"
   },
   "obs": {
     "notSupported": "This dataset has no per-hexagon detail: pick MODIS or VIIRS.",
@@ -185,15 +190,15 @@
     "filterLabel": "Filter observations",
     "time": "Time",
     "utc": "UTC",
-    "local": "Local solar time",
+    "local": "Solar time",
     "range": "{start} → {end} · {dataset}",
     "loading": " · loading…",
     "truncated": "Showing the {n} most recent: shorten the dates to see all.",
     "caption": "Detections of the selected hexagons",
     "cols": {
       "hexagon": "Hexagon",
-      "timeUtc": "Date and time (UTC)",
-      "timeLocal": "Date and time (solar)",
+      "timeUtc": "Date (UTC)",
+      "timeLocal": "Date (solar)",
       "satellite": "Satellite",
       "product": "Prod.",
       "latitude": "Lat",
@@ -210,7 +215,8 @@
     "staticRow": "Static heat source: not a wildfire",
     "empty": "No observations.",
     "legendStatic": "gray: static source (not a wildfire)",
-    "legendReplaced": "* NRT replaced by SP (not in the continuous series)"
+    "legendReplaced": "* NRT replaced by SP (not in the continuous series)",
+    "allColumns": "All columns"
   },
   "ranking": {
     "summaryPeriod": "{with} of {total} hexagons with detections between {start} and {end} · {empty} without detections",
@@ -221,7 +227,8 @@
     "lastDetection": "Last detection",
     "open": "Profile of {id}",
     "showMore": "Show {n} more",
-    "footer": "Wildfire detections (continuous SP + NRT series). Click a row to see its profile."
+    "footer": "Wildfire detections (continuous SP + NRT series). Click a row to see its profile.",
+    "footerWeather": "Wildfire detections (continuous SP + NRT series). Click a row to see its weather."
   },
   "a11y": {
     "button": "Accessibility options",
@@ -238,5 +245,81 @@
     "easyReadingHint": "Legible font, wider text spacing and patterns in charts",
     "reset": "Reset",
     "close": "Close"
+  },
+  "weather": {
+    "title": "Weather",
+    "rain": "Rain",
+    "vpdMax": "Max VPD",
+    "layersTitle": "Weather layers",
+    "scope": "Where to show the weather",
+    "scopeFires": "Around fires",
+    "scopeAll": "Everywhere",
+    "layers": {
+      "temperature": "Temperature",
+      "precipitation": "Rain",
+      "wind": "Wind"
+    },
+    "kpi": {
+      "tmax": "Max temp.",
+      "rhMin": "Min humidity",
+      "windMax": "Max wind",
+      "rainTotal": "Total rain",
+      "dryDays": "Days without rain"
+    },
+    "series": {
+      "max": "Max",
+      "min": "Min",
+      "dew": "Dew point",
+      "rainDay": "Daily",
+      "rain30": "30-day total"
+    },
+    "charts": {
+      "fireDryness": "Fire and air dryness",
+      "temperature": "Temperature",
+      "humidityWind": "Humidity and wind",
+      "rain": "Rain"
+    },
+    "compass": {
+      "n": "N",
+      "ne": "NE",
+      "e": "E",
+      "se": "SE",
+      "s": "S",
+      "sw": "SW",
+      "w": "W",
+      "nw": "NW"
+    },
+    "tooltip": {
+      "temperature": "Max temperature: {v} °C",
+      "rain": "Rain: {v} mm",
+      "wind": "Wind: {v} m/s from {from}"
+    },
+    "tooltipDay": "Weather {date} (UTC)",
+    "legend": "Weather legend",
+    "selectionLatest": "Selected hexagons: {date}, the latest NASA POWER has (~2 days behind)",
+    "selectionLoading": "Loading the weather of the selection (NASA POWER)…",
+    "selectionError": "Weather of the selection: {error}",
+    "noDataOn": "No data on {date} · loaded {first} → {last}",
+    "goTo": "Go to {date}",
+    "notLoaded": "No weather loaded yet (weather_ingest DAG)",
+    "daySlider": "{date} UTC (slider day) · NASA POWER",
+    "dayEnd": "{date} UTC (end of range) · NASA POWER",
+    "fading": " · fading away from fires",
+    "cell": "NASA POWER cell {km} km away",
+    "nearestCell": "Nearest cell: {cells}.",
+    "vpdNote": "UTC days; VPD = vapor pressure deficit (how much the air dries).",
+    "lagging": "The latest days don't have all the values yet (NASA POWER fills them in ~2 days).",
+    "climateRange": "{start} → {end} · UTC days · NASA POWER (MERRA-2 / GEOS-IT)",
+    "climateNote": "VPD = vapor pressure deficit: how much the air dries the fuel; it rises with heat and low humidity. Wind: hourly means at 10 m, not gusts.",
+    "noFire": "This hexagon has no detections: only the VPD is shown.",
+    "windFrom": "Wind from: {dir}",
+    "daysWithoutRain": "Days without rain: {n}",
+    "coverage": {
+      "outside": "This place is outside the area with weather data loaded.",
+      "noData": "No weather data for these dates.",
+      "rainOnly": "These dates have rain, but no temperature, humidity or wind yet.",
+      "loadedFor": "Data loaded for this place: {coverage}.",
+      "see": "See {start} → {end}"
+    }
   }
 }

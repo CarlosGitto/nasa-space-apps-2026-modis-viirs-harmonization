@@ -17,11 +17,16 @@
 // - "all": the same icons over the whole loaded area.
 import { mdiArrowUpBold, mdiThermometer, mdiWater } from '@mdi/js'
 import { cellToLatLng, gridDiskDistances } from 'h3-js'
+import { num } from './format'
+import { i18n } from './i18n'
+
+// Names in the user's language: getters, so templates that read them follow a language change.
+const t = (key, values) => i18n.global.t(key, values)
 
 export const WEATHER_LAYERS = {
   temperature: {
-    label: 'Temperature',
-    title: 'Max temp.',
+    get label() { return t('weather.layers.temperature') },
+    get title() { return t('weather.kpi.tmax') },
     unit: '°',
     icon: mdiThermometer,
     // The usual temperature-map palette (blue -> cyan -> green -> yellow -> orange -> red):
@@ -31,16 +36,16 @@ export const WEATHER_LAYERS = {
     legend: [0, 10, 20, 30, 40],
   },
   precipitation: {
-    label: 'Rain',
-    title: 'Rain',
+    get label() { return t('weather.layers.precipitation') },
+    get title() { return t('weather.layers.precipitation') },
     unit: ' mm',
     icon: mdiWater,
     color: '#2563eb',
     legend: [1, 5, 20],
   },
   wind: {
-    label: 'Wind',
-    title: 'Wind',
+    get label() { return t('weather.layers.wind') },
+    get title() { return t('weather.layers.wind') },
     unit: ' m/s',
     icon: mdiArrowUpBold,
     // Dark from the start (light blues got lost on the light basemap): slate -> blue -> violet.
@@ -234,19 +239,21 @@ export function mergedGrids(first, second) {
 
 // ---------------------------------------------------------------- tooltip ---
 
-const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-const compass = (deg) => COMPASS[Math.round(deg / 45) % 8]
+// Where the wind comes from, as a compass point in the user's language (0° = north).
+const COMPASS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
+export const compass = (deg) =>
+  (deg === null || deg === undefined ? '–' : t(`weather.compass.${COMPASS[Math.round(deg / 45) % 8]}`))
 
-// Tooltip lines for a point: the value of each layer's cell there.
+// Tooltip lines for a point: the value of each layer's cell there (numbers are ours, safe as HTML).
 export function weatherTooltip(grids, lon, lat) {
   return Object.entries(grids)
     .map(([id, grid]) => {
       const cell = grid?.at(lon, lat)
       if (!cell) return null
-      const v = cell[2]
-      if (id === 'temperature') return `🌡 Max temperature: <b>${v.toFixed(1)} °C</b>`
-      if (id === 'precipitation') return `💧 Rain: <b>${v.toFixed(1)} mm</b>`
-      return `➤ Wind: <b>${v.toFixed(1)} m/s</b> from ${compass(cell[3])}`
+      const v = `<b>${num(cell[2], 1)}</b>`
+      if (id === 'temperature') return `🌡 ${t('weather.tooltip.temperature', { v })}`
+      if (id === 'precipitation') return `💧 ${t('weather.tooltip.rain', { v })}`
+      return `➤ ${t('weather.tooltip.wind', { v, from: compass(cell[3]) })}`
     })
     .filter(Boolean)
     .join('<br>')

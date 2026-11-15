@@ -27,5 +27,5 @@ export function monthName(m) {
 // Error from api.js -> a message in the user's language (the API speaks English).
 export function errorMessage(e) {
   if (!e?.status) return g.t('errors.network')
-  return [404, 422, 500].includes(e.status) ? g.t(`errors.${e.status}`) : g.t('errors.other', { status: e.status })
+  return [404, 422, 500, 503].includes(e.status) ? g.t(`errors.${e.status}`) : g.t('errors.other', { status: e.status })
 }

@@ -19,7 +19,8 @@
     "404": "No hay datos para este pedido",
     "422": "Pedido inválido",
     "500": "Error del servidor",
-    "other": "Algo salió mal (error {status})"
+    "other": "Algo salió mal (error {status})",
+    "503": "NASA POWER no responde; probá de nuevo en un minuto"
   },
   "controls": {
     "view": "Vista",
@@ -74,7 +75,8 @@
       "staticSource": "Fuente fija (no es un incendio)",
       "confidence": "Confianza",
       "day": "Día",
-      "night": "Noche"
+      "night": "Noche",
+      "density": "{n} por 1.000 km² por día"
     },
     "zoomIn": "Acercar",
     "zoomOut": "Alejar",
@@ -132,7 +134,8 @@
     "tabs": {
       "obs": "Observaciones",
       "history": "Ficha · historial",
-      "period": "Ficha · período"
+      "period": "Ficha · período",
+      "weather": "Clima"
     },
     "view": "Vista",
     "detail": "Detalle",
@@ -175,7 +178,9 @@
   "chart": {
     "label": "{title}. {summary}",
     "sensorSummary": "{sensor}: {total} detecciones en total, máximo {max} ({when})",
-    "empty": "sin detecciones"
+    "empty": "sin detecciones",
+    "seriesTotal": "{name}: {total} en total",
+    "seriesRange": "{name}: de {min} a {max}"
   },
   "obs": {
     "notSupported": "Este dataset no tiene detalle por hexágono: elegí MODIS o VIIRS.",
@@ -185,15 +190,15 @@
     "filterLabel": "Filtrar observaciones",
     "time": "Hora",
     "utc": "UTC",
-    "local": "Hora solar local",
+    "local": "Hora solar",
     "range": "{start} → {end} · {dataset}",
     "loading": " · cargando…",
     "truncated": "Se muestran las {n} más recientes: acortá las fechas para ver todas.",
     "caption": "Detecciones de los hexágonos seleccionados",
     "cols": {
       "hexagon": "Hexágono",
-      "timeUtc": "Fecha y hora (UTC)",
-      "timeLocal": "Fecha y hora (solar)",
+      "timeUtc": "Fecha (UTC)",
+      "timeLocal": "Fecha (solar)",
       "satellite": "Satélite",
       "product": "Prod.",
       "latitude": "Lat",
@@ -210,7 +215,8 @@
     "staticRow": "Fuente fija de calor: no es un incendio",
     "empty": "Sin observaciones.",
     "legendStatic": "gris: fuente fija (no es incendio)",
-    "legendReplaced": "* NRT reemplazado por SP (no entra en la serie continua)"
+    "legendReplaced": "* NRT reemplazado por SP (no entra en la serie continua)",
+    "allColumns": "Todas las columnas"
   },
   "ranking": {
     "summaryPeriod": "{with} de {total} hexágonos con detecciones entre {start} y {end} · {empty} sin detecciones",
@@ -221,7 +227,8 @@
     "lastDetection": "Última detección",
     "open": "Ficha de {id}",
     "showMore": "Mostrar {n} más",
-    "footer": "Detecciones de incendio (serie continua SP + NRT). Click en una fila para ver su ficha."
+    "footer": "Detecciones de incendio (serie continua SP + NRT). Click en una fila para ver su ficha.",
+    "footerWeather": "Detecciones de incendio (serie continua SP + NRT). Click en una fila para ver su clima."
   },
   "a11y": {
     "button": "Opciones de accesibilidad",
@@ -238,5 +245,81 @@
     "easyReadingHint": "Fuente legible, más espacio entre letras y líneas, y patrones en los gráficos",
     "reset": "Restablecer",
     "close": "Cerrar"
+  },
+  "weather": {
+    "title": "Clima",
+    "rain": "Lluvia",
+    "vpdMax": "VPD máx",
+    "layersTitle": "Capas de clima",
+    "scope": "Dónde mostrar el clima",
+    "scopeFires": "Alrededor de fuegos",
+    "scopeAll": "En todo el mapa",
+    "layers": {
+      "temperature": "Temperatura",
+      "precipitation": "Lluvia",
+      "wind": "Viento"
+    },
+    "kpi": {
+      "tmax": "Temp. máx",
+      "rhMin": "Humedad mín",
+      "windMax": "Viento máx",
+      "rainTotal": "Lluvia total",
+      "dryDays": "Días sin lluvia"
+    },
+    "series": {
+      "max": "Máx",
+      "min": "Mín",
+      "dew": "Rocío",
+      "rainDay": "Del día",
+      "rain30": "Acumulada 30 días"
+    },
+    "charts": {
+      "fireDryness": "Fuego y sequedad del aire",
+      "temperature": "Temperatura",
+      "humidityWind": "Humedad y viento",
+      "rain": "Lluvia"
+    },
+    "compass": {
+      "n": "N",
+      "ne": "NE",
+      "e": "E",
+      "se": "SE",
+      "s": "S",
+      "sw": "SO",
+      "w": "O",
+      "nw": "NO"
+    },
+    "tooltip": {
+      "temperature": "Temperatura máx: {v} °C",
+      "rain": "Lluvia: {v} mm",
+      "wind": "Viento: {v} m/s desde el {from}"
+    },
+    "tooltipDay": "Clima del {date} (UTC)",
+    "legend": "Leyenda de clima",
+    "selectionLatest": "Hexágonos seleccionados: {date}, lo último que tiene NASA POWER (~2 días de atraso)",
+    "selectionLoading": "Cargando el clima de la selección (NASA POWER)…",
+    "selectionError": "Clima de la selección: {error}",
+    "noDataOn": "Sin datos el {date} · cargado {first} → {last}",
+    "goTo": "Ir al {date}",
+    "notLoaded": "Todavía no hay clima cargado (DAG weather_ingest)",
+    "daySlider": "{date} UTC (día del slider) · NASA POWER",
+    "dayEnd": "{date} UTC (fin del rango) · NASA POWER",
+    "fading": " · se desvanece lejos de los fuegos",
+    "cell": "celda NASA POWER a {km} km",
+    "nearestCell": "Celda más cercana: {cells}.",
+    "vpdNote": "Días UTC; VPD = déficit de presión de vapor (cuánto seca el aire).",
+    "lagging": "Los últimos días todavía no tienen todos los valores (NASA POWER los completa en ~2 días).",
+    "climateRange": "{start} → {end} · días UTC · NASA POWER (MERRA-2 / GEOS-IT)",
+    "climateNote": "VPD = déficit de presión de vapor: cuánto seca el aire al combustible; sube con calor y baja humedad. Viento: medias horarias a 10 m, no ráfagas.",
+    "noFire": "Este hexágono no tiene detecciones: solo se muestra el VPD.",
+    "windFrom": "Viento desde el: {dir}",
+    "daysWithoutRain": "Días sin lluvia: {n}",
+    "coverage": {
+      "outside": "Este lugar está fuera del área con datos meteorológicos cargados.",
+      "noData": "No hay datos meteorológicos para estas fechas.",
+      "rainOnly": "Estas fechas tienen lluvia, pero todavía no temperatura, humedad ni viento.",
+      "loadedFor": "Datos cargados para este lugar: {coverage}.",
+      "see": "Ver {start} → {end}"
+    }
   }
 }

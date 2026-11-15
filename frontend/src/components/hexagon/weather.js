@@ -1,7 +1,12 @@
 // Shared by the hexagon's weather views (HexWeather in Ficha · período, HexClimate in the
 // Clima tab): summary figures and labels from GET /hexagons/{h3}/weather.
 import { mdiThermometer, mdiWaterOff, mdiWaterPercent, mdiWeatherRainy, mdiWeatherSunny, mdiWeatherWindy } from '@mdi/js'
-import { num } from './charts'
+import { date, num } from '../../format'
+import { i18n } from '../../i18n'
+import { compass } from '../../mapWeather'
+
+export { compass }
+const t = (key, values) => i18n.global.t(key, values)
 
 const present = (days, key) => days.map((d) => d[key]).filter((v) => v !== null && v !== undefined)
 const maxOf = (days, key) => (present(days, key).length ? Math.max(...present(days, key)) : null)
@@ -15,25 +20,22 @@ export function weatherKpis(days) {
   const withUnit = (v, digits, unit) => (v === null ? '–' : `${num(v, digits)} ${unit}`)
   // icon: Material Design Icons path (the map uses the same family); color: the variable's.
   return [
-    { label: 'Temp. máx', icon: mdiThermometer, color: '#dc2626', value: withUnit(maxOf(days, 't2m_max_c'), 1, '°C') },
-    { label: 'Humedad mín', icon: mdiWaterPercent, color: '#0d9488', value: withUnit(minOf(days, 'rh_min_pct'), 0, '%') },
-    { label: 'VPD máx', icon: mdiWeatherSunny, color: '#7c3aed', value: withUnit(maxOf(days, 'vpd_max_kpa'), 1, 'kPa') },
-    { label: 'Viento máx', icon: mdiWeatherWindy, color: '#475569', value: withUnit(maxOf(days, 'wind_speed_max_ms'), 1, 'm/s') },
-    { label: 'Lluvia total', icon: mdiWeatherRainy, color: '#2563eb', value: rain.length ? `${num(rain.reduce((a, b) => a + b, 0), 1)} mm` : '–' },
-    { label: 'Días sin lluvia', icon: mdiWaterOff, color: '#64748b', value: num(last?.days_since_rain), note: last ? `al ${last.date}` : '' },
+    { label: t('weather.kpi.tmax'), icon: mdiThermometer, color: '#dc2626', value: withUnit(maxOf(days, 't2m_max_c'), 1, '°C') },
+    { label: t('weather.kpi.rhMin'), icon: mdiWaterPercent, color: '#0d9488', value: withUnit(minOf(days, 'rh_min_pct'), 0, '%') },
+    { label: t('weather.vpdMax'), icon: mdiWeatherSunny, color: '#7c3aed', value: withUnit(maxOf(days, 'vpd_max_kpa'), 1, 'kPa') },
+    { label: t('weather.kpi.windMax'), icon: mdiWeatherWindy, color: '#475569', value: withUnit(maxOf(days, 'wind_speed_max_ms'), 1, 'm/s') },
+    { label: t('weather.kpi.rainTotal'), icon: mdiWeatherRainy, color: '#2563eb', value: rain.length ? `${num(rain.reduce((a, b) => a + b, 0), 1)} mm` : '–' },
+    { label: t('weather.kpi.dryDays'), icon: mdiWaterOff, color: '#64748b', value: num(last?.days_since_rain), note: last ? t('ficha.asOf', { date: date(last.date) }) : '' },
   ]
 }
 
-// "celda NASA POWER a 16 km": which grid cell stands for the hexagon.
+// "NASA POWER cell 16 km away": which grid cell stands for the hexagon.
 export const cellsLabel = (weather) =>
-  (weather?.cells ?? []).map((c) => `celda NASA POWER a ${num(c.distance_km, 1)} km`).join(' · ')
+  (weather?.cells ?? []).map((c) => t('weather.cell', { km: num(c.distance_km, 1) })).join(' · ')
 
 // The newest days may have rain but not temperature yet (POWER fills them in ~2 days).
 export const merraMissing = (days) => days.some((d) => d.precipitation_mm !== null && d.t2m_max_c === null)
 
-const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO']
-// Where the wind comes from, as a compass point (0° = north).
-export const compass = (deg) => (deg === null || deg === undefined ? '–' : COMPASS[Math.round(deg / 45) % 8])
 
 // The 'YYYY-MM-DD' that is `days` before `iso`.
 export const daysBefore = (iso, days) => {
@@ -48,7 +50,7 @@ const PRODUCTS = { power: 'NASA POWER' }
 export const coverageLabel = (weather) =>
   (weather?.cells ?? [])
     .filter((c) => c.first_date)
-    .map((c) => `${PRODUCTS[c.product]}: ${c.first_date} → ${c.last_date}`)
+    .map((c) => `${PRODUCTS[c.product]}: ${date(c.first_date)} → ${date(c.last_date)}`)
     .join(' · ')
 
 export const hasTemperature = (days) => days.some((d) => d.t2m_max_c !== null && d.t2m_max_c !== undefined)

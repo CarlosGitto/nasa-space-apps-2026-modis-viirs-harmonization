@@ -9,6 +9,7 @@ export const LOADING_KINDS = {
   hexagons: ['#f97316'], // fire data on the map
   panel: ['#2563eb'], // the selected hexagons' observations and fichas
   curtain: ['#ffcc00', '#22d3ee'], // MODIS | VIIRS
+  weather: ['#0d9488'], // weather layers and the hexagon's weather (NASA POWER)
   contours: ['#5f7a45'], // contour lines
   imagery: ['#0ea5e9'], // satellite imagery (GIBS)
   stats: ['#fbbf24'], // burn calendar and time slider bars
