@@ -6,6 +6,7 @@ import CompareMap from './components/CompareMap.vue'
 import Controls from './components/Controls.vue'
 import FireMap from './components/FireMap.vue'
 import LanguageSwitch from './components/LanguageSwitch.vue'
+import LoadingBar from './components/LoadingBar.vue'
 import TimeSlider from './components/TimeSlider.vue'
 import HexagonPanel from './components/hexagon/HexagonPanel.vue'
 import { useFiltersStore } from './stores/filters'
@@ -18,6 +19,7 @@ onMounted(() => store.loadDatasets())
 </script>
 
 <template>
+  <LoadingBar />
   <a class="skip-link" href="#map">{{ $t('app.skipToMap') }}</a>
   <div class="layout" :class="{ 'with-hex': panelOpen }">
     <aside class="panel" :aria-label="$t('app.sidebar')">

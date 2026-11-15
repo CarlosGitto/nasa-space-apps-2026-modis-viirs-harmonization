@@ -8,12 +8,15 @@ import { useI18n } from 'vue-i18n'
 import { getDaily } from '../api'
 import { date, num } from '../format'
 import { useFiltersStore } from '../stores/filters'
+import { useLoadingBar } from '../stores/loading'
 
 const HOLD_MS = 900 // each day stays on screen at least this long once fully drawn
 const MAX_WAIT_MS = 10_000 // never wait longer than this for a slow map
 const TICK_MS = 150
 
 const store = useFiltersStore()
+const loading = ref(false)
+useLoadingBar('stats', loading)
 const { t } = useI18n()
 const counts = ref({}) // 'YYYY-MM-DD' -> detections
 const playing = ref(false)
@@ -56,16 +59,16 @@ async function loadCounts() {
   if (!store.dataset || !store.currentDataset?.available || !days.value.length) return
   controller?.abort()
   controller = new AbortController()
+  const { signal } = controller
+  loading.value = true
   try {
     // The whole range (not just the slider's day), so every bar has its height.
-    const rows = await getDaily(
-      store.dataset,
-      { start: store.start, end: store.end, zone: store.zone },
-      controller.signal,
-    )
+    const rows = await getDaily(store.dataset, { start: store.start, end: store.end, zone: store.zone }, signal)
     counts.value = Object.fromEntries(rows.map((r) => [r.date, r.detections]))
   } catch (e) {
     if (e.name !== 'AbortError') counts.value = {}
+  } finally {
+    if (!signal.aborted) loading.value = false
   }
 }
 

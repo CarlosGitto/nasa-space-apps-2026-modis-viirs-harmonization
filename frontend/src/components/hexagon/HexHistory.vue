@@ -4,6 +4,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getHexagon, getHexagonMonthly } from '../../api'
+import { useLoadingBar } from '../../stores/loading'
 import { date, errorMessage } from '../../format'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import MiniChart from './MiniChart.vue'
@@ -17,6 +18,7 @@ const info = ref(null)
 const monthly = ref([])
 const error = ref(null) // the API error (with .status), shown in the user's language
 const loading = ref(false)
+useLoadingBar('panel', loading)
 
 async function load() {
   loading.value = true

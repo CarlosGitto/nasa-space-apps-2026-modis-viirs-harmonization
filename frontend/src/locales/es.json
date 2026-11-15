@@ -77,7 +77,8 @@
       "night": "Noche"
     },
     "zoomIn": "Acercar",
-    "zoomOut": "Alejar"
+    "zoomOut": "Alejar",
+    "contours": "Curvas de nivel"
   },
   "curtain": {
     "title": "MODIS {'|'} VIIRS · {product}",

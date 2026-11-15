@@ -20,6 +20,7 @@ import {
   fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
+import { trackMapSources, useLoadingBar } from '../stores/loading'
 import { usePrefsStore } from '../stores/prefs'
 
 // Imagery per side: { id, sat, kind } -> label "<sat> (fire)" / "<sat> true color" in the user's language.
@@ -51,6 +52,8 @@ const imgLeft = ref(LEFT_IMAGERY[0].id)
 const imgRight = ref(RIGHT_IMAGERY[0].id)
 const detMode = ref('side') // 'side' | 'both' | 'none'
 const loading = ref(false)
+useLoadingBar('curtain', loading) // the top loading bar, MODIS yellow -> VIIRS cyan
+const untrack = []
 const error = ref(null)
 const zoomedIn = ref(false)
 const result = ref(null) // last fetch: { kind: 'hex' | 'points', modis, viirs }
@@ -77,6 +80,7 @@ function createMap(el, side) {
   })
   if (side === 'right') map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
   map.on('load', () => {
+    untrack.push(trackMapSources(map, { img: 'imagery', openmaptiles: 'basemap' }))
     addLayers(map)
     localizeBasemap(map, prefs.locale)
     applyContrast(map)
@@ -261,6 +265,7 @@ onBeforeUnmount(() => {
   store.setBusy('curtain', false)
   maps.left?.remove()
   maps.right?.remove()
+  for (const stop of untrack) stop()
 })
 
 watch(() => [store.queryParams, store.compareSides.left.id, store.compareSides.right.id], refresh)

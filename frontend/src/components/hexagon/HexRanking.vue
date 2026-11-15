@@ -6,6 +6,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSelectionSummary } from '../../api'
 import { date, errorMessage } from '../../format'
 import { useFiltersStore } from '../../stores/filters'
+import { useLoadingBar } from '../../stores/loading'
 import HexHistory from './HexHistory.vue'
 import HexPeriod from './HexPeriod.vue'
 import { num } from './charts'
@@ -21,6 +22,7 @@ const store = useFiltersStore()
 const summary = ref([])
 const error = ref(null) // the API error (with .status), shown in the user's language
 const loading = ref(false)
+useLoadingBar('panel', loading)
 const open = ref(null) // h3 whose ficha is expanded
 const shown = ref(PAGE)
 let controller = null

@@ -8,6 +8,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSelectionDetections } from '../../api'
 import { date, errorMessage } from '../../format'
 import { useFiltersStore } from '../../stores/filters'
+import { useLoadingBar } from '../../stores/loading'
 import { num } from './charts'
 
 const LIMIT = 5000
@@ -19,6 +20,7 @@ const rows = ref([])
 const truncated = ref(false)
 const error = ref(null) // the API error (with .status), shown in the user's language
 const loading = ref(false)
+useLoadingBar('panel', loading)
 const satellite = ref('all')
 const localTime = ref(false)
 const filter = ref('')

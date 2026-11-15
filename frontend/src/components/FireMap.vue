@@ -11,7 +11,7 @@
 //
 // Keyboard: with the map focused, arrows move it and +/− zoom (MapLibre); Enter does what a
 // click at the center (the crosshair) does, Shift+Enter adds or removes that hexagon.
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getDetections, getHexagons } from '../api'
 import { errorMessage } from '../format'
@@ -24,7 +24,9 @@ import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
   fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
+import { contourContrast, setContours } from '../relief'
 import { useFiltersStore } from '../stores/filters'
+import { trackMapSources, useLoadingBar } from '../stores/loading'
 import { usePrefsStore } from '../stores/prefs'
 
 const store = useFiltersStore()
@@ -36,6 +38,11 @@ const tool = ref(null) // 'area' while drawing an area, else null
 const draft = ref([]) // [lng, lat] of the points clicked so far
 const areaNote = ref(null) // { n } hexagons selected, or { tooBig: true }
 const loading = ref(false)
+const scheduled = ref(false) // the map stopped and a refresh is on its way (the 250 ms wait)
+// The top loading bar, in fire orange: from the moment the map stops until the new
+// hexagons are drawn, so it never ends before they change.
+useLoadingBar('hexagons', computed(() => scheduled.value || loading.value))
+let untrackSources = null
 const error = ref(null) // the API error (with .status), shown in the user's language
 const info = ref(null) // what's on screen: { total, hexagons, res, truncated }
 const noImagery = ref(false) // the chosen imagery has no picture for that date
@@ -108,9 +115,11 @@ function updateGrid() {
 
 function scheduleRefresh() {
   clearTimeout(debounce)
+  scheduled.value = store.view === 'map'
   debounce = setTimeout(() => {
     updateGrid()
-    refresh()
+    refresh() // sets `loading` right away when it fetches
+    scheduled.value = false
   }, 250)
 }
 
@@ -364,15 +373,27 @@ function syncImagery() {
   noImagery.value = store.basemap !== 'vector' && !img
 }
 
-// High contrast (accessibility menu): stronger hexagon borders and fill.
+// Hexagon borders and fill. High contrast (accessibility menu) makes them stronger; with
+// the contour lines on, the borders turn neutral gray so they don't mix with the olive lines.
 function applyContrast() {
   if (!mapReady) return
   const on = prefs.contrast
-  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : 0.4)
+  const border = prefs.contours ? '#6b7280' : '#7c2d12'
+  map.setPaintProperty('hex-line', 'line-color', border)
+  map.setPaintProperty('hex-line-dashed', 'line-color', border)
+  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : prefs.contours ? 0.3 : 0.4)
   map.setPaintProperty('hex-line', 'line-width', on ? 0.8 : 0.3)
   map.setPaintProperty('hex-line-dashed', 'line-width', on ? 2.5 : 1.5)
   map.setPaintProperty('hex-fill', 'fill-opacity',
     ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, on ? 0.85 : 0.65, DETAIL_ZOOM + 1, on ? 0.45 : 0.3])
+  contourContrast(map, on)
+}
+
+// Contour lines toggle (relief.js): under the hexagons, labels under the detection points.
+function syncContours() {
+  if (!mapReady) return
+  setContours(map, prefs.contours, { linesBelow: 'hex-fill', labelsBelow: 'points' })
+  applyContrast()
 }
 
 // Enter on the focused map = a click at its center (the crosshair).
@@ -401,6 +422,8 @@ onMounted(() => {
     mapReady = true
     localizeBasemap(map, prefs.locale)
     applyContrast()
+    syncContours()
+    untrackSources = trackMapSources(map, { contours: 'contours', gibs: 'imagery', openmaptiles: 'basemap' })
     map.getCanvas().addEventListener('keydown', onMapKey)
     syncImagery()
     syncSelection()
@@ -421,6 +444,7 @@ onBeforeUnmount(() => {
   resizer?.disconnect()
   window.removeEventListener('keydown', onKey, { capture: true })
   cancelAnimationFrame(draftFrame)
+  untrackSources?.()
   map?.remove()
 })
 
@@ -443,6 +467,7 @@ watch(() => store.selectedHexes, syncSelection)
 watch(() => [store.zone, store.zoneCells], syncZone)
 watch(() => store.zone, (zone) => { if (!zone) areaNote.value = null })
 watch(() => prefs.contrast, applyContrast)
+watch(() => prefs.contours, syncContours)
 watch(() => prefs.locale, (locale) => {
   if (!mapReady) return
   localizeBasemap(map, locale)
@@ -461,6 +486,9 @@ watch(() => prefs.locale, (locale) => {
         <span aria-hidden="true">▱</span> {{ $t('map.area') }}
       </button>
       <button v-if="store.zone" @click="clearZone"><span aria-hidden="true">✕</span> {{ $t('map.clearArea') }}</button>
+      <button :aria-pressed="prefs.contours" :class="{ active: prefs.contours }" @click="prefs.contours = !prefs.contours">
+        <span aria-hidden="true">⛰</span> {{ $t('map.contours') }}
+      </button>
       <span v-if="tool" class="hint" role="status">{{ $t('map.areaHint', AREA_POINTS - draft.length) }}</span>
       <span v-else-if="areaNote" class="hint" role="status">
         {{ areaNote.tooBig ? $t('map.areaTooBig', { max: fmt(MAX_SELECTION) }) : $t('map.areaSelected', { n: fmt(areaNote.n) }) }}

@@ -13,6 +13,7 @@ import { getMonthly } from '../api'
 import { errorMessage, num } from '../format'
 import { chartFont, months } from './hexagon/charts'
 import { useFiltersStore } from '../stores/filters'
+import { useLoadingBar } from '../stores/loading'
 import { usePrefsStore } from '../stores/prefs'
 
 echarts.use([AriaComponent, HeatmapChart, GridComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
@@ -22,6 +23,8 @@ const prefs = usePrefsStore()
 const { t } = useI18n()
 const el = ref(null)
 const rows = ref([])
+const loading = ref(false)
+useLoadingBar('stats', loading)
 const error = ref(null)
 let chart = null
 let resizer = null
@@ -44,11 +47,15 @@ async function load() {
   if (!store.dataset || !store.currentDataset?.available) return
   controller?.abort()
   controller = new AbortController()
+  const { signal } = controller
+  loading.value = true
   try {
-    rows.value = await getMonthly(store.dataset, { zone: store.zone }, controller.signal)
+    rows.value = await getMonthly(store.dataset, { zone: store.zone }, signal)
     error.value = null
   } catch (e) {
     if (e.name !== 'AbortError') error.value = e
+  } finally {
+    if (!signal.aborted) loading.value = false
   }
 }
 

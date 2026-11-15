@@ -1,6 +1,7 @@
-// The user's preferences: language and accessibility options (the menu with the
-// accessibility icon). Saved in this browser and applied as attributes on <html>,
-// which the styles (style.css) and the maps read:
+// The user's preferences: language, accessibility options (the menu with the
+// accessibility icon) and map layers like the contour lines. Saved in this browser;
+// language and accessibility are applied as attributes on <html>, which the styles
+// (style.css) and the maps read:
 //   lang, data-text-size (normal|large|xlarge), data-contrast, data-reduce-motion, data-easy-reading
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
@@ -17,6 +18,7 @@ export const usePrefsStore = defineStore('prefs', () => {
   const contrast = ref(saved.contrast === true)
   const reduceMotion = ref(typeof saved.reduceMotion === 'boolean' ? saved.reduceMotion : systemReducedMotion())
   const easyReading = ref(saved.easyReading === true)
+  const contours = ref(saved.contours === true) // contour lines on the main map
 
   function apply() {
     const html = document.documentElement
@@ -33,10 +35,10 @@ export const usePrefsStore = defineStore('prefs', () => {
     }
     savePrefs({
       locale: locale.value, textSize: textSize.value, contrast: contrast.value,
-      reduceMotion: reduceMotion.value, easyReading: easyReading.value,
+      reduceMotion: reduceMotion.value, easyReading: easyReading.value, contours: contours.value,
     })
   }
-  watch([locale, textSize, contrast, reduceMotion, easyReading], apply, { immediate: true })
+  watch([locale, textSize, contrast, reduceMotion, easyReading, contours], apply, { immediate: true })
 
   const setLocale = (l) => { if (LOCALES.includes(l)) locale.value = l }
   function reset() {
@@ -46,5 +48,5 @@ export const usePrefsStore = defineStore('prefs', () => {
     easyReading.value = false
   }
 
-  return { locale, textSize, contrast, reduceMotion, easyReading, TEXT_SIZES, setLocale, reset }
+  return { locale, textSize, contrast, reduceMotion, easyReading, contours, TEXT_SIZES, setLocale, reset }
 })

@@ -22,7 +22,7 @@ export default [
     rules: {
       // Symbols, numbers and technical names (sensor names, language codes) are not translated.
       '@intlify/vue-i18n/no-raw-text': ['error', {
-        ignorePattern: '^[\\s\\-–—·:/%|()+×▶◀▾▸▼▲❚✕▱⚠*.,0-9]*$',
+        ignorePattern: '^[\\s\\-–—·:/%|()+×▶◀▾▸▼▲❚✕▱⚠⛰*.,0-9]*$',
         ignoreText: ['MODIS', 'VIIRS', 'ES', 'EN'],
       }],
       '@intlify/vue-i18n/no-missing-keys': 'error',

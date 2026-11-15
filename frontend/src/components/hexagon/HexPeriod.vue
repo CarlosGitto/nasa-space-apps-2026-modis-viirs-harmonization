@@ -7,6 +7,7 @@ import { getHexagonPeriod } from '../../api'
 import { date, errorMessage } from '../../format'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import { useFiltersStore } from '../../stores/filters'
+import { useLoadingBar } from '../../stores/loading'
 import MiniChart from './MiniChart.vue'
 import { chartLabel, dayLabel, dayRange, num, pct, sensorBars } from './charts'
 import './ficha.css'
@@ -18,6 +19,7 @@ const { t } = useI18n()
 const period = ref(null)
 const error = ref(null) // the API error (with .status), shown in the user's language
 const loading = ref(false)
+useLoadingBar('panel', loading)
 let controller = null
 
 const range = computed(() => ({ start: store.queryParams.start, end: store.queryParams.end }))

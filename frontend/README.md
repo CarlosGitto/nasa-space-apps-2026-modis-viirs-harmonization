@@ -50,6 +50,21 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   area that burns on the day shown comes up), with each ficha on click.
 - **Time slider ▶**: the next day comes only once the visible map (or both curtain
   sides) has fully drawn the current one, data and imagery.
+- **Contour lines** ([src/relief.js](src/relief.js)): "Contour lines" on the map toolbar,
+  remembered in the browser. Drawn in the browser by `maplibre-contour` from the public
+  AWS Terrain Tiles (mostly NASA SRTM): nothing is ingested or stored. Off, nothing is
+  requested; on, only the visible area, cached. Spaced out by zoom (1000 m from zoom 6,
+  500 m from 9, 100 m from 11, 50 m from 13), olive, under the fire hexagons, whose borders
+  turn neutral gray while the contours are on.
+- **Loading bar** ([src/components/LoadingBar.vue](src/components/LoadingBar.vue),
+  [src/stores/loading.js](src/stores/loading.js)): a 3 px line at the very top that grows
+  from the left while something loads (fast at first, then slower, never finishing by
+  itself) and completes only when the load is really done (for the map: from the moment it
+  stops until the new hexagons are drawn), in the color of what loads: fire orange (hexagons), blue (hexagon
+  panel), MODIS yellow → VIIRS cyan (curtain), olive (contour lines), sky blue
+  (satellite imagery), amber (calendar and slider), gray (basemap); several at once
+  blend. Shows only after 150 ms, so quick loads don't flicker; full and still with reduced motion.
+  New loads join with `useLoadingBar(kind, loadingRef)`, or `trackMapSources` for map tiles.
 - **Burn calendar** ([src/components/BurnCalendar.vue](src/components/BurnCalendar.vue)):
   detections per month × year (`/stats/monthly`) for the dataset and zone.
   Clicking a month sets the map dates to that month.
