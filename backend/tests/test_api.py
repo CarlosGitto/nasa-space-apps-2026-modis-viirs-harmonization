@@ -146,7 +146,10 @@ def test_datasets_lists_all_three_sensors(client):
     body = {d["id"]: d for d in client.get("/datasets").json()}
     assert set(body) == {
         "modis_best", "modis_sp", "modis_nrt", "viirs_best", "viirs_sp", "viirs_nrt", "harmonized_nrt", "harmonized_sp",
+        "modis_harmonized", "viirs_harmonized",
     }
+    # the MODIS-units datasets need fct_hexagon_harmonized_daily, which this test lake does not have
+    assert not body["modis_harmonized"]["available"] and not body["viirs_harmonized"]["available"]
     assert body["modis_sp"] == {
         "id": "modis_sp", "sensor": "modis", "product": "sp", "available": True,
         "rows": 3, "start_date": "2026-11-10", "end_date": "2026-11-11",
@@ -466,3 +469,9 @@ def test_selection_detections(client):
 ])
 def test_selection_rejects_bad_input(client, body):
     assert client.post("/hexagons/selection/summary", json=body).status_code == 422
+
+
+def test_harmonized_calendar_needs_the_harmonized_layer(client):
+    # the test lake has no fct_hexagon_harmonized_daily: clear 404, not a SQL error
+    r = client.get("/stats/harmonized/monthly")
+    assert r.status_code == 404 and "not been built" in r.json()["detail"]

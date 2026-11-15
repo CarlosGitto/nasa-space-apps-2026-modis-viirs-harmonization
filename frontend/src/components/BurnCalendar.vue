@@ -6,7 +6,7 @@ import * as echarts from 'echarts/core'
 import { HeatmapChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { getMonthly } from '../api'
+import { getHarmonizedMonthly, getMonthly } from '../api'
 import { useFiltersStore } from '../stores/filters'
 
 echarts.use([HeatmapChart, GridComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
@@ -17,21 +17,26 @@ const store = useFiltersStore()
 const el = ref(null)
 const years = ref([])
 const error = ref(null)
+// Raw: the dataset chosen in the controls. Harmonized: one series across MODIS -> VIIRS (2000 onward), MODIS units.
+const harmonized = ref(false)
 let chart = null
 let resizer = null
 let controller = null
 
 const title = computed(() => `Calendario de quema · ${store.zone ? 'Zona dibujada' : 'Mundo'}`)
+const unit = computed(() => (harmonized.value ? 'detecciones (unidades MODIS)' : 'detecciones'))
 const height = computed(() => `${Math.max(160, years.value.length * 26 + 110)}px`)
-const fmt = (n) => (n ?? 0).toLocaleString('es-AR')
+const fmt = (n) => (n ?? 0).toLocaleString('es-AR', { maximumFractionDigits: harmonized.value ? 1 : 0 })
 
 async function load() {
-  if (!store.dataset || !store.currentDataset?.available) return
+  if (!harmonized.value && (!store.dataset || !store.currentDataset?.available)) return
   controller?.abort()
   controller = new AbortController()
   let rows
   try {
-    rows = await getMonthly(store.dataset, { zone: store.zone }, controller.signal)
+    rows = harmonized.value
+      ? await getHarmonizedMonthly({ zone: store.zone }, controller.signal)
+      : await getMonthly(store.dataset, { zone: store.zone }, controller.signal)
     error.value = null
   } catch (e) {
     if (e.name !== 'AbortError') error.value = e.message
@@ -45,7 +50,7 @@ async function load() {
   chart.setOption(
     {
       tooltip: {
-        formatter: (p) => `${MONTHS[p.value[0]]} ${years.value[p.value[1]]}<br><b>${fmt(p.value[2])}</b> detecciones`,
+        formatter: (p) => `${MONTHS[p.value[0]]} ${years.value[p.value[1]]}<br><b>${fmt(p.value[2])}</b> ${unit.value}`,
       },
       grid: { left: 48, right: 8, top: 8, bottom: 72 },
       xAxis: { type: 'category', data: MONTHS, splitArea: { show: true }, axisLabel: { interval: 0, fontSize: 10 } },
@@ -68,7 +73,13 @@ async function load() {
 
 onMounted(() => {
   chart = echarts.init(el.value)
-  chart.on('click', (p) => store.setMonth(years.value[p.value[1]], p.value[0] + 1))
+  chart.on('click', (p) => {
+    const [year, month] = [years.value[p.value[1]], p.value[0] + 1]
+    // The harmonized calendar reaches back to 2000; the map only has the months of the chosen dataset.
+    const first = store.currentDataset?.start_date
+    if (first && new Date(Date.UTC(year, month, 0)) < new Date(`${first}T00:00:00Z`)) return
+    store.setMonth(year, month)
+  })
   resizer = new ResizeObserver(() => chart.resize())
   resizer.observe(el.value)
   load()
@@ -80,13 +91,23 @@ onBeforeUnmount(() => {
   chart?.dispose()
 })
 
-watch(() => [store.dataset, store.zone], load)
+watch(() => [store.dataset, store.zone, harmonized.value], load)
 </script>
 
 <template>
   <section class="calendar">
     <h2>{{ title }}</h2>
-    <p class="hint">Click en un mes para verlo en el mapa.</p>
+    <div class="mode" role="group" aria-label="Valores del calendario">
+      <button :class="{ on: !harmonized }" @click="harmonized = false">Raw</button>
+      <button :class="{ on: harmonized }" @click="harmonized = true">Armonizado</button>
+    </div>
+    <p class="hint">
+      <template v-if="harmonized">
+        Una sola serie 2000 → hoy en unidades MODIS: MODIS hasta ene 2012, VIIRS S-NPP ÷ k desde feb 2012.
+      </template>
+      <template v-else>Datos del dataset elegido, sin ajustar.</template>
+      Click en un mes para verlo en el mapa.
+    </p>
     <p v-if="error" class="error">{{ error }}</p>
     <div ref="el" class="chart" :style="{ height }"></div>
   </section>
@@ -97,4 +118,7 @@ h2 { margin: 0; font-size: 14px; }
 .hint { margin: 2px 0 6px; font-size: 12px; color: var(--muted); }
 .error { color: var(--danger); font-size: 12px; }
 .chart { width: 100%; }
+.mode { display: inline-flex; margin: 4px 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.mode button { font: inherit; font-size: 12px; padding: 3px 10px; border: 0; background: var(--bg); color: var(--text); cursor: pointer; }
+.mode button.on { background: var(--accent, #2563eb); color: #fff; }
 </style>

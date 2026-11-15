@@ -9,11 +9,20 @@ const store = useFiltersStore()
 const SENSORS = { modis: 'MODIS', viirs: 'VIIRS', harmonized: 'Harmonized' }
 const PRODUCTS = { best: 'SP + NRT · continuous', sp: 'SP · science quality', nrt: 'NRT · near real-time' }
 
+// modis_harmonized / viirs_harmonized are the harmonized layers of the Compare view and the calendar; they would
+// show up here with the same label as modis_best / viirs_best (same sensor and product, fewer detections).
+const selectable = (d) => !d.id.endsWith('_harmonized')
+
+// The external "Harmonized" group (datasets that a harmonization team drops into the lake) only shows once one of
+// them has data; empty, it is just two "(no data)" entries.
 const groups = computed(() =>
-  Object.entries(SENSORS).map(([sensor, label]) => ({
-    label,
-    options: store.datasets.filter((d) => d.sensor === sensor),
-  })),
+  Object.entries(SENSORS)
+    .map(([sensor, label]) => ({
+      sensor,
+      label,
+      options: store.datasets.filter((d) => d.sensor === sensor && selectable(d)),
+    }))
+    .filter((g) => g.sensor !== 'harmonized' || g.options.some((d) => d.available)),
 )
 
 const fmt = (n) => n.toLocaleString('en-US')

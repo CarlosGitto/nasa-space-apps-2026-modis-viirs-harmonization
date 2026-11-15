@@ -347,6 +347,32 @@ def cells_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset, with_center: boo
     )
 
 
+# First month of the harmonized series that comes from VIIRS (before it, MODIS): VIIRS S-NPP has data from 2012-01-20,
+# February is its first whole month. Same cut as fct_hexagon_harmonized_monthly.
+SPLICE_DATE = "2012-02-01"
+
+
+def harmonized_series_ready(cur: duckdb.DuckDBPyConnection) -> bool:
+    return _attached and "fct_hexagon_harmonized_daily" in _tables(cur)
+
+
+def harmonized_series_relation(with_center: bool = False) -> str:
+    """Hexagon-day rows of the harmonized series across the MODIS -> VIIRS change, in MODIS units: MODIS before
+    SPLICE_DATE, VIIRS S-NPP / k from then on. Same columns as cells_relation (fractional detections)."""
+    cut = (f"((d.sensor = 'modis' and d.acq_date < date '{SPLICE_DATE}') "
+           f"or (d.sensor = 'viirs' and d.acq_date >= date '{SPLICE_DATE}'))")
+    if not with_center:
+        return (
+            "(select d.h3_r6, d.acq_date, d.daynight, d.fire_detections as detections, d.static_detections, "
+            f"d.fire_frp_sum as frp_sum from {HARMONIZED_DAILY} d where {cut})"
+        )
+    return (
+        "(select d.h3_r6, h.center_lat as latitude, h.center_lon as longitude, d.acq_date, d.daynight, "
+        "d.fire_detections as detections, d.static_detections, d.fire_frp_sum as frp_sum "
+        f"from {HARMONIZED_DAILY} d join {HEXAGONS} h using (h3_r6) where {cut})"
+    )
+
+
 def _harmonized_points(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
     """Points of a harmonized dataset, from its own relation (contract in the README)."""
     source = ds.relation

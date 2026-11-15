@@ -426,6 +426,30 @@ def monthly_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[
     ]
 
 
+@router.get("/stats/harmonized/monthly")
+def harmonized_monthly_stats(cur: Cursor, filters: FiltersDep) -> list[MonthlyStat]:
+    """Burn calendar of the harmonized series: ONE continuous series across the MODIS -> VIIRS change, in MODIS units
+    (MODIS with merged bow-tie duplicates before 2012-02, VIIRS S-NPP divided by the k of each hexagon after).
+    Detections are fractional; FRP in MW."""
+    if not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    base = db.harmonized_series_relation(with_center=filters.bbox is not None or filters.zone is not None)
+    where, params = filters.where()
+    rows = cur.execute(
+        f"""
+        select year(acq_date), month(acq_date), sum(detections), sum(frp_sum), sum(static_detections)
+        from {base}
+        where {where}
+        group by all
+        order by 1, 2
+        """,
+        params,
+    ).fetchall()
+    return [
+        MonthlyStat(year=y, month=m, detections=n, frp_sum=fs, static_detections=st) for y, m, n, fs, st in rows
+    ]
+
+
 # ------------------------------------------------------------- one hexagon ---
 # The hexagon is the canonical entity: these endpoints hand over its products
 # (identity, profile, monthly series, period summary, detections), precomputed

@@ -40,6 +40,8 @@ export const getHexagons = (dataset, params, signal) =>
 export const getMonthly = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/monthly`, params, signal)
 
+export const getHarmonizedMonthly = (params, signal) => get('/stats/harmonized/monthly', params, signal)
+
 export const getDaily = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/daily`, params, signal)
 
