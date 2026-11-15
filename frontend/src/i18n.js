@@ -24,6 +24,7 @@ const numberFormats = {
   decimal1: { maximumFractionDigits: 1, useGrouping: 'always' },
   decimal2: { minimumFractionDigits: 2, maximumFractionDigits: 2 },
   decimal4: { minimumFractionDigits: 4, maximumFractionDigits: 4 },
+  significant2: { maximumSignificantDigits: 2, useGrouping: 'always' },
   percent: { style: 'percent', maximumFractionDigits: 0 },
 }
 // Dates in the data are UTC calendar days: format them in UTC so they never shift.

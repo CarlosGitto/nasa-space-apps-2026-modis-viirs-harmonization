@@ -81,6 +81,21 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
 - **Panel with many hexagons**: Observaciones in one request; the fichas become a
   list, busiest first, that follows the dates and the time slider (a hexagon of the
   area that burns on the day shown comes up), with each ficha on click.
+- **Split view** ([src/components/CompareMap.vue](src/components/CompareMap.vue)): two synced maps
+  split by a draggable handle, without the time slider. *Epochs* (default): the same place in two
+  periods, **months or years**, each side the aggregate of its period; harmonized by default (one
+  series in MODIS units, `GET /stats/harmonized/hex`) or the chosen dataset's raw values. Periods
+  are always inside the chosen dataset's coverage (partial ones are marked); the change is per day
+  when the lengths differ. Optional imagery of each period's last day. *MODIS | VIIRS*: both
+  sensors over the panel's whole date range, how each sees the same fire.
+- **Color scale**: hexagons are colored by fire per 1,000 km² per day, on a scale **relative to
+  what was asked for** (percentiles of the query), so long ranges and far zooms don't wash out.
+  The main map keeps the range's scale while the time slider plays; the split view shares one
+  scale between its sides. A small legend shows the values. Borders are a whole pixel (not a
+  fraction), light, so they look alike on every screen scale.
+- **Side panel**: folds to a thin rail (the handle on its edge) that still shows the dataset and
+  dates; remembered in the browser.
+- **Mouse coordinates**: bottom right of the map.
 - **Time slider ▶**: the next day comes only once the visible map (or both curtain
   sides) has fully drawn the current one, data and imagery.
 - **Contour lines** ([src/relief.js](src/relief.js)): "Contour lines" on the map toolbar,

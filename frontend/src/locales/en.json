@@ -6,7 +6,10 @@
     "sidebar": "Filters and calendar",
     "mapArea": "Map and time slider",
     "language": "Language",
-    "backendDown": "Could not load the data: {error}"
+    "backendDown": "Could not load the data: {error}",
+    "hidePanel": "Hide the panel",
+    "showPanel": "Show the panel",
+    "railSummary": "{dataset} · {start} – {end}"
   },
   "common": {
     "loading": "Loading…",
@@ -80,7 +83,17 @@
     },
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
-    "contours": "Contour lines"
+    "contours": "Contour lines",
+    "scale": {
+      "label": "Color scale, relative to what was asked for: from {low} (light) to {high} (dark) detections per 1,000 km² per day; middle of the scale: {mid}.",
+      "unit": "per 1,000 km²/day"
+    },
+    "hemi": {
+      "n": "N",
+      "s": "S",
+      "e": "E",
+      "w": "W"
+    }
   },
   "curtain": {
     "title": "MODIS {'|'} VIIRS · {product}",
@@ -101,8 +114,28 @@
     "ratio": " · VIIRS/MODIS ×{r}",
     "truncated": "· showing up to {n} per sensor: zoom in to see all",
     "bothHint": "· zoom in to see both sensors on each side",
-    "mapLeft": "MODIS map (left)",
-    "mapRight": "VIIRS map (right)"
+    "mapLeft": "Left map",
+    "mapRight": "Right map",
+    "imagery": "Imagery",
+    "compare": "What to compare",
+    "sensorsMode": "MODIS {'|'} VIIRS",
+    "rangeHint": "Panel range: {start} – {end}.",
+    "epochs": {
+      "mode": "Epochs",
+      "title": "Compare epochs",
+      "grain": "Periods of",
+      "month": "Month",
+      "year": "Year",
+      "partial": "{period} (partial)",
+      "summary": "{left}: {leftN} · {right}: {rightN} detections in view",
+      "change": " · {pct}",
+      "changePerDay": " · {pct} per day",
+      "hint": "The same place in two periods: each side adds up its whole month or year. Only periods with {dataset} data.",
+      "harmonizedHint": "Harmonized: one series in MODIS units (MODIS until January 2012, VIIRS S-NPP ÷ k after), comparable across epochs.",
+      "useRaw": "See raw values",
+      "noCoverage": "The chosen dataset has no data to compare.",
+      "imageryOf": "{days} · image of {image}"
+    }
   },
   "slider": {
     "region": "Time slider",

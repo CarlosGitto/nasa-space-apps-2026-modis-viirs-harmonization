@@ -11,6 +11,14 @@ export function num(value, digits = 0) {
   return g.n(value, FORMATS[digits] ?? 'decimal4')
 }
 
+// Number with 2 significant digits (0.0034, 1.2, 4.500): for values spanning orders of magnitude.
+export const sig = (value) => (value === null || value === undefined || Number.isNaN(value) ? '–' : g.n(value, 'significant2'))
+
+// A dataset as the controls name it: 'VIIRS SP + NRT · continuo'.
+const SENSOR_NAMES = { modis: 'MODIS', viirs: 'VIIRS' }
+export const datasetName = (d) =>
+  d ? `${SENSOR_NAMES[d.sensor] ?? g.t(`controls.sensors.${d.sensor}`)} ${g.t(`controls.products.${d.product}`)}` : ''
+
 // Share (0..1) as a percentage; '–' when missing.
 export const pct = (share) => (share === null || share === undefined ? '–' : g.n(share, 'percent'))
 

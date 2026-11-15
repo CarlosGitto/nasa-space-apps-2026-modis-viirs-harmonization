@@ -688,6 +688,12 @@ def test_harmonized_calendar_needs_the_harmonized_layer(client):
     assert r.status_code == 404 and "not been built" in r.json()["detail"]
 
 
+def test_harmonized_hexagons_need_the_harmonized_layer(client):
+    # the curtain's periods ask for the harmonized series per hexagon: same clear 404 while it isn't built
+    r = client.get("/stats/harmonized/hex", params={"start": "2025-01-01", "end": "2025-12-31", "res": 4})
+    assert r.status_code == 404 and "not been built" in r.json()["detail"]
+
+
 def test_hexagon_reliability_needs_the_reliability_layer(client):
     # the test lake has no fct_hexagon_reliability_monthly: a clear 404 for a valid hexagon, not a SQL error
     r = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/reliability")
