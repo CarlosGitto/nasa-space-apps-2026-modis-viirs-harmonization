@@ -476,7 +476,7 @@ const legendStyle = computed(() => ({
       </label>
     </div>
     <p class="source">
-      {{ store.harmonized ? $t('cal.sourceHarmonized') : $t('cal.sourceRaw', { dataset: datasetName(store.currentDataset) }) }}
+      {{ store.harmonized ? $t('cal.sourceHarmonized', { from: date(span?.start), to: date(span?.end) }) : $t('cal.sourceRaw', { dataset: datasetName(store.currentDataset) }) }}
       <template v-if="store.harmonizedReady === false"> · {{ $t('harm.notBuilt') }}</template>
     </p>
 

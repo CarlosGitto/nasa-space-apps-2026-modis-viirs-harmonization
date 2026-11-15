@@ -153,7 +153,7 @@
     "region": "Calendario de fuego",
     "values": "Valores del calendario y el mapa",
     "harmonizedHint": "Una sola serie de 2000 a hoy en unidades MODIS: MODIS hasta enero de 2012, VIIRS S-NPP ÷ k desde febrero de 2012.",
-    "sourceHarmonized": "MODIS + VIIRS armonizados · una serie desde 2000, unidades MODIS",
+    "sourceHarmonized": "MODIS + VIIRS armonizados · una sola serie, {from} – {to}, en unidades MODIS",
     "sourceRaw": "Detecciones originales · {dataset}",
     "modisUnits": " (unidades MODIS)",
     "zoom": "Zoom del calendario",

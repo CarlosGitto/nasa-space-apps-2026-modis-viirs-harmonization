@@ -4,15 +4,13 @@
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { getHarmonizedDaily, listDatasets } from '../api'
+import { getHarmonizedDaily, getHarmonizedMonthly, listDatasets } from '../api'
 import { errorMessage } from '../format'
 import { pickLayer } from '../gibs'
 import { REGIONS, bbox } from '../regions'
 
 const DEFAULT_DAYS = 7
 const PREFERRED_DATASET = 'viirs_best' // continuous: SP where published, NRT after it
-// First month of the harmonized series (MODIS Terra's first full month of data).
-export const HARMONIZED_START = '2000-11-01'
 
 const isoDate = (d) => d.toISOString().slice(0, 10)
 const addDays = (iso, days) => {
@@ -44,6 +42,10 @@ export const useFiltersStore = defineStore('filters', () => {
   // before 2012-02, VIIRS S-NPP / k after) or 'raw' (the dataset chosen in the controls, as published).
   const values = ref('raw')
   const harmonizedReady = ref(null) // null until known; false when the ETL hasn't built the harmonized series
+  // Days the harmonized series covers in the lake: from its first month (2000 with the whole MODIS archive) to its
+  // last day (it follows the science-quality data, so it can end some days before the near-real-time datasets).
+  const harmonizedFirst = ref(null)
+  const harmonizedLast = ref(null)
   const camera = ref({ center: [0, 20], zoom: 1.5 }) // shared by both views
   const selectedHexes = ref([]) // H3 res-6 ids open in the hexagon panel, in click order
   // Weather layers drawn on the map ('temperature' | 'precipitation' | 'wind'), for imageryDate.
@@ -66,8 +68,7 @@ export const useFiltersStore = defineStore('filters', () => {
       const d = currentDataset.value
       return d?.available ? { start: d.start_date, end: d.end_date } : null
     }
-    const ends = datasets.value.filter((d) => d.available && d.end_date).map((d) => d.end_date).sort()
-    return ends.length ? { start: HARMONIZED_START, end: ends[ends.length - 1] } : null
+    return harmonizedFirst.value && harmonizedLast.value ? { start: harmonizedFirst.value, end: harmonizedLast.value } : null
   })
   // Whether the map and the calendar have something to ask for.
   const ready = computed(() => (harmonized.value ? harmonizedReady.value === true : !!currentDataset.value?.available))
@@ -125,11 +126,24 @@ export const useFiltersStore = defineStore('filters', () => {
       dataset.value = pick.id
       lastDays(pick)
     }
-    // The harmonized series is the calendar's default once the ETL has built it (a one-day probe).
+    // The harmonized series is the calendar's default once the ETL has built it. Where it starts depends on what
+    // was loaded into the lake (2000 with the whole MODIS archive): its first month.
     try {
-      await getHarmonizedDaily({ start: end.value, end: end.value })
+      const months = await getHarmonizedMonthly({})
+      if (!months.length) throw new Error('empty harmonized series')
+      const month = (r) => `${r.year}-${String(r.month).padStart(2, '0')}`
+      const lastMonth = months[months.length - 1]
+      const days = await getHarmonizedDaily({ start: `${month(lastMonth)}-01`, end: isoDate(new Date(Date.UTC(lastMonth.year, lastMonth.month, 0))) })
+      harmonizedFirst.value = `${month(months[0])}-01`
+      harmonizedLast.value = days.length ? days[days.length - 1].date : isoDate(new Date(Date.UTC(lastMonth.year, lastMonth.month, 0)))
       harmonizedReady.value = true
-      setValues('harmonized')
+      values.value = 'harmonized'
+      hexHarmonized.value = true
+      // Open on the latest complete month: a calendar starts on a month, not on a few days.
+      const last = harmonizedLast.value
+      const lastOfIt = isoDate(new Date(Date.UTC(+last.slice(0, 4), +last.slice(5, 7), 0)))
+      const endMonth = lastOfIt === last ? last : addDays(`${last.slice(0, 7)}-01`, -1)
+      setRange(`${endMonth.slice(0, 7)}-01`, endMonth)
     } catch {
       harmonizedReady.value = false
     }
