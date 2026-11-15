@@ -22,6 +22,7 @@ export const usePrefsStore = defineStore('prefs', () => {
     const html = document.documentElement
     i18n.global.locale.value = locale.value
     html.lang = locale.value
+    document.title = i18n.global.t('app.title') // the browser tab too
     html.dataset.textSize = textSize.value
     html.toggleAttribute('data-contrast', contrast.value)
     html.toggleAttribute('data-reduce-motion', reduceMotion.value)
