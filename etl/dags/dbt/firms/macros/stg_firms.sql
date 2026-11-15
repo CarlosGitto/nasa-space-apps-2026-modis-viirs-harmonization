@@ -1,18 +1,24 @@
 {#
-  Whether a bronze table exists yet. A product FIRMS never returned rows for
-  (e.g. VIIRS S-NPP NRT, retired in Nov 2026) has no table. At parse time
-  (execute = false) assume it does, so dbt registers the source dependency.
+  Whether a bronze table exists yet. A product that never returned rows has no
+  table: e.g. VIIRS S-NPP NRT (retired in Nov 2026), or IMERG Final while NASA
+  hasn't published the days we loaded. At parse time (execute = false) assume
+  it does, so dbt registers the source dependency.
 #}
-{% macro firms_table_exists(table) %}
+{% macro source_table_exists(source_name, table) %}
     {% if not execute %}
         {{ return(true) }}
     {% endif %}
-    {% set src = source('firms_raw', table) %}
+    {% set src = source(source_name, table) %}
     {% set n = run_query(
         "select count(*) from information_schema.tables where table_catalog = '" ~ src.database
         ~ "' and table_schema = '" ~ src.schema ~ "' and table_name = '" ~ table ~ "'"
     ).columns[0].values()[0] %}
     {{ return(n > 0) }}
+{% endmacro %}
+
+
+{% macro firms_table_exists(table) %}
+    {{ return(source_table_exists('firms_raw', table)) }}
 {% endmacro %}
 
 
