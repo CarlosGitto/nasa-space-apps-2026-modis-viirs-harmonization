@@ -2,16 +2,18 @@
 // Ficha · historial: the whole history of one hexagon, precomputed in gold
 // (fct_hexagon_profile + fct_hexagon_monthly). One card per sensor.
 import { computed, ref, watch } from 'vue'
-import { getHexagon, getHexagonMonthly } from '../../api'
+import { getHexagon, getHexagonHarmonized, getHexagonMonthly } from '../../api'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import MiniChart from './MiniChart.vue'
 import './ficha.css'
-import { MONTHS, monthLabel, monthRange, num, pct, sensorBars } from './charts'
+import { MONTHS, harmonizedLine, monthLabel, monthRange, num, pct, sensorBars } from './charts'
 
 const props = defineProps({ h3: { type: String, required: true } })
 
 const info = ref(null)
 const monthly = ref([])
+const harmonized = ref({ months: [], covered_months: [] })
+const harmonizedMetric = ref('frp')
 const error = ref(null)
 const loading = ref(false)
 
@@ -20,6 +22,8 @@ async function load() {
   error.value = null
   try {
     ;[info.value, monthly.value] = await Promise.all([getHexagon(props.h3), getHexagonMonthly(props.h3)])
+    // Optional: the spliced series may not be built yet; the rest of the ficha does not depend on it.
+    harmonized.value = await getHexagonHarmonized(props.h3).catch(() => ({ months: [], covered_months: [] }))
   } catch (e) {
     error.value = e.message
     info.value = null
@@ -42,6 +46,15 @@ const monthlyChart = computed(() => {
     bySensor[r.sensor][categories.indexOf(r.month)] += r.fire_detections
   }
   return sensorBars(categories.map(monthLabel), bySensor)
+})
+
+const harmonizedChart = computed(() => harmonizedLine(harmonized.value, harmonizedMetric.value))
+// How far the k of this cell can be trusted: its own (res 6) down to the global one (res 0).
+const kNote = computed(() => {
+  const r = harmonized.value.months.at(-1)
+  if (!r) return ''
+  const own = r.k_res === 6 ? 'propio de la celda' : r.k_res === 0 ? 'global' : `heredado de la celda de resolución ${r.k_res}`
+  return `k (VIIRS / MODIS): FRP ${num(r.k_frp, 2)}, detecciones ${num(r.k_count, 2)} · ${own}`
 })
 
 const climatologyChart = computed(() => {
@@ -102,6 +115,20 @@ const kpis = (p) => [
         </p>
       </section>
 
+      <section v-if="harmonizedChart">
+        <h4>
+          Serie continua MODIS + VIIRS
+          <select v-model="harmonizedMetric" class="metric">
+            <option value="frp">FRP (MW)</option>
+            <option value="detections">Detecciones</option>
+          </select>
+        </h4>
+        <MiniChart :option="harmonizedChart" height="180px" />
+        <p class="muted small">
+          Meses sin datos descargados quedan en blanco (no son cero). Antes de feb 2012, MODIS (sin duplicados de bow-tie); después, VIIRS S-NPP ÷ k, en unidades MODIS.
+          {{ kNote }}. El valor mensual es ruidoso: guíate por la media de 12 meses.
+        </p>
+      </section>
       <section v-if="monthlyChart">
         <h4>Detecciones por mes</h4>
         <MiniChart :option="monthlyChart" />

@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@vue/devtools-api": "^8.2.1",
     "echarts": "6.1.0",
     "h3-js": "4.5.0",
     "maplibre-gl": "6.16.0",

@@ -19,3 +19,5 @@ sources:
       - name: viirs_snpp_sp
       - name: viirs_noaa20_sp
       - name: viirs_noaa21_sp
+      # Windows downloaded, empty ones included (include.firms.load_local registers them)
+      - name: download_windows

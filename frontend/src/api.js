@@ -55,6 +55,8 @@ export const getHexagon = (h3) => cached(`hex:${h3}`, () => get(`/hexagons/${h3}
 
 export const getHexagonMonthly = (h3) => cached(`monthly:${h3}`, () => get(`/hexagons/${h3}/monthly`))
 
+export const getHexagonHarmonized = (h3) => cached(`harmonized:${h3}`, () => get(`/hexagons/${h3}/harmonized`))
+
 export const getHexagonPeriod = (h3, params, signal) => get(`/hexagons/${h3}/period`, params, signal)
 
 export const getHexagonDetections = (h3, params, signal) => get(`/hexagons/${h3}/detections`, params, signal)

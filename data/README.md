@@ -85,6 +85,50 @@ NRT (near real time):                   day after SP ─────────
 Instead of downloading, you can copy someone's `data/lake/` folder (stop Airflow
 first so nothing is writing): the catalog and its files travel together.
 
+## Loading files you already downloaded
+
+If you have FIRMS CSVs from somewhere else (the Area API, one file per request), you can put them in the lake
+without downloading anything again. Any folder layout works; the product in the file name (`MODIS_SP`,
+`VIIRS_NOAA20_SP`, `VIIRS_SNPP_NRT`, ...) decides the bronze table, and files that aren't a FIRMS CSV (wrong
+header, no rows, no product in the name) are skipped and reported.
+
+```bash
+make etl-load-local DIR=/path/to/csvs ARGS="--dry-run"     # what it found and what it would load; touches nothing
+make etl-load-local DIR=/path/to/csvs                      # load it
+make etl-reprocess                                         # silver + gold from the raw data (Airflow running)
+```
+
+It stages the files as Parquet (typed, the same detection found in several files kept once) and appends them
+with the same dlt pipeline as the API loads, so the rows are indistinguishable from API loads: dbt keeps the
+latest version of each detection, whatever its origin. Lineage columns say where each row came from:
+`_firms_url` is `local-file://<path relative to DIR>`, `_firms_area` the bbox of the file (see below) or
+`local:<label>`, `_extracted_at` the file's modification time.
+
+- **Load order matters.** Silver keeps, for each detection, the row of the *latest load*, not of the newest data:
+  a file loaded after an API load replaces that API row if both describe the same detection (same place, time and
+  satellite). Load old files first, or load only what the lake doesn't have (`--since`/`--until`, `--product`).
+- **Large backfills: load and build by year.** Tested with 12.6 M detections (9,281 files, 2012–2025, 4 products):
+  the load takes ~3 min, but one `dbt build --full-refresh` over everything runs out of memory (even with 5 GB).
+  Slicing works: for each year run `--since YYYY-01-01 --until YYYY-12-31`, then an incremental `dbt build`
+  (the models are incremental by month). Measured per slice (~3–4 M rows): load 50–65 s, ~2 GB peak;
+  dbt 65–140 s, 4–5.6 GB peak (51/51 models pass). Load years oldest first (see load order).
+- **Record what was downloaded, not only what has fire.** A window with no detections leaves no row, so "no
+  detection" cannot be told from "no data" without a record of the windows. The loader registers every dated file,
+  header-only ones included, in `firms_raw.download_windows`, and dbt (`fct_area_coverage_monthly`) turns it into
+  complete months per area. Files named with only a start date need `--window-days N` (the days that window
+  covers, capped at the end of the year): the downloads in `firms/year/` are 5-day windows, so
+  `--root firms/year --window-days 5`. `--windows-only` records the windows without loading detections (to backfill).
+- Files already loaded (same path, size and modification time) are skipped; the register is the table
+  `firms_raw.local_files_loaded`. `--force` loads them again.
+- `--areas areas.json` fills `_firms_area` from the label in front of the product in the file name
+  (`{"AR_north": "-73.6,-55,-53.6,-21.8"}`); without it the label is kept as `local:AR_north`.
+- Narrow the load with `--product`, `--prefix` (that label), `--since`/`--until` (days written in the file name)
+  and `--exclude` (globs). `make etl-load-local ARGS="--help"` lists everything.
+- Airflow must not be writing to the lake meanwhile (the catalog accepts one writer): pause the ingest and dbt
+  DAGs or stop Airflow first. The command runs with `umask 000` so Airflow can keep writing next to the new files.
+- The loaded days aren't limited to the dev dataset (South America, 2025 onward): the lake takes any area
+  and period, and the scheduled runs go on as before.
+
 ## Setup (once per machine)
 
 `make etl-setup` does it. Airflow runs as uid 50000 inside the containers and

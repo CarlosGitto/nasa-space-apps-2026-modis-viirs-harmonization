@@ -74,3 +74,59 @@ export function dayRange(start, end) {
 }
 
 export const monthLabel = (iso) => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${iso.slice(2, 4)}`
+
+// Series spliced across the MODIS -> VIIRS change (fct_hexagon_harmonized_monthly), in MODIS units.
+// data: { months, covered_months } from the API. A month without a row is a zero only where the data was downloaded
+// (covered_months); elsewhere it is a gap (null), never a zero. The monthly value is noisy (a cell has few
+// detections): the 12-month mean is drawn on top, over covered months only.
+export const SPLICE_MONTH = '2012-02-01'
+export function harmonizedLine(data, metric) {
+  const rows = data?.months ?? []
+  if (!rows.length) return null
+  const covered = new Set(data.covered_months)
+  const all = [...rows.map((r) => r.month), ...data.covered_months].sort()
+  const categories = monthRange(all[0], all.at(-1))
+  const key = metric === 'frp' ? 'frp_harmonized' : 'detections_harmonized'
+  const byMonth = new Map(rows.map((r) => [r.month, r[key]]))
+  const monthly = categories.map((m) => (byMonth.has(m) ? byMonth.get(m) : covered.has(m) ? 0 : null))
+  const trend = monthly.map((_, i) => {
+    if (i < 11) return null
+    const w = monthly.slice(i - 11, i + 1)
+    return w.some((v) => v === null) ? null : w.reduce((a, b) => a + b, 0) / 12
+  })
+  const unit = metric === 'frp' ? 'MW' : 'detecciones'
+  const spliceAt = categories.indexOf(SPLICE_MONTH)
+  return {
+    animation: false,
+    grid: { left: 44, right: 8, top: 28, bottom: 22 },
+    legend: { top: 0, left: 0, itemWidth: 14, itemHeight: 8, textStyle: { color: TEXT, fontSize: 11 } },
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (v) => (v === null || v === undefined ? '–' : `${num(v, 1)} ${unit}`),
+    },
+    xAxis: {
+      type: 'category',
+      data: categories.map(monthLabel),
+      axisLabel: { color: MUTED, fontSize: 10, hideOverlap: true },
+      axisLine: { lineStyle: { color: GRID } },
+      axisTick: { show: false },
+    },
+    yAxis: { type: 'value', axisLabel: { color: MUTED, fontSize: 10 }, splitLine: { lineStyle: { color: GRID } } },
+    series: [
+      {
+        name: 'Mensual', type: 'line', data: monthly, showSymbol: false,
+        lineStyle: { width: 1, color: '#9ca3af' }, itemStyle: { color: '#9ca3af' },
+        markLine: spliceAt < 0 ? undefined : {
+          symbol: 'none', silent: true,
+          lineStyle: { color: MUTED, type: 'dashed' },
+          label: { formatter: 'MODIS → VIIRS', color: MUTED, fontSize: 10 },
+          data: [{ xAxis: spliceAt }],
+        },
+      },
+      {
+        name: 'Media 12 meses', type: 'line', data: trend, showSymbol: false, smooth: true,
+        lineStyle: { width: 2, color: '#eb6834' }, itemStyle: { color: '#eb6834' },
+      },
+    ],
+  }
+}

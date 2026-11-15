@@ -32,3 +32,13 @@ models:
       +schema: silver
     gold:
       +schema: gold
+    harmonized:
+      +schema: gold
+
+# k = VIIRS / MODIS per H3 cell, frozen (see seeds/k_cell.csv, schema.yml).
+seeds:
+  firms:
+    +database: lake
+    +schema: gold
+    k_cell:
+      +column_types: {h3: varchar, res: integer, n_modis: bigint, n_viirs: bigint, k_frp: double, k_count: double}

@@ -201,7 +201,7 @@ const summary = computed(() => {
     `VIIRS ${viirs === null ? 'no data' : fmt(viirs)}`,
   ]
   if (modis && viirs) parts.push(`VIIRS/MODIS ×${(viirs / modis).toFixed(1)}`)
-  return `${parts.join(' · ')} detections in view`
+  return `${parts.join(' · ')} detections in view${store.compareHarmonized && result.value?.kind === 'hex' ? ' (MODIS units)' : ''}`
 })
 const truncated = computed(() => result.value?.kind === 'points' && (result.value.modis?.truncated || result.value.viirs?.truncated))
 
@@ -269,6 +269,12 @@ watch(() => [store.zone, store.zoneCells], syncZone)
           <option v-for="o in RIGHT_IMAGERY" :key="o.id" :value="o.id">{{ o.label }}</option>
         </select>
       </label>
+      <label>Values
+        <select v-model="store.compareHarmonized">
+          <option :value="false">Raw</option>
+          <option :value="true">Harmonized (MODIS units)</option>
+        </select>
+      </label>
       <label>Detections
         <select v-model="detMode">
           <option value="side">Each sensor on its side</option>
@@ -276,6 +282,11 @@ watch(() => [store.zone, store.zoneCells], syncZone)
           <option value="none">Hide</option>
         </select>
       </label>
+      <span v-if="store.compareHarmonized" class="hint">
+        Harmonized: MODIS with bow-tie duplicates merged and size-corrected FRP; VIIRS S-NPP divided by the factor k of each
+        hexagon (VIIRS / MODIS, calibrated where both sensors have complete data; elsewhere the regional or global k).
+        Both sides are in MODIS units, so they should look alike. Zoomed in, points are still the raw detections.
+      </span>
       <span class="hint">
         Drag the handle over a fire front. If the front “jumps” between sides there is an offset;
         if it looks sharper on VIIRS, that is resolution.

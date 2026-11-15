@@ -68,11 +68,12 @@ class DetectionCollection(BaseModel):
     truncated: bool  # true when more detections matched than `limit`
 
 
+# detections are fractional on the harmonized datasets (a VIIRS detection = 1 / k MODIS-sized ones)
 class DailyStat(BaseModel):
     date: date
-    detections: int
-    day: int
-    night: int
+    detections: float
+    day: float
+    night: float
     frp_sum: float | None
     frp_mean: float | None
     static_detections: int
@@ -81,7 +82,7 @@ class DailyStat(BaseModel):
 class MonthlyStat(BaseModel):
     year: int
     month: int  # 1-12
-    detections: int
+    detections: float
     frp_sum: float | None
     static_detections: int
 
@@ -92,7 +93,7 @@ class PolygonGeometry(BaseModel):
 
 
 class CellProperties(BaseModel):
-    detections: int
+    detections: float
     frp_sum: float | None
     static_detections: int
 
@@ -111,7 +112,7 @@ class GridCollection(BaseModel):
 
 class HexProperties(BaseModel):
     h3: str  # H3 cell index
-    detections: int
+    detections: float
     frp_sum: float | None
     static_detections: int
 
@@ -491,6 +492,30 @@ class HexagonMonth(BaseModel):
     static_detections: int
 
 
+class HexagonHarmonizedMonth(BaseModel):
+    """One month of the series spliced across the MODIS -> VIIRS change, in MODIS units."""
+
+    month: date = Field(validation_alias="acq_month")
+    harmonized_source: Literal["modis", "viirs"]  # MODIS before 2012-02, VIIRS S-NPP / k from then on
+    detections_harmonized: float
+    frp_harmonized: float  # MW, summed over the month
+    m_detections: int | None  # MODIS side, raw (merged duplicates, size-corrected FRP)
+    m_frp_sum: float | None
+    m_satellites: int | None  # 1 = Terra only (before 2002-07)
+    v_detections: int | None  # VIIRS S-NPP side, raw
+    v_frp_sum: float | None
+    k_count: float  # VIIRS / MODIS factor used for this cell
+    k_frp: float
+    k_res: int  # H3 resolution the k comes from: 6 = the cell's own, 0 = global
+
+
+class HexagonHarmonized(BaseModel):
+    months: list[HexagonHarmonizedMonth]
+    # Months whose data was fully downloaded for the sensor that defines the series. A month without a row in
+    # `months` is a zero only if it is listed here; otherwise there is no data for it.
+    covered_months: list[date]
+
+
 class HexagonDay(BaseModel):
     date: date
     detections: int
@@ -581,6 +606,23 @@ def hexagon_monthly(h3_id: HexId, cur: Cursor) -> list[HexagonMonth]:
     """Monthly series of the hexagon (continuous series), per sensor and satellite."""
     key, _ = _hexagon(cur, h3_id)
     return [HexagonMonth(month=r.pop("acq_month"), **r) for r in db.hexagon_monthly(cur, key)]
+
+
+@router.get("/hexagons/{h3_id}/harmonized")
+def hexagon_harmonized(h3_id: HexId, cur: Cursor) -> HexagonHarmonized:
+    """Monthly series of the hexagon as ONE continuous series across the MODIS -> VIIRS change (MODIS units).
+
+    Before 2012-02 it is MODIS (bow-tie duplicates merged, size-corrected FRP); from then on VIIRS S-NPP divided
+    by the cell's k. A month with no row had no detection ONLY if it is in `covered_months`; otherwise the data was
+    never downloaded for it (the client should leave a gap, not a zero).
+    """
+    key, _ = _hexagon(cur, h3_id)
+    if not db.harmonized_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    return HexagonHarmonized(
+        months=[HexagonHarmonizedMonth.model_validate(r) for r in db.hexagon_harmonized(cur, key)],
+        covered_months=db.hexagon_covered_months(cur, key),
+    )
 
 
 @router.get("/hexagons/{h3_id}/period")

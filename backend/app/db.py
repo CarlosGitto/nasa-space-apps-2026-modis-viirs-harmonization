@@ -66,6 +66,8 @@ class DatasetId(StrEnum):
     viirs_best = "viirs_best"
     viirs_sp = "viirs_sp"
     viirs_nrt = "viirs_nrt"
+    modis_harmonized = "modis_harmonized"  # MODIS, bow-tie merged, size-corrected FRP (fct_hexagon_harmonized_daily)
+    viirs_harmonized = "viirs_harmonized"  # VIIRS S-NPP / k per hexagon, in MODIS units (idem)
     harmonized_nrt = "harmonized_nrt"
     harmonized_sp = "harmonized_sp"
 
@@ -77,6 +79,9 @@ DAILY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_daily"
 HEXAGONS = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.dim_hexagon"
 MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_monthly"
 PROFILE = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_profile"
+HARMONIZED_MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_harmonized_monthly"
+HARMONIZED_DAILY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_harmonized_daily"
+AREA_COVERAGE = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_area_coverage_monthly"
 HEXAGON_TABLES = ("fct_hexagon_detections", "fct_hexagon_daily", "dim_hexagon")
 
 # Harmonized datasets (own relation) must have these columns (same names in the lake).
@@ -97,6 +102,13 @@ class Dataset:
     sensor: Sensor
     product: Product
     columns: dict[str, str] | None = None  # harmonized only: optional property -> lake column
+    harmonized_daily: bool = False  # MODIS/VIIRS in MODIS units: daily metrics from fct_hexagon_harmonized_daily
+
+    @property
+    def daily(self) -> str:
+        """Daily hexagon table of the dataset. The harmonized one has the same columns (and sensor/is_preferred), so
+        predicate() works on both; detections of a harmonized dataset (points, one hexagon's list) stay the raw ones."""
+        return HARMONIZED_DAILY if self.harmonized_daily else DAILY
 
     @property
     def on_hexagon_model(self) -> bool:
@@ -126,6 +138,8 @@ DATASETS: dict[DatasetId, Dataset] = {
         Dataset(DatasetId.viirs_best, Sensor.viirs, Product.best),
         Dataset(DatasetId.viirs_sp, Sensor.viirs, Product.sp),
         Dataset(DatasetId.viirs_nrt, Sensor.viirs, Product.nrt),
+        Dataset(DatasetId.modis_harmonized, Sensor.modis, Product.best, harmonized_daily=True),
+        Dataset(DatasetId.viirs_harmonized, Sensor.viirs, Product.best, harmonized_daily=True),
         Dataset(DatasetId.harmonized_nrt, Sensor.harmonized, Product.nrt, _HARMONIZED),
         Dataset(DatasetId.harmonized_sp, Sensor.harmonized, Product.sp, _HARMONIZED),
     )
@@ -244,7 +258,9 @@ def exists(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> bool:
         return str(ds.id) in tables
     if not all(t in tables for t in HEXAGON_TABLES):
         return False
-    return cur.execute(f"select exists (select 1 from {DAILY} where {ds.predicate()})").fetchone()[0]
+    if ds.harmonized_daily and "fct_hexagon_harmonized_daily" not in tables:
+        return False
+    return cur.execute(f"select exists (select 1 from {ds.daily} where {ds.predicate()})").fetchone()[0]
 
 
 def hexagon_summaries(cur: duckdb.DuckDBPyConnection) -> dict[DatasetId, tuple[int, date, date]]:
@@ -271,13 +287,18 @@ def hexagon_summaries(cur: duckdb.DuckDBPyConnection) -> dict[DatasetId, tuple[i
         add(f"{sensor}_{product}", n, first, last)
         if preferred:
             add(f"{sensor}_best", n, first, last)
+    if "fct_hexagon_harmonized_daily" in _tables(cur):
+        for sensor, n, first, last in cur.execute(
+            f"select sensor, sum(fire_detections), min(acq_date), max(acq_date) from {HARMONIZED_DAILY} group by sensor"
+        ).fetchall():
+            add(f"{sensor}_harmonized", n, first, last)
     return out
 
 
 def summary(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> tuple[int, date | None, date | None]:
     """(fire detections, first date, last date) of a dataset that exists."""
     if ds.on_hexagon_model:
-        query = f"select sum(fire_detections), min(acq_date), max(acq_date) from {DAILY} where {ds.predicate()}"
+        query = f"select sum(fire_detections), min(acq_date), max(acq_date) from {ds.daily} where {ds.predicate()}"
     else:
         query = f"select count(*), min(acq_date), max(acq_date) from {points_relation(cur, ds)}"
     n, first, last = cur.execute(query).fetchone()
@@ -311,12 +332,12 @@ def cells_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset, with_center: boo
         if not with_center:
             return (
                 "(select h3_r6, acq_date, daynight, fire_detections as detections, static_detections, "
-                f"fire_frp_sum as frp_sum from {DAILY} where {ds.predicate()})"
+                f"fire_frp_sum as frp_sum from {ds.daily} where {ds.predicate()})"
             )
         return (
             "(select d.h3_r6, h.center_lat as latitude, h.center_lon as longitude, d.acq_date, d.daynight, "
             "d.fire_detections as detections, d.static_detections, d.fire_frp_sum as frp_sum "
-            f"from {DAILY} d join {HEXAGONS} h using (h3_r6) where {ds.predicate('d')})"
+            f"from {ds.daily} d join {HEXAGONS} h using (h3_r6) where {ds.predicate('d')})"
         )
     points = _harmonized_points(cur, ds)
     return (
@@ -442,6 +463,41 @@ def hexagon_tables_ready(cur: duckdb.DuckDBPyConnection) -> bool:
         return False
     names = _tables(cur)
     return all(t in names for t in (*HEXAGON_TABLES, "fct_hexagon_monthly", "fct_hexagon_profile"))
+
+
+def harmonized_ready(cur: duckdb.DuckDBPyConnection) -> bool:
+    """Whether the harmonized MODIS -> VIIRS monthly series has been built (catalog lookup, no data scan)."""
+    return _attached and {"fct_hexagon_harmonized_monthly", "fct_area_coverage_monthly"} <= set(_tables(cur))
+
+
+def hexagon_harmonized(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
+    """Monthly series of the hexagon spliced across the MODIS -> VIIRS change (fct_hexagon_harmonized_monthly)."""
+    rel = cur.execute(
+        f"select * exclude (h3_r6) from {HARMONIZED_MONTHLY} where h3_r6 = ? order by acq_month", [key]
+    )
+    cols = [d[0] for d in rel.description]
+    return [dict(zip(cols, row)) for row in rel.fetchall()]
+
+
+def hexagon_covered_months(cur: duckdb.DuckDBPyConnection, key: int) -> list:
+    """Months in which the data of the hexagon was fully downloaded for the sensor that defines the harmonized series
+    (MODIS before 2012-02, VIIRS after): the centre lies in a download area with complete coverage.
+    Outside them a missing row means "no data", not "no detection"."""
+    return [
+        r[0]
+        for r in cur.execute(
+            f"""
+            select a.acq_month
+            from {AREA_COVERAGE} a
+            join {HEXAGONS} h on h.center_lon between a.west and a.east and h.center_lat between a.south and a.north
+            where h.h3_r6 = ?
+            group by a.acq_month
+            having bool_or(case when a.acq_month < date '2012-02-01' then a.modis_complete else a.viirs_complete end)
+            order by a.acq_month
+            """,
+            [key],
+        ).fetchall()
+    ]
 
 
 def hexagon_identity(cur: duckdb.DuckDBPyConnection, key: int) -> tuple | None:
