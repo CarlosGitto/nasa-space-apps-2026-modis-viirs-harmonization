@@ -75,18 +75,36 @@ def date_chunks(start: date, end: date, size: int = MAX_DAYS_PER_REQUEST) -> Ite
         current += timedelta(days=days)
 
 
+# The MAP_KEY allows a number of transactions per 10-minute window, and large requests
+# (the whole world) use many: past it FIRMS answers "Exceeding allowed transaction limit".
+# Waiting for the window to roll over and retrying that one request beats failing the
+# task, whose retry would repeat every request of the chunk and use even more of it.
+TRANSACTION_LIMIT_WAIT_S = 120
+TRANSACTION_LIMIT_RETRIES = 10  # up to 20 minutes: two full windows
+
+
 def fetch_firms_csv(
     map_key: str, product: str, area: str, day_range: int, start_date: date
 ) -> list[dict]:
+    import time
+
     url = f"{FIRMS_AREA_URL}/{map_key}/{product}/{area}/{day_range}/{start_date.isoformat()}"
-    try:
-        response = requests.get(url, timeout=300)
-        response.raise_for_status()
-    except requests.HTTPError as e:
-        # Re-raise without the URL so the MAP_KEY doesn't end up in task logs.
-        status = e.response.status_code if e.response is not None else "?"
-        body = e.response.text.strip()[:300] if e.response is not None else ""
-        raise RuntimeError(f"FIRMS HTTP {status} for {product}/{area}: {body}") from None
+    for attempt in range(TRANSACTION_LIMIT_RETRIES + 1):
+        try:
+            response = requests.get(url, timeout=300)
+            response.raise_for_status()
+            break
+        except requests.HTTPError as e:
+            # Re-raise without the URL so the MAP_KEY doesn't end up in task logs.
+            status = e.response.status_code if e.response is not None else "?"
+            body = e.response.text.strip()[:300] if e.response is not None else ""
+            if "transaction limit" in body.lower() and attempt < TRANSACTION_LIMIT_RETRIES:
+                logger.warning("FIRMS transaction limit reached (%s %s +%sd); waiting %ss (%s/%s)",
+                               product, start_date, day_range, TRANSACTION_LIMIT_WAIT_S, attempt + 1,
+                               TRANSACTION_LIMIT_RETRIES)
+                time.sleep(TRANSACTION_LIMIT_WAIT_S)
+                continue
+            raise RuntimeError(f"FIRMS HTTP {status} for {product}/{area}: {body}") from None
     text = response.text
     # Some FIRMS errors come back as HTTP 200 with a plain-text message.
     if not text.startswith("latitude"):

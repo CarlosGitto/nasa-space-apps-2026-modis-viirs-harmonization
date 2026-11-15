@@ -16,7 +16,7 @@ import { date, errorMessage } from '../format'
 import { GIBS_LAYERS, gibsDate, gibsUrl } from '../gibs'
 import { cellsOutline } from '../hexGrid'
 import {
-  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE,
+  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE, hexOpacity, withDensity,
   fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
@@ -97,7 +97,7 @@ function addLayers(map) {
     paint: { 'raster-brightness-max': 0.8 } }, labels)
   for (const id of ['hex', 'modis', 'viirs', 'zone']) map.addSource(id, { type: 'geojson', data: EMPTY })
   map.addLayer({ id: 'hex-fill', type: 'fill', source: 'hex',
-    paint: { 'fill-color': HEX_FILL_COLOR, 'fill-opacity': 0.7 } }, labels)
+    paint: { 'fill-color': HEX_FILL_COLOR, 'fill-opacity': hexOpacity(0.8) } }, labels)
   map.addLayer({ id: 'hex-line', type: 'line', source: 'hex',
     paint: { 'line-color': '#7c2d12', 'line-width': 0.3, 'line-opacity': 0.4 } }, labels)
   // Like the prototype: VIIRS = solid cyan dot, MODIS = yellow ring with a dark halo (never color alone).
@@ -164,7 +164,8 @@ async function refresh() {
   loading.value = true
   store.setBusy('curtain', true)
   try {
-    const [modis, viirs] = await Promise.all([fetchSide(left), fetchSide(right)])
+    const [modis, viirs] = (await Promise.all([fetchSide(left), fetchSide(right)]))
+      .map((r) => (zoomedIn.value ? r : withDensity(r, store.queryParams.start, store.queryParams.end)))
     result.value = { kind: zoomedIn.value ? 'points' : 'hex', modis, viirs }
     error.value = null
     render()
@@ -249,7 +250,7 @@ function syncZone() {
 function applyContrast(map) {
   map.setPaintProperty('hex-line', 'line-opacity', prefs.contrast ? 0.9 : 0.4)
   map.setPaintProperty('hex-line', 'line-width', prefs.contrast ? 0.8 : 0.3)
-  map.setPaintProperty('hex-fill', 'fill-opacity', prefs.contrast ? 0.85 : 0.7)
+  map.setPaintProperty('hex-fill', 'fill-opacity', hexOpacity(prefs.contrast ? 0.95 : 0.8)) // by density, like the main map
 }
 
 // ------------------------------------------------------------ lifecycle ---

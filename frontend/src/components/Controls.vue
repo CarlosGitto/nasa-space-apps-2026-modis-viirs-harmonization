@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { date, num } from '../format'
 import { IMAGE_TYPES } from '../gibs'
+import { WEATHER_LAYERS } from '../mapWeather'
 import { useFiltersStore } from '../stores/filters'
 
 const store = useFiltersStore()
@@ -82,6 +83,22 @@ const groups = computed(() =>
       <template v-else>{{ $t('controls.noImagery') }}</template>
     </p>
 
+    <fieldset v-if="store.view === 'map'" class="weather">
+      <legend>{{ $t('weather.layersTitle') }}</legend>
+      <label v-for="(l, id) in WEATHER_LAYERS" :key="id" class="check">
+        <input type="checkbox" :checked="store.weatherLayers.includes(id)" @change="store.toggleWeatherLayer(id)" />
+        {{ l.label }}
+      </label>
+    </fieldset>
+    <div v-if="store.view === 'map' && store.weatherLayers.length" class="scope" role="group" :aria-label="$t('weather.scope')">
+      <button :aria-pressed="store.weatherScope === 'fires'" :class="{ on: store.weatherScope === 'fires' }" @click="store.setWeatherScope('fires')">
+        {{ $t('weather.scopeFires') }}
+      </button>
+      <button :aria-pressed="store.weatherScope === 'all'" :class="{ on: store.weatherScope === 'all' }" @click="store.setWeatherScope('all')">
+        {{ $t('weather.scopeAll') }}
+      </button>
+    </div>
+
     <div class="zone">
       <span>{{ $t('controls.zone') }} <b>{{ (store.zone ? $t('controls.zoneDrawn') : $t('controls.zoneWorld')) }}</b></span>
       <button v-if="store.zone" @click="store.clearZone()">{{ $t('controls.clear') }}</button>
@@ -104,6 +121,16 @@ select, input {
 }
 .meta { margin: -4px 0 0; font-size: 0.75rem; color: var(--muted); }
 .dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.weather { border: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.weather legend { font-size: 0.75rem; color: var(--muted); padding: 0; margin-bottom: 4px; width: 100%; }
+.weather .check { flex-direction: row; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--text); cursor: pointer; }
+.weather .check input { padding: 0; margin: 0; }
+.scope { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; margin-top: -4px; }
+.scope button {
+  flex: 1; border: none; background: none; padding: 4px 6px; border-radius: 4px;
+  font: inherit; font-size: 0.75rem; color: var(--muted); cursor: pointer;
+}
+.scope button.on { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
 .zone { display: flex; justify-content: space-between; align-items: center; font-size: 0.8125rem; }
 .zone button {
   font: inherit; font-size: 0.75rem; background: none; border: 1px solid var(--border); border-radius: 6px;

@@ -39,8 +39,41 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   ([src/components/hexagon/](src/components/hexagon/)); Shift/Ctrl/Cmd + click
   adds or removes hexagons, Esc closes. Tabs: **Observaciones** (table of
   detections for the dataset and dates, per satellite), **Ficha · historial**
-  (whole history, precomputed) and **Ficha · período** (the selected dates). With
+  (whole history, precomputed), **Ficha · período** (the selected dates, with a
+  compact weather summary, `HexWeather.vue`) and **Clima** (`HexClimate.vue`): the
+  hexagon's weather day by day, at least 30 days up to the end date, with the time
+  slider's day marked: fire detections per sensor against the maximum VPD,
+  temperature and dew point, minimum humidity and wind (with direction in the
+  tooltip), daily rain with its 30-day total and days since rain. NASA POWER,
+  asked on demand by the backend for the hexagon's center (any place). With
   several hexagons, "Detalle" shows one ficha each; "Agrupado" is a work in progress.
+- **Weather layers**: "Weather layers" in the side panel adds the weather of the day the
+  map shows (the time slider's day, else the end of the range) as icons that never paint
+  the ground, so fire stays the protagonist (fire hexagons also turn more opaque and get
+  a dark outline while weather is on). Material Design Icons (`@mdi/js`), drawn as SDF
+  images so MapLibre colors them per value:
+  **Temperature**: a thermometer colored by the daily max (usual temperature-map colors);
+  **Rain**: a drop sized by the daily total (none where it's dry); **Wind**: an arrow
+  pointing where it blows, sized and colored by speed. NASA POWER daily (ingested near fires).
+  Each place gets one group (thermometer, arrow, drop), thinned to ~72 px. Two scopes:
+  - **Around fires** (default): around the fire hexagons on screen, out to 3 rings of
+    neighbors (H3), fading with the distance, and placed on the neighbors so the fire
+    itself stays uncovered. Computed in the browser from the hexagons already loaded.
+  - **Everywhere**: the same icons over the whole loaded area.
+
+  **Selected hexagons get their weather on demand**, with no layer turned on and no
+  need to open the Clima tab: selecting (or Shift+clicking, or drawing an area) asks
+  the backend (`POST /hexagons/selection/weather`, NASA POWER, cached) for the POWER
+  cells under them over the whole date range, and the map draws their icons for the
+  map's day (or the latest day POWER has, ~2 days behind, as the legend says); the
+  slider animates them without more requests.
+
+  Responses are cached per layer and day (each layer comes for the whole loaded area),
+  requests in flight are shared, and the
+  next day is prefetched while the slider plays: panning and replaying days don't hit
+  the backend again. Hovering shows the values; a day without data says which days a
+  layer has, with a button to jump there. See [src/mapWeather.js](src/mapWeather.js)
+  and `GET /weather/map`.
 - **Area**: "Area (4 points)" on the map: click 4 points and every res-6 hexagon
   whose center is inside is selected, empty ones too (up to 5000; a bigger area only
   filters). The area snaps to those hexagons, filters the map, calendar and slider,

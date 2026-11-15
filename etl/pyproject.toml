@@ -1,7 +1,7 @@
 [project]
 name = "etl"
 version = "0.1.0"
-description = "FIRMS ingestion (dlt) and transformation (dbt + Cosmos) on Astro/Airflow"
+description = "FIRMS and weather ingestion (dlt) and transformation (dbt + Cosmos) on Astro/Airflow"
 readme = "README.md"
 # Same Python as the Astro Runtime image (runtime:3.3-12).
 requires-python = ">=3.14,<3.15"

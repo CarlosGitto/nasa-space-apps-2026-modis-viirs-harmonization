@@ -71,22 +71,28 @@ function timeOf(r) {
   return t.toISOString().slice(0, 16).replace('T', ' ')
 }
 
+const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
+
+// main: shown by default. The rest (position, brightness, pixel size, version) behind
+// "All columns": 13 columns never fit the panel, 6 do without scrolling sideways.
 // Column labels: obs.cols.<key> in the locales ('time' depends on UTC / solar).
 const COLUMNS = [
-  { key: 'time', value: (r) => r.acq_datetime_utc },
-  { key: 'satellite', value: (r) => r.satellite ?? '' },
-  { key: 'product', value: (r) => r.product },
-  { key: 'latitude', value: (r) => r.latitude },
-  { key: 'longitude', value: (r) => r.longitude },
-  { key: 'frp', value: (r) => r.frp ?? -1 },
-  { key: 'confidence', value: (r) => r.confidence_raw ?? '' },
-  { key: 'daynight', value: (r) => r.daynight ?? '' },
-  { key: 'brightness', value: (r) => r.brightness ?? -1 },
-  { key: 'brightness_aux', value: (r) => r.brightness_aux ?? -1 },
-  { key: 'scan', value: (r) => r.scan ?? -1 },
-  { key: 'track', value: (r) => r.track ?? -1 },
-  { key: 'version', value: (r) => r.version ?? '' },
+  { key: 'time', main: true, value: (r) => r.acq_datetime_utc, cell: (r) => timeOf(r) },
+  { key: 'satellite', main: true, value: (r) => r.satellite ?? '', cell: (r) => r.satellite ?? '–' },
+  { key: 'product', main: true, value: (r) => r.product, cell: (r) => r.product.toUpperCase() + (r.is_preferred ? '' : '*') },
+  { key: 'frp', main: true, value: (r) => r.frp ?? -1, cell: (r) => fixed(r.frp, 1) },
+  { key: 'confidence', main: true, value: (r) => r.confidence_raw ?? '', cell: (r) => r.confidence_raw ?? '–' },
+  { key: 'daynight', main: true, value: (r) => r.daynight ?? '', cell: (r) => r.daynight ?? '–' },
+  { key: 'latitude', value: (r) => r.latitude, cell: (r) => fixed(r.latitude, 4) },
+  { key: 'longitude', value: (r) => r.longitude, cell: (r) => fixed(r.longitude, 4) },
+  { key: 'brightness', value: (r) => r.brightness ?? -1, cell: (r) => fixed(r.brightness, 1) },
+  { key: 'brightness_aux', value: (r) => r.brightness_aux ?? -1, cell: (r) => fixed(r.brightness_aux, 1) },
+  { key: 'scan', value: (r) => r.scan ?? -1, cell: (r) => fixed(r.scan, 2) },
+  { key: 'track', value: (r) => r.track ?? -1, cell: (r) => fixed(r.track, 2) },
+  { key: 'version', value: (r) => r.version ?? '', cell: (r) => r.version ?? '–' },
 ]
+const allColumns = ref(false)
+const columns = computed(() => (allColumns.value ? COLUMNS : COLUMNS.filter((c) => c.main)))
 
 const visible = computed(() => {
   const q = filter.value.trim().toLowerCase()
@@ -103,7 +109,6 @@ function sortBy(key) {
   sort.value = sort.value.key === key ? { key, desc: !sort.value.desc } : { key, desc: key === 'time' || key === 'frp' }
 }
 
-const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
 </script>
 
 <template>
@@ -129,6 +134,9 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
           <button :aria-pressed="!localTime" :class="{ on: !localTime }" @click="localTime = false">{{ $t('obs.utc') }}</button>
           <button :aria-pressed="localTime" :class="{ on: localTime }" @click="localTime = true">{{ $t('obs.local') }}</button>
         </div>
+        <button class="columns" :aria-pressed="allColumns" @click="allColumns = !allColumns">
+          {{ $t('obs.allColumns') }}
+        </button>
       </div>
 
       <p class="muted" aria-live="polite">
@@ -138,14 +146,14 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
       <p v-if="error" class="error" role="alert">{{ errorMessage(error) }}</p>
       <p v-if="truncated" class="muted">{{ $t('obs.truncated', { n: num(LIMIT) }) }}</p>
 
-      <div class="table-wrap">
+      <div class="table-wrap" :class="{ wide: allColumns }">
         <table>
           <caption class="sr-only">{{ $t('obs.caption') }}</caption>
           <thead>
             <tr>
               <th v-if="hexes.length > 1" scope="col">{{ $t('obs.cols.hexagon') }}</th>
               <th
-                v-for="c in COLUMNS" :key="c.key" scope="col"
+                v-for="c in columns" :key="c.key" scope="col"
                 :aria-sort="sort.key === c.key ? (sort.desc ? 'descending' : 'ascending') : 'none'"
               >
                 <button @click="sortBy(c.key)">
@@ -161,22 +169,10 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
               :title="r.is_static_source ? $t('obs.staticRow') : undefined"
             >
               <td v-if="hexes.length > 1"><code>{{ r.h3 }}</code></td>
-              <td class="nowrap">{{ timeOf(r) }}</td>
-              <td>{{ r.satellite ?? '–' }}</td>
-              <td>{{ r.product.toUpperCase() }}{{ r.is_preferred ? '' : '*' }}</td>
-              <td>{{ fixed(r.latitude, 4) }}</td>
-              <td>{{ fixed(r.longitude, 4) }}</td>
-              <td>{{ fixed(r.frp, 1) }}</td>
-              <td>{{ r.confidence_raw ?? '–' }}</td>
-              <td>{{ r.daynight ?? '–' }}</td>
-              <td>{{ fixed(r.brightness, 1) }}</td>
-              <td>{{ fixed(r.brightness_aux, 1) }}</td>
-              <td>{{ fixed(r.scan, 2) }}</td>
-              <td>{{ fixed(r.track, 2) }}</td>
-              <td>{{ r.version ?? '–' }}</td>
+              <td v-for="c in columns" :key="c.key">{{ c.cell(r) }}</td>
             </tr>
             <tr v-if="!visible.length && !loading">
-              <td :colspan="COLUMNS.length + 1" class="empty">{{ $t('obs.empty') }}</td>
+              <td :colspan="columns.length + 1" class="empty">{{ $t('obs.empty') }}</td>
             </tr>
           </tbody>
         </table>
@@ -204,8 +200,21 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
   font: inherit; font-size: 0.75rem; color: var(--text); background: var(--bg);
 }
 .toggle { display: flex; gap: 2px; }
-.table-wrap { overflow: auto; max-height: calc(100vh - 330px); border: 1px solid var(--border); border-radius: 6px; }
-table { border-collapse: collapse; font-size: 0.75rem; font-variant-numeric: tabular-nums; width: max-content; min-width: 100%; }
+.table-wrap { overflow-y: auto; overflow-x: hidden; max-height: calc(100vh - 330px); border: 1px solid var(--border); border-radius: 6px; }
+/* Default columns fit the panel; "All columns" scrolls sideways on purpose, with the
+   date column pinned so a row stays readable. */
+.table-wrap.wide { overflow-x: auto; }
+.table-wrap.wide th:first-child, .table-wrap.wide td:first-child {
+  position: sticky; left: 0; background: var(--panel); box-shadow: 1px 0 0 var(--border);
+}
+.table-wrap.wide thead th:first-child { z-index: 2; }
+table { border-collapse: collapse; font-size: 0.75rem; font-variant-numeric: tabular-nums; width: 100%; }
+.table-wrap.wide table { width: max-content; min-width: 100%; }
+.columns {
+  border: 1px solid var(--border); background: var(--panel); border-radius: 6px; color: var(--text);
+  padding: 4px 8px; font: inherit; font-size: 0.75rem; cursor: pointer; white-space: nowrap;
+}
+.columns[aria-pressed="true"] { background: var(--bg); }
 th { position: sticky; top: 0; background: var(--surface-2); border-bottom: 1px solid var(--border); text-align: left; z-index: 1; }
 th button {
   display: block; width: 100%; padding: 6px 8px; border: none; background: none; text-align: left;

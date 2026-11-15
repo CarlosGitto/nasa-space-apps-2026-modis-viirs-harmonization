@@ -97,3 +97,89 @@ export function dayRange(start, end) {
 export const months = () => Array.from({ length: 12 }, (_, i) => monthName(i + 1))
 export const monthLabel = (iso) => date(iso, 'monthYear')
 export const dayLabel = (iso) => date(iso, 'dayMonth')
+
+// Daily chart with up to two value axes: bars and lines over the same days.
+// series: [{ name, type: 'bar' | 'line', data, axis: 0 | 1, color, unit, digits, stack }]
+// The unit goes in the legend ("VPD máx · kPa"), not as an axis name: axis names sat right
+// under the legend and overlapped it. axes: 1 or 2 value axes; scale: don't force zero
+// (temperatures); mark: a 'YYYY-MM-DD' to highlight (the time slider's day).
+export function dailyChart(dates, series, { axes = 1, scale = false, mark = null, tooltipExtra = null } = {}) {
+  const categories = dates.map(dayLabel)
+  const axis = (i) => ({
+    type: 'value', scale,
+    axisLabel: { color: MUTED, fontSize: chartFont(10), hideOverlap: true, formatter: (v) => num(v, 1) },
+    splitLine: { show: i === 0, lineStyle: { color: GRID } },
+  })
+  const legendName = (s) => (s.unit ? `${s.name} · ${s.unit}` : s.name)
+  return {
+    animation: false,
+    grid: { left: chartFont(34), right: axes > 1 ? chartFont(34) : 8, top: chartFont(30), bottom: chartFont(22), containLabel: false },
+    legend: {
+      top: 0, left: 0, right: 0, itemWidth: 10, itemHeight: 8, itemGap: 10, icon: 'roundRect',
+      textStyle: { color: TEXT, fontSize: chartFont(11) },
+    },
+    tooltip: {
+      trigger: 'axis',
+      textStyle: { fontSize: chartFont(12) },
+      formatter: (items) => {
+        const day = date(dates[items[0].dataIndex], 'long')
+        const lines = items.map((it) => {
+          const s = series[it.seriesIndex]
+          const v = it.value === null || it.value === undefined ? '–' : `${num(it.value, s.digits ?? 1)} ${s.unit ?? ''}`
+          return `${it.marker}${s.name}: <b>${v}</b>`
+        })
+        const extra = tooltipExtra?.(items[0].dataIndex)
+        return [day, ...lines, ...(extra ? [extra] : [])].join('<br>')
+      },
+    },
+    xAxis: {
+      type: 'category', data: categories,
+      axisLabel: { color: MUTED, fontSize: chartFont(10), hideOverlap: true },
+      axisLine: { lineStyle: { color: GRID } }, axisTick: { show: false },
+    },
+    yAxis: Array.from({ length: axes }, (_, i) => axis(i)),
+    series: series.map((s, i) => ({
+      name: legendName(s), type: s.type, data: s.data, yAxisIndex: s.axis ?? 0, stack: s.stack,
+      itemStyle: { color: s.color, borderRadius: s.type === 'bar' ? [3, 3, 0, 0] : 0 },
+      ...(s.type === 'bar'
+        ? { barMaxWidth: 10 }
+        : { showSymbol: false, connectNulls: false, smooth: 0.2, lineStyle: { color: s.color, width: 2, type: s.dashed ? 'dashed' : 'solid' } }),
+      // The time slider's day, once per chart (by position: the axis shows localized labels).
+      ...(i === 0 && mark && dates.includes(mark)
+        ? { markLine: { symbol: 'none', silent: true, label: { show: false }, lineStyle: { color: MUTED, type: 'dashed' },
+                        data: [{ xAxis: dates.indexOf(mark) }] } }
+        : {}),
+    })),
+  }
+}
+
+// Text alternative of a dailyChart for screen readers: per series, its lowest and highest
+// value (or its total, for bars of amounts like rain).
+export function dailyChartLabel(title, dates, series) {
+  const t = i18n.global.t
+  const parts = series.map((s) => {
+    const values = s.data.filter((v) => v !== null && v !== undefined)
+    if (!values.length) return `${s.name}: ${t('chart.empty')}`
+    const fmtv = (v) => `${num(v, s.digits ?? 1)} ${s.unit ?? ''}`.trim()
+    return s.type === 'bar'
+      ? t('chart.seriesTotal', { name: s.name, total: fmtv(values.reduce((a, b) => a + b, 0)) })
+      : t('chart.seriesRange', { name: s.name, min: fmtv(Math.min(...values)), max: fmtv(Math.max(...values)) })
+  })
+  const span = dates.length ? `${date(dates[0])} – ${date(dates.at(-1))}` : ''
+  return t('chart.label', { title: `${title} (${span})`, summary: parts.join('; ') })
+}
+
+// Colors of the weather variables, the same in every chart. Where fire is in the same
+// chart (VPD next to MODIS orange / VIIRS blue bars) they avoid fire colors; the
+// temperature chart, fire-free, uses the usual red (max) / blue (min).
+export const WEATHER_COLORS = {
+  rain: '#60a5fa', rain30: '#1e40af', vpd: '#7c3aed', tmax: '#dc2626', tmin: '#3b82f6', dew: '#14b8a6',
+  rh: '#0d9488', wind: '#475569',
+}
+
+// Compact chart of the period ficha: daily rain (mm) vs. the daily maximum VPD (kPa).
+export const weatherSeries = (days) => [
+  { name: i18n.global.t('weather.rain'), type: 'bar', data: days.map((d) => d.precipitation_mm), color: WEATHER_COLORS.rain, unit: 'mm' },
+  { name: i18n.global.t('weather.vpdMax'), type: 'line', axis: 1, data: days.map((d) => d.vpd_max_kpa), color: WEATHER_COLORS.vpd, unit: 'kPa', digits: 2 },
+]
+export const weatherChart = (days) => dailyChart(days.map((d) => d.date), weatherSeries(days), { axes: 2 })

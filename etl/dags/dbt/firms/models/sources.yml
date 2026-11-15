@@ -19,3 +19,16 @@ sources:
       - name: viirs_snpp_sp
       - name: viirs_noaa20_sp
       - name: viirs_noaa21_sp
+
+  - name: weather_raw
+    description: >
+      Raw NASA POWER daily weather landed by dlt in the DuckLake (bronze): one row per
+      MERRA-2 grid cell and UTC day, only near fires. Append-only like firms_raw:
+      silver keeps the latest version.
+    database: lake
+    schema: weather_raw
+    tables:
+      - name: power_daily
+        description: >
+          NASA POWER daily regional (MERRA-2 / GEOS-IT, 0.5° x 0.625°): t2m_max (°C),
+          precipitation (PRECTOTCORR, mm), ws10m (m/s), wd10m (degrees, where the wind comes from).

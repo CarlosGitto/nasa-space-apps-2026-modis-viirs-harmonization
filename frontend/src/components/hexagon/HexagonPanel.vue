@@ -1,5 +1,6 @@
 <script setup>
-// Right-side panel for the selected res-6 hexagons: observations table and the two fichas.
+// Right-side panel for the selected res-6 hexagons: observations table, the two fichas and
+// the weather (Clima).
 // Several hexagons: "Detalle" stacks one ficha per hexagon (a few) or lists them busiest
 // first with their ficha on click (a drawn area); "Agrupado" is WIP (how to add
 // hexagons up is not defined yet).
@@ -9,13 +10,14 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { num } from '../../format'
 import { useFiltersStore } from '../../stores/filters'
+import HexClimate from './HexClimate.vue'
 import HexHistory from './HexHistory.vue'
 import HexObservations from './HexObservations.vue'
 import HexPeriod from './HexPeriod.vue'
 import HexRanking from './HexRanking.vue'
 
 const store = useFiltersStore()
-const TABS = ['obs', 'history', 'period']
+const TABS = ['obs', 'history', 'period', 'weather'] // labels: panel.tabs.<id>
 const STACK_MAX = 3 // up to this many hexagons, their fichas are stacked; more, a list
 const CHIPS_MAX = 8
 const tab = ref('obs')
@@ -100,7 +102,8 @@ onBeforeUnmount(() => {
         <template v-else>
           <div v-for="h in store.selectedHexes" :key="`${tab}-${h}`" class="card">
             <HexHistory v-if="tab === 'history'" :h3="h" />
-            <HexPeriod v-else :h3="h" />
+            <HexPeriod v-else-if="tab === 'period'" :h3="h" />
+            <HexClimate v-else :h3="h" />
           </div>
         </template>
       </template>

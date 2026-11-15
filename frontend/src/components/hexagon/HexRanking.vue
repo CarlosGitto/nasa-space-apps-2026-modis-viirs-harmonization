@@ -7,6 +7,7 @@ import { getSelectionSummary } from '../../api'
 import { date, errorMessage } from '../../format'
 import { useFiltersStore } from '../../stores/filters'
 import { useLoadingBar } from '../../stores/loading'
+import HexClimate from './HexClimate.vue'
 import HexHistory from './HexHistory.vue'
 import HexPeriod from './HexPeriod.vue'
 import { num } from './charts'
@@ -15,7 +16,7 @@ const PAGE = 50
 
 const props = defineProps({
   hexes: { type: Array, required: true },
-  kind: { type: String, required: true }, // 'history' | 'period'
+  kind: { type: String, required: true }, // 'history' | 'period' | 'weather' (ranked like 'period')
 })
 const store = useFiltersStore()
 
@@ -45,7 +46,7 @@ async function load() {
 watch(() => [props.hexes, store.queryParams.start, store.queryParams.end], load, { immediate: true })
 onBeforeUnmount(() => controller?.abort())
 
-const isPeriod = computed(() => props.kind === 'period')
+const isPeriod = computed(() => props.kind !== 'history')
 const rows = computed(() => {
   const list = isPeriod.value
     ? summary.value.filter((r) => r.modis_period + r.viirs_period + r.static_period > 0)
@@ -100,8 +101,9 @@ const toggle = (h3) => { open.value = open.value === h3 ? null : h3 }
           </tr>
           <tr v-if="open === r.h3" :id="`ficha-${r.h3}`">
             <td colspan="4" class="ficha-cell">
-              <HexHistory v-if="!isPeriod" :h3="r.h3" />
-              <HexPeriod v-else :h3="r.h3" />
+              <HexHistory v-if="kind === 'history'" :h3="r.h3" />
+              <HexPeriod v-else-if="kind === 'period'" :h3="r.h3" />
+              <HexClimate v-else :h3="r.h3" />
             </td>
           </tr>
         </template>
@@ -110,7 +112,7 @@ const toggle = (h3) => { open.value = open.value === h3 ? null : h3 }
     <button v-if="rows.length > shown" class="more" @click="shown += PAGE">
       {{ $t('ranking.showMore', { n: num(Math.min(PAGE, rows.length - shown)) }) }}
     </button>
-    <p class="muted small">{{ $t('ranking.footer') }}</p>
+    <p class="muted small">{{ kind === 'weather' ? $t('ranking.footerWeather') : $t('ranking.footer') }}</p>
   </section>
 </template>
 

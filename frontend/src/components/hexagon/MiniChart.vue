@@ -4,12 +4,12 @@
 // patterns, so sensors aren't told apart by color alone.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
-import { BarChart } from 'echarts/charts'
-import { AriaComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { BarChart, LineChart } from 'echarts/charts'
+import { AriaComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { usePrefsStore } from '../../stores/prefs'
 
-echarts.use([AriaComponent, BarChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+echarts.use([AriaComponent, BarChart, LineChart, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent, CanvasRenderer])
 
 const props = defineProps({
   option: { type: Object, required: true },

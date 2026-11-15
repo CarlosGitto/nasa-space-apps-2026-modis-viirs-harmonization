@@ -8,13 +8,15 @@
 // Always the whole world unless the user draws an area: 4 clicks, then every res-6
 // hexagon whose center is inside it is selected (empty ones too) and the map is filtered.
 // Optional NASA GIBS satellite imagery under the data, for the end day of the selected range.
+// Optional weather layers (temperature, rain, wind arrows) for the same day, under the
+// hexagons; see mapWeather.js.
 //
 // Keyboard: with the map focused, arrows move it and +/− zoom (MapLibre); Enter does what a
 // click at the center (the crosshair) does, Shift+Enter adds or removes that hexagon.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getDetections, getHexagons } from '../api'
-import { errorMessage } from '../format'
+import { getDetections, getHexagons, getSelectionWeather, getWeatherMap } from '../api'
+import { date, errorMessage } from '../format'
 import { gibsUrl } from '../gibs'
 import {
   MAX_SELECTION, areaPolygon, cellPolygon, cellsInArea, cellsOutline, covers, gridArea, gridCells,
@@ -22,9 +24,15 @@ import {
 import { getHexagonEdgeLengthAvg } from 'h3-js'
 import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
-  fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
+  fmt, hexOpacity, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
+  withDensity,
 } from '../mapShared'
 import { contourContrast, setContours } from '../relief'
+import { cellToLatLng, gridDiskDistances, latLngToCell } from 'h3-js'
+import {
+  RAIN_SIZE, TEMPERATURE_SIZE, WEATHER_IDS, WEATHER_LAYERS, WIND_SIZE, colorAt, mergedGrids, selectionDay, selectionGrids, colorRamp, fireCandidates, fireNeighborhood, gridCandidates,
+  iconImage, rainSize, responseCache, weatherGrid, weatherPoints, weatherRequest, weatherTooltip, windSize,
+} from '../mapWeather'
 import { useFiltersStore } from '../stores/filters'
 import { trackMapSources, useLoadingBar } from '../stores/loading'
 import { usePrefsStore } from '../stores/prefs'
@@ -42,14 +50,18 @@ const scheduled = ref(false) // the map stopped and a refresh is on its way (the
 // The top loading bar, in fire orange: from the moment the map stops until the new
 // hexagons are drawn, so it never ends before they change.
 useLoadingBar('hexagons', computed(() => scheduled.value || loading.value))
+const weatherLoading = ref(false)
+useLoadingBar('weather', weatherLoading) // the weather layers and the selection's weather
 let untrackSources = null
 const error = ref(null) // the API error (with .status), shown in the user's language
 const info = ref(null) // what's on screen: { total, hexagons, res, truncated }
 const noImagery = ref(false) // the chosen imagery has no picture for that date
+const weatherNotes = ref({}) // layer id -> { first, last } when that day has no data for it
 
 let map = null
 let mapReady = false // set on 'load'; isStyleLoaded() flips to false while sources update
 let controller = null
+let weatherToken = 0 // increases with every refreshWeather call
 let debounce = null
 let resizer = null
 let tooltip = null
@@ -57,6 +69,24 @@ let currentRes = null // resolution of the hexagons on screen
 let hexById = new Map() // h3 -> feature on screen (whole polygon, not the tiled one MapLibre returns)
 let gridShown = null // area (and resolution) of the grid on screen
 let draftFrame = null // pending preview redraw (one per animation frame)
+const weatherCache = responseCache() // GET /weather/map responses, by layer, day and bbox
+let weatherGrids = {} // layer id -> grid of the day shown (see weatherGrid)
+let neighborhood = new Map() // h3 -> ring distance to a fire hexagon on screen: where weather is drawn
+// Weather of the selected hexagons, asked on demand (NASA POWER) for the whole date range,
+// so the slider animates it without more requests. Shown even with no weather layer on.
+const selectionWeather = ref(null)
+const selectionNote = ref('')
+let selectionToken = 0
+let selectionTimer = null
+const SELECTION_MAX_DAYS = 366
+const SELECTION_RINGS = 3 // neighbors around the selected hexagons that get weather too
+const SELECTION_RINGS_MAX_HEXAGONS = 300 // a bigger selection (a drawn area) covers itself
+let selectionArea = new Map() // h3 -> ring distance to a selected hexagon (0 = selected)
+// The layers drawn: the ones turned on, or all three when only a selection has weather.
+const shownLayers = computed(() =>
+  store.weatherLayers.length ? store.weatherLayers : selectionWeather.value ? WEATHER_IDS : [])
+// The selection's day drawn: the map's day, or the latest before it POWER has published.
+const selectionShownDay = computed(() => selectionDay(selectionWeather.value, store.imageryDate))
 
 // Smallest zoom showing a finer grid than `res`: clicking a coarse hexagon always goes down a level.
 const NEXT_LEVEL_ZOOM = { 0: 3, 1: 3, 2: 3, 3: 4.5, 4: 6, 5: 7.5 }
@@ -79,8 +109,10 @@ async function refresh() {
       zoom >= DETAIL_ZOOM ? getDetections(store.dataset, { ...params, limit: POINTS_LIMIT }, signal) : null,
     ])
     currentRes = res
+    withDensity(fc, store.queryParams.start, store.queryParams.end)
     hexById = new Map(fc.features.map((f) => [f.properties.h3, f]))
     map.getSource('hex').setData(fc)
+    renderWeather() // the halo follows the fire hexagons on screen
     map.getSource('points').setData(points ?? EMPTY)
     info.value = {
       total: fc.features.reduce((s, f) => s + f.properties.detections, 0),
@@ -98,6 +130,148 @@ async function refresh() {
   } finally {
     if (!signal.aborted) loading.value = false
   }
+}
+
+// Weather layers for the map's day (the slider's, else the end of the range). Responses
+// are cached: temperature and wind come for the whole area (one request per day), rain
+// (NASA POWER near fires, ingested by the ETL). A day without data for a layer
+// leaves a note saying which days it has.
+// The cache holds promises, not responses: a request already on its way (another layer
+// toggled, the prefetch, a quick pan) is shared instead of cancelled and sent again.
+// Responses are small; a stale one is just ignored by refreshWeather.
+function loadWeather(id, date) {
+  const request = weatherRequest(id, date)
+  const key = `${id}|${request.date}|${request.bbox ?? ''}`
+  let pending = weatherCache.get(key)
+  if (!pending) {
+    pending = getWeatherMap(id, request).catch((e) => { weatherCache.delete(key); throw e })
+    weatherCache.set(key, pending)
+  }
+  return pending
+}
+
+async function refreshWeather() {
+  if (!mapReady || store.view !== 'map') return
+  const token = ++weatherToken // only the newest call draws
+  const on = store.weatherLayers
+  if (!on.length) {
+    weatherGrids = {}
+    weatherNotes.value = {}
+    weatherLoading.value = false
+    renderWeather()
+    return
+  }
+  store.setBusy('weather', true)
+  weatherLoading.value = true
+  try {
+    const day = store.imageryDate
+    const results = await Promise.all(on.map((id) => loadWeather(id, day).then((r) => [id, r])))
+    if (token !== weatherToken) return
+    const notes = {}
+    weatherGrids = {}
+    for (const [id, r] of results) {
+      weatherGrids[id] = weatherGrid(r)
+      if (!r.cells.length) notes[id] = r.coverage ? { first: r.coverage.first_date, last: r.coverage.last_date } : {}
+    }
+    weatherNotes.value = notes
+    renderWeather()
+    await whenIdle(map)
+    prefetchNextDay(on, day)
+  } catch (e) {
+    // 404: the lake has no weather yet ("not loaded" note); anything else is an error.
+    if (token === weatherToken) weatherNotes.value = Object.fromEntries(on.map((id) => [id, e.status === 404 ? {} : { error: e }]))
+  }
+  if (token === weatherToken) {
+    store.setBusy('weather', false)
+    weatherLoading.value = false
+  }
+}
+
+// While the time slider steps through days, have the next one ready.
+function prefetchNextDay(on, date) {
+  if (!store.day || date >= store.end) return
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  const next = d.toISOString().slice(0, 10)
+  for (const id of on) loadWeather(id, next).catch(() => {})
+}
+
+// Fire hexagons a bit stronger while weather is on, so they stay the protagonists.
+// By density (see mapShared.js), lighter once zoomed in to the detections.
+const HEX_OPACITY = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, hexOpacity(0.75), DETAIL_ZOOM + 1, hexOpacity(0.35)]
+const HEX_OPACITY_OVER_WEATHER = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, hexOpacity(0.92), DETAIL_ZOOM + 1, hexOpacity(0.55)]
+
+// Draw the loaded grids in the chosen scope (no request: grids and hexagons are in memory):
+// one group of icons per place, thinned to the zoom, fading away from the fires.
+function renderWeather() {
+  if (!mapReady) return
+  const lake = Object.fromEntries(store.weatherLayers.filter((id) => weatherGrids[id]).map((id) => [id, weatherGrids[id]]))
+  const selected = Object.fromEntries(Object.entries(selectionGrids(selectionWeather.value, selectionShownDay.value))
+    .filter(([id, g]) => g && shownLayers.value.includes(id)))
+  const grids = mergedGrids(selected, lake)
+  applyContrast() // fire hexagons stronger and grid lighter while weather is on
+
+  const any = Object.keys(grids).length > 0
+  const fireCells = [...hexById.values()].filter((f) => f.properties.detections > 0).map((f) => f.properties.h3)
+  neighborhood = any && store.weatherScope === 'fires' ? fireNeighborhood(fireCells) : new Map()
+  const lakeCandidates = !Object.keys(lake).length ? []
+    : store.weatherScope === 'fires' ? fireCandidates(neighborhood) : gridCandidates(lake)
+  // Selected hexagons and their neighbors first (selected: ring 1, preferred and fully
+  // opaque; neighbors fading with the distance), then the lake's places.
+  const rings = store.selectedHexes.length <= SELECTION_RINGS_MAX_HEXAGONS ? SELECTION_RINGS : 0
+  selectionArea = Object.keys(selected).length
+    ? new Map(store.selectedHexes.flatMap((h) => gridDiskDistances(h, rings).flatMap((ring, k) => ring.map((n) => [n, k])))
+      .sort((a, b) => b[1] - a[1]))
+    : new Map()
+  const selectedCandidates = [...selectionArea].map(([h, k]) => {
+    const [lat, lon] = cellToLatLng(h)
+    return { lon, lat, ring: k + 1 }
+  })
+  const candidates = [...selectedCandidates, ...lakeCandidates]
+  map.getSource('wx-points').setData(any ? weatherPoints(candidates, grids, map.getZoom()) : EMPTY)
+  for (const id of ['temperature', 'precipitation', 'wind']) {
+    map.setLayoutProperty(`wx-${id}`, 'visibility', grids[id] ? 'visible' : 'none')
+  }
+}
+
+// The selected hexagons' weather for the whole range (debounced: Shift+click adds many).
+function refreshSelectionWeather() {
+  clearTimeout(selectionTimer)
+  const token = ++selectionToken
+  if (!store.selectedHexes.length || !store.end) {
+    selectionWeather.value = null
+    selectionNote.value = ''
+    renderWeather()
+    return
+  }
+  selectionTimer = setTimeout(async () => {
+    const end = store.end
+    const earliest = new Date(`${end}T00:00:00Z`)
+    earliest.setUTCDate(earliest.getUTCDate() - (SELECTION_MAX_DAYS - 1))
+    const start = store.start && store.start > earliest.toISOString().slice(0, 10) ? store.start : earliest.toISOString().slice(0, 10)
+    selectionNote.value = t('weather.selectionLoading')
+    weatherLoading.value = true
+    try {
+      const rings = store.selectedHexes.length <= SELECTION_RINGS_MAX_HEXAGONS ? SELECTION_RINGS : 0
+      const data = await getSelectionWeather({ h3: store.selectedHexes, start, end, rings })
+      if (token !== selectionToken) return
+      selectionWeather.value = data
+      selectionNote.value = ''
+    } catch (e) {
+      if (token !== selectionToken) return
+      selectionWeather.value = null
+      selectionNote.value = t('weather.selectionError', { error: errorMessage(e) })
+    }
+    weatherLoading.value = false
+    renderWeather()
+  }, 300)
+}
+
+// Jump to the last week with data for a layer (from its "no data" note).
+function goToWeather(last) {
+  const d = new Date(`${last}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 6)
+  store.setDates(d.toISOString().slice(0, 10), last)
 }
 
 // The whole grid of the visible area, with or without detections: just borders,
@@ -119,6 +293,7 @@ function scheduleRefresh() {
   debounce = setTimeout(() => {
     updateGrid()
     refresh() // sets `loading` right away when it fetches
+    refreshWeather()
     scheduled.value = false
   }, 250)
 }
@@ -144,6 +319,12 @@ function addLayers() {
     paint: { 'raster-brightness-max': 0.65, 'raster-saturation': -0.3 },
   }, labels)
 
+  // Weather icons (hidden until turned on): one point per place with t / rain / wind.
+  map.addSource('wx-points', { type: 'geojson', data: EMPTY })
+  for (const id of ['temperature', 'precipitation', 'wind']) {
+    map.addImage(`wx-${id}`, iconImage(WEATHER_LAYERS[id].icon), { sdf: true })
+  }
+
   map.addSource('grid', { type: 'geojson', data: EMPTY })
   map.addSource('hex', { type: 'geojson', data: EMPTY })
   map.addSource('points', { type: 'geojson', data: EMPTY })
@@ -155,8 +336,14 @@ function addLayers() {
       // Log scale: a few cells have thousands of detections, most have a handful.
       'fill-color': HEX_FILL_COLOR,
       // Lighter when zoomed in, so streets and the detections on top stay readable.
-      'fill-opacity': ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.65, DETAIL_ZOOM + 1, 0.3],
+      'fill-opacity': HEX_OPACITY,
     },
+  }, labels)
+  // While weather is on: a dark outline around the fire hexagons so they stand out.
+  map.addLayer({
+    id: 'hex-fire-line', type: 'line', source: 'hex', layout: { visibility: 'none' },
+    filter: ['>', ['get', 'detections'], 0],
+    paint: { 'line-color': '#7f1d1d', 'line-width': 1, 'line-opacity': 0.8 },
   }, labels)
   // Borders come from the full grid, so empty cells show them too.
   map.addLayer({
@@ -190,6 +377,35 @@ function addLayers() {
       'circle-opacity': 0.9,
     },
   }, labels)
+
+  // Weather icons above the hexagons (they don't paint the ground): thermometer left,
+  // drop right, wind arrow in the middle. Opacity fades with the distance to the fire.
+  const icon = (id, extra) => ({
+    id: `wx-${id}`, type: 'symbol', source: 'wx-points',
+    layout: {
+      visibility: 'none', 'icon-image': `wx-${id}`, 'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      ...extra.layout,
+    },
+    paint: { 'icon-opacity': ['get', 'fade'], 'icon-halo-color': '#ffffff', 'icon-halo-width': 1.5, ...extra.paint },
+    filter: extra.filter,
+  })
+  map.addLayer(icon('temperature', {
+    filter: ['has', 't'],
+    layout: { 'icon-size': TEMPERATURE_SIZE },
+    paint: { 'icon-color': colorRamp('temperature', 't'), 'icon-translate': [-13, 0] },
+  }), labels)
+  map.addLayer(icon('precipitation', {
+    filter: ['has', 'rain'],
+    layout: { 'icon-size': RAIN_SIZE },
+    paint: { 'icon-color': WEATHER_LAYERS.precipitation.color, 'icon-translate': [13, 0] },
+  }), labels)
+  map.addLayer(icon('wind', {
+    filter: ['has', 'wind'],
+    layout: { 'icon-size': WIND_SIZE, 'icon-rotate': ['get', 'to'], 'icon-rotation-alignment': 'map' },
+    // A wider halo and full opacity near the fire / selection: wind must read at a glance.
+    paint: { 'icon-color': colorRamp('wind', 'wind'), 'icon-halo-width': 2.5, 'icon-halo-blur': 0.5,
+             'icon-opacity': ['min', 1, ['*', 1.2, ['get', 'fade']]] },
+  }), labels)
 
   // Drawn area: outline of the hexagons it selects (it snaps to the grid).
   map.addSource('zone', { type: 'geojson', data: EMPTY })
@@ -323,7 +539,9 @@ function onClick(e) {
     const camera = map.cameraForBounds(polygonBounds(feature.geometry), { padding: 40 })
     if (!camera) return
     camera.zoom = Math.max(camera.zoom, NEXT_LEVEL_ZOOM[currentRes] ?? camera.zoom)
-    map.easeTo({ ...camera, duration: prefs.reduceMotion ? 0 : 800 })
+    // The app's "Reduce motion" option decides alone: `essential` stops MapLibre from also
+    // skipping the animation on its own when the OS asks for less motion.
+    map.easeTo({ ...camera, duration: prefs.reduceMotion ? 0 : 800, essential: true })
     return
   }
   const additive = e.originalEvent.shiftKey || e.originalEvent.ctrlKey || e.originalEvent.metaKey
@@ -340,12 +558,24 @@ function onHover(e) {
     return
   }
   const [hit] = map.queryRenderedFeatures(e.point, { layers: ['points', 'hex-fill'] })
-  if (!hit) return hideTooltip()
-  map.getCanvas().style.cursor = 'pointer'
-  const html = hit.layer.id === 'points'
+  // Weather under the cursor: anywhere ("Everywhere"), or inside the fires' neighborhood.
+  const { lng, lat } = e.lngLat
+  const shown = store.weatherScope === 'all' || (currentRes !== null && neighborhood.has(latLngToCell(lat, lng, currentRes)))
+  const lakeWeather = store.weatherLayers.length && shown ? weatherTooltip(weatherGrids, lng, lat) : ''
+  // Over a selected hexagon: its own (on-demand) weather.
+  const overSelected = currentRes !== null && selectionArea.has(latLngToCell(lat, lng, BASE_RES))
+  const weather = overSelected && selectionWeather.value
+    ? weatherTooltip(selectionGrids(selectionWeather.value, selectionShownDay.value), lng, lat) || lakeWeather
+    : lakeWeather
+  if (!hit && !weather) return hideTooltip()
+  map.getCanvas().style.cursor = hit ? 'pointer' : ''
+  const html = !hit ? '' : hit.layer.id === 'points'
     ? pointPopup(hit.properties)
     : hexPopup(hit.properties, (currentRes < BASE_RES ? t('map.popup.zoomHint') : t('map.popup.openHint')))
-  tooltip.setLngLat(e.lngLat).setHTML(html).addTo(map)
+  const day = `<span class="popup-muted">${t('weather.tooltipDay', { date: date(store.imageryDate) })}</span>`
+  tooltip.setLngLat(e.lngLat)
+    .setHTML([html, weather && `${weather}<br>${day}`].filter(Boolean).join('<hr class="popup-rule">'))
+    .addTo(map)
 }
 
 function hideTooltip() {
@@ -375,17 +605,20 @@ function syncImagery() {
 
 // Hexagon borders and fill. High contrast (accessibility menu) makes them stronger; with
 // the contour lines on, the borders turn neutral gray so they don't mix with the olive lines.
+// With weather on, fire hexagons get stronger and an outline, and the grid fades, so fire
+// stays the protagonist. The fill opacity always follows the fire density (mapShared.js).
 function applyContrast() {
   if (!mapReady) return
   const on = prefs.contrast
+  const weatherOn = store.weatherLayers.length > 0
   const border = prefs.contours ? '#6b7280' : '#7c2d12'
   map.setPaintProperty('hex-line', 'line-color', border)
   map.setPaintProperty('hex-line-dashed', 'line-color', border)
-  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : prefs.contours ? 0.3 : 0.4)
+  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : weatherOn ? 0.15 : prefs.contours ? 0.3 : 0.4)
   map.setPaintProperty('hex-line', 'line-width', on ? 0.8 : 0.3)
   map.setPaintProperty('hex-line-dashed', 'line-width', on ? 2.5 : 1.5)
-  map.setPaintProperty('hex-fill', 'fill-opacity',
-    ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, on ? 0.85 : 0.65, DETAIL_ZOOM + 1, on ? 0.45 : 0.3])
+  map.setPaintProperty('hex-fill', 'fill-opacity', weatherOn || on ? HEX_OPACITY_OVER_WEATHER : HEX_OPACITY)
+  map.setLayoutProperty('hex-fire-line', 'visibility', weatherOn ? 'visible' : 'none')
   contourContrast(map, on)
 }
 
@@ -430,6 +663,7 @@ onMounted(() => {
     syncZone()
     updateGrid()
     refresh()
+    refreshWeather()
   })
   // The panel opening/closing changes the map's width.
   resizer = new ResizeObserver(() => { if (container.value.clientWidth) map.resize() })
@@ -439,7 +673,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   controller?.abort()
+  weatherToken++
   store.setBusy('map', false)
+  store.setBusy('weather', false)
   clearTimeout(debounce)
   resizer?.disconnect()
   window.removeEventListener('keydown', onKey, { capture: true })
@@ -458,8 +694,13 @@ watch(() => store.view, (view) => {
     map.resize()
     map.jumpTo(camera)
     refresh()
+    refreshWeather()
   })
 })
+// Layers turned on/off, or another day: reload the weather.
+watch(() => [store.weatherLayers, store.imageryDate], refreshWeather)
+watch(() => [store.selectedHexes, store.start, store.end], refreshSelectionWeather)
+watch(() => store.weatherScope, renderWeather)
 // Image type, satellite or day changed: update the imagery.
 // Watch id and date separately: pickLayer() returns a new object every time.
 watch(() => [store.basemap, store.imagery?.layer.id, store.imagery?.date], syncImagery)
@@ -494,6 +735,41 @@ watch(() => prefs.locale, (locale) => {
         {{ areaNote.tooBig ? $t('map.areaTooBig', { max: fmt(MAX_SELECTION) }) : $t('map.areaSelected', { n: fmt(areaNote.n) }) }}
       </span>
     </div>
+
+    <section v-if="shownLayers.length || selectionNote" class="legend" :aria-label="$t('weather.legend')">
+      <span v-if="selectionNote" class="legend-note">{{ selectionNote }}</span>
+      <span v-else-if="selectionWeather && selectionShownDay && selectionShownDay !== store.imageryDate" class="legend-note">
+        {{ $t('weather.selectionLatest', { date: date(selectionShownDay) }) }}
+      </span>
+      <div v-for="id in shownLayers" :key="id" class="legend-item">
+        <span class="legend-icons">
+          <span class="legend-title">{{ WEATHER_LAYERS[id].title }}</span>
+          <span v-for="v in WEATHER_LAYERS[id].legend" :key="v">
+            <svg
+              viewBox="0 0 24 24" aria-hidden="true"
+              :width="id === 'temperature' ? 16 : 26 * (id === 'precipitation' ? rainSize(v) : windSize(v))"
+              :height="id === 'temperature' ? 16 : 26 * (id === 'precipitation' ? rainSize(v) : windSize(v))"
+              :style="id === 'wind' ? { transform: 'rotate(45deg)' } : null"
+            >
+              <path :d="WEATHER_LAYERS[id].icon" :fill="id === 'precipitation' ? WEATHER_LAYERS[id].color : colorAt(id, v)" />
+            </svg>
+            {{ fmt(v) }}{{ WEATHER_LAYERS[id].unit }}
+          </span>
+        </span>
+        <span v-if="weatherNotes[id]" class="legend-note">
+          <template v-if="weatherNotes[id].error">{{ errorMessage(weatherNotes[id].error) }}</template>
+          <template v-else-if="weatherNotes[id].last">
+            {{ $t('weather.noDataOn', { date: date(store.imageryDate), first: date(weatherNotes[id].first), last: date(weatherNotes[id].last) }) }}
+            <button @click="goToWeather(weatherNotes[id].last)">{{ $t('weather.goTo', { date: date(weatherNotes[id].last) }) }}</button>
+          </template>
+          <template v-else>{{ $t('weather.notLoaded') }}</template>
+        </span>
+      </div>
+      <span class="legend-fade">
+        {{ store.day ? $t('weather.daySlider', { date: date(store.imageryDate) }) : $t('weather.dayEnd', { date: date(store.imageryDate) }) }}
+        <template v-if="store.weatherScope === 'fires'">{{ $t('weather.fading') }}</template>
+      </span>
+    </section>
 
     <div v-if="loading || error || info || noImagery" class="status" role="status">
       <span v-if="loading" class="spinner" role="img" :aria-label="$t('common.loading')"></span>
@@ -534,6 +810,25 @@ watch(() => prefs.locale, (locale) => {
   align-items: center; flex-wrap: wrap; background: var(--panel); padding: 6px 10px; border-radius: 6px;
   font-size: 0.8125rem; box-shadow: var(--shadow);
 }
+/* Top right, under the zoom buttons: the bottom is taken by the status line and attribution. */
+.legend {
+  position: absolute; top: 84px; right: 10px; max-width: min(340px, calc(100% - 24px)); display: flex;
+  flex-direction: column; gap: 4px; background: var(--panel); padding: 6px 10px; border-radius: 6px;
+  box-shadow: var(--shadow); font-size: 0.6875rem;
+}
+.legend-item { display: flex; flex-direction: column; gap: 2px; }
+.legend-title { color: var(--text); font-weight: 600; min-width: 58px; }
+.legend-bar { height: 8px; border-radius: 4px; }
+.legend-ticks { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend-note { color: var(--muted); }
+.legend-icons { display: flex; gap: 8px; align-items: center; color: var(--muted); flex-wrap: wrap; }
+.legend-icons span { display: inline-flex; align-items: center; gap: 2px; }
+.legend-fade { color: var(--muted); font-size: 0.625rem; }
+.legend-note button {
+  margin-top: 3px; display: block; font: inherit; font-size: 0.6875rem; background: none; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; cursor: pointer;
+}
+@media (max-width: 760px) { .legend { left: 12px; top: 56px; } }
 .error { color: var(--danger); }
 .warn { color: var(--muted); }
 .spinner {
