@@ -835,6 +835,9 @@ class SelectionWeatherQuery(BaseModel):
     h3: SelectionIds
     start: date
     end: date
+    # Rings of neighbors around the selected hexagons that get weather too (the map fades
+    # them with the distance); ignored for big selections (a drawn area covers itself).
+    rings: int = Field(3, ge=0, le=3)
 
 
 class SelectionWeather(BaseModel):
@@ -844,12 +847,14 @@ class SelectionWeather(BaseModel):
     end: date
     cell: tuple[float, float]  # POWER cell size (lat, lon), degrees
     cells: list[tuple[float, float]]  # [lon, lat] of each cell center
-    hexagons: dict[str, int]  # h3 -> index in `cells`
+    hexagons: dict[str, int]  # selected h3 -> index in `cells`
+    sources: dict[str, int]  # cells served by the lake (already ingested) and by NASA POWER (asked now)
     # Per day: [t2m_max_c, precipitation_mm, wind_speed_mean_ms, wind_dir_mean_deg] per cell (index order).
     days: list[tuple[date, list[list[float | None]]]]
 
 
 SELECTION_WEATHER_MAX_DAYS = 366
+SELECTION_RINGS_MAX_HEXAGONS = 300  # bigger selections (drawn areas) get no extra rings
 
 
 @router.post("/hexagons/selection/weather")
@@ -858,9 +863,11 @@ def selection_weather(body: SelectionWeatherQuery, cur: Cursor) -> SelectionWeat
     temperature, rain and mean wind of the POWER cell under each hexagon, every day of
     the range, so the time slider animates it without more requests.
 
-    Hexagons are grouped by POWER cell (0.5° x 0.625°: ~90 hexagons each). A few cells
-    are asked as points (which also warms the panel's cache); more, by region, one
-    request per parameter and 10° box. Cached; 503 if POWER doesn't answer.
+    The selected hexagons and up to `rings` rings of neighbors, grouped by POWER cell
+    (0.5° x 0.625°: ~90 hexagons each). Cells the lake already has for the whole range
+    (ingested near fires) come from it; only the rest is asked to POWER: a few cells as
+    points (which also warms the panel's cache), more by region, one request per
+    parameter and 10° box. Cached; 503 if POWER doesn't answer.
     """
     yesterday = date.today() - timedelta(days=1)
     end = min(body.end, yesterday)
@@ -874,10 +881,32 @@ def selection_weather(body: SelectionWeatherQuery, cur: Cursor) -> SelectionWeat
     except db.InvalidHexagon as e:
         raise HTTPException(422, str(e)) from None
     centers = dict(zip(ids, db.hexagon_centers(cur, keys)))
-    try:
-        values = power.map_values(list(centers.values()), body.start, end)
-    except power.PowerUnavailable as e:
-        raise HTTPException(503, f"{e}; try again in a minute") from None
+    rings = body.rings if len(keys) <= SELECTION_RINGS_MAX_HEXAGONS else 0
+    points = db.hexagon_neighborhood(cur, keys, rings) if rings else list(centers.values())
+    wanted = sorted({power.cell_of(lat, lon) for lat, lon in points})
+
+    # The lake first (weather already ingested near fires); NASA POWER only for what it
+    # lacks: cells away from fires, and the days the lake doesn't have yet (ingestion
+    # runs daily, the range usually ends today), from the first missing day on.
+    all_days = [body.start + timedelta(days=i) for i in range((end - body.start).days + 1)]
+    lake = db.weather_cells_daily(cur, wanted, body.start, end)
+    values = {c: dict(days) for c, days in lake.items()}
+    first_missing = {}
+    for c in wanted:
+        have = values.get(c, {})
+        gap = next((d for d in all_days if have.get(d, {}).get("t2m_max_c") is None), None)
+        if gap is not None:
+            first_missing[c] = gap
+    missing = sorted(first_missing)
+    if missing:
+        try:
+            asked = power.map_values(missing, min(first_missing.values()), end)
+        except power.PowerUnavailable as e:
+            raise HTTPException(503, f"{e}; try again in a minute") from None
+        for c, days in asked.items():
+            for d, v in days.items():
+                if values.get(c, {}).get(d, {}).get("t2m_max_c") is None:  # the lake wins where it has a value
+                    values.setdefault(c, {})[d] = v
     cells = sorted(values)
     index = {c: i for i, c in enumerate(cells)}
     names = list(power.MAP_PARAMETERS.values())
@@ -886,6 +915,7 @@ def selection_weather(body: SelectionWeatherQuery, cur: Cursor) -> SelectionWeat
         start=body.start, end=end, cell=power.GRID,
         cells=[(lon, lat) for lat, lon in cells],
         hexagons={h: index[power.cell_of(*c)] for h, c in centers.items()},
+        sources={"lake": len(wanted) - len(missing), "power": len(missing)},  # cells complete from the lake / topped up by POWER
         days=[(d, [[values[c].get(d, {}).get(n) for n in names] for c in cells]) for d in all_days],
     )
 

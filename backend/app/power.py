@@ -171,6 +171,22 @@ MAP_PARAMETERS = {"T2M_MAX": "t2m_max_c", "PRECTOTCORR": "precipitation_mm", "WS
 POWER_REGIONAL_URL = "https://power.larc.nasa.gov/api/temporal/daily/regional"
 POINT_CELLS = 3
 MAX_BOX_DEG = 10
+# POWER's regional endpoint also rejects boxes under 2° a side (not in its docs: "Please
+# provide at least a 2 degree range ...; otherwise use the point endpoint").
+MIN_BOX_DEG = 2
+
+
+def _widen(lo: float, hi: float, low_limit: float, high_limit: float) -> tuple[float, float]:
+    """[lo, hi] widened around its middle to at least MIN_BOX_DEG, kept inside the limits."""
+    if hi - lo >= MIN_BOX_DEG:
+        return lo, hi
+    mid = (lo + hi) / 2
+    lo, hi = mid - MIN_BOX_DEG / 2, mid + MIN_BOX_DEG / 2
+    if lo < low_limit:
+        lo, hi = low_limit, low_limit + MIN_BOX_DEG
+    if hi > high_limit:
+        lo, hi = high_limit - MIN_BOX_DEG, high_limit
+    return lo, hi
 
 
 def _get_json(url: str, params: dict) -> dict:
@@ -225,7 +241,9 @@ def _boxes(cells: list[tuple[float, float]]) -> list[tuple[float, float, float, 
     while lat < north:
         lon = west
         while lon < east:
-            out.append((lon, lat, min(east, lon + MAX_BOX_DEG), min(north, lat + MAX_BOX_DEG)))
+            w, e = _widen(lon, min(east, lon + MAX_BOX_DEG), -180, 180)
+            s, n = _widen(lat, min(north, lat + MAX_BOX_DEG), -90, 90)
+            out.append((w, s, e, n))
             lon += MAX_BOX_DEG
         lat += MAX_BOX_DEG
     return out

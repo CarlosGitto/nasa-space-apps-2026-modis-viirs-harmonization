@@ -37,6 +37,9 @@ POWER_REGIONAL_URL = "https://power.larc.nasa.gov/api/temporal/daily/regional"
 COMMUNITY = "AG"
 FILL_VALUE = -999.0
 MAX_BOX_DEG = 10  # API limit per side
+# The API also rejects boxes under 2° a side (not in its docs: "Please provide at least a
+# 2 degree range ...; otherwise use the point endpoint").
+MIN_BOX_DEG = 2
 REQUEST_TIMEOUT = 300
 RETRIES = 5
 RETRY_WAIT_S = 30  # POWER answers 429 (or 5xx) when hit too hard: back off, 30 s, 60 s, ...
@@ -120,15 +123,31 @@ def fetch_regional(parameter: str, box: tuple[float, float, float, float], start
     return out
 
 
+def _widen(lo: float, hi: float, low_limit: float, high_limit: float) -> tuple[float, float]:
+    """[lo, hi] widened around its middle to at least MIN_BOX_DEG, kept inside the limits."""
+    if hi - lo >= MIN_BOX_DEG:
+        return lo, hi
+    mid = (lo + hi) / 2
+    lo, hi = mid - MIN_BOX_DEG / 2, mid + MIN_BOX_DEG / 2
+    if lo < low_limit:
+        lo, hi = low_limit, low_limit + MIN_BOX_DEG
+    if hi > high_limit:
+        lo, hi = high_limit - MIN_BOX_DEG, high_limit
+    return lo, hi
+
+
 def split_box(box: tuple[float, float, float, float], size: float = MAX_BOX_DEG) -> list[tuple[float, float, float, float]]:
-    """A box cut into pieces of at most `size` degrees per side (the API's limit)."""
+    """A box cut into pieces of at most `size` degrees per side and at least MIN_BOX_DEG
+    (the API's limits; a thin leftover is widened, the extra cells are filtered later)."""
     west, south, east, north = box
     out = []
     lat = south
     while lat < north:
         lon = west
         while lon < east:
-            out.append((lon, lat, min(east, lon + size), min(north, lat + size)))
+            w, e = _widen(lon, min(east, lon + size), -180, 180)
+            s, n = _widen(lat, min(north, lat + size), -90, 90)
+            out.append((w, s, e, n))
             lon += size
         lat += size
     return out

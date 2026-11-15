@@ -622,6 +622,39 @@ def weather_ready(cur: duckdb.DuckDBPyConnection) -> bool:
     return _attached and "fct_weather_daily" in _tables(cur)
 
 
+def weather_cells_daily(
+    cur: duckdb.DuckDBPyConnection, cells: list[tuple[float, float]], start: date, end: date
+) -> dict[tuple[float, float], dict[date, dict]]:
+    """{(cell_lat, cell_lon): {day: map values}} the lake already has (gold, NASA POWER near
+    fires) for these POWER cells in [start, end]."""
+    if not cells or not weather_ready(cur):
+        return {}
+    rows = cur.execute(
+        f"""
+        select w.cell_lat, w.cell_lon, w.obs_date, w.t2m_max_c, w.precipitation_mm, w.wind_speed_mean_ms, w.wind_dir_mean_deg
+        from {WEATHER} w
+        join (select unnest(?::double[]) as cell_lat, unnest(?::double[]) as cell_lon) c using (cell_lat, cell_lon)
+        where w.obs_date between ? and ? and w.cell_lat between ? and ?
+        """,
+        [[c[0] for c in cells], [c[1] for c in cells], start, end,
+         min(c[0] for c in cells), max(c[0] for c in cells)],
+    ).fetchall()
+    out: dict[tuple[float, float], dict[date, dict]] = {}
+    names = ("t2m_max_c", "precipitation_mm", "wind_speed_mean_ms", "wind_dir_mean_deg")
+    for lat, lon, day, *values in rows:
+        out.setdefault((round(lat, 4), round(lon, 4)), {})[day] = dict(zip(names, values))
+    return out
+
+
+def hexagon_neighborhood(cur: duckdb.DuckDBPyConnection, keys: list[int], rings: int) -> list[tuple[float, float]]:
+    """(lat, lon) centers of the hexagons within `rings` of any of `keys` (them included)."""
+    return cur.execute(
+        "select h3_cell_to_latlng(c)[1], h3_cell_to_latlng(c)[2] "
+        "from (select distinct unnest(h3_grid_disk(k, ?)) as c from unnest(?::ubigint[]) t(k))",
+        [rings, keys],
+    ).fetchall()
+
+
 def hexagon_centers(cur: duckdb.DuckDBPyConnection, keys: list[int]) -> list[tuple[float, float]]:
     """(lat, lon) of many hexagons' centers, in the order of `keys` (one query)."""
     return cur.execute(
