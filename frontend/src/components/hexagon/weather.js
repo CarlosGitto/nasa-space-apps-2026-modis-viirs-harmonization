@@ -1,6 +1,7 @@
 // Shared by the hexagon's weather views (HexWeather in Ficha · período, HexClimate in the
 // Clima tab): summary figures and labels from GET /hexagons/{h3}/weather.
-import { mdiThermometer, mdiWaterOff, mdiWaterPercent, mdiWeatherRainy, mdiWeatherSunny, mdiWeatherWindy } from '@mdi/js'
+// Humidity is a plain drop: mdiWaterPercent's "%" cut-out turns into smudges at 14 px.
+import { mdiThermometer, mdiWater, mdiWaterOff, mdiWeatherRainy, mdiWeatherSunny, mdiWeatherWindy } from '@mdi/js'
 import { date, num } from '../../format'
 import { i18n } from '../../i18n'
 import { compass } from '../../mapWeather'
@@ -21,7 +22,7 @@ export function weatherKpis(days) {
   // icon: Material Design Icons path (the map uses the same family); color: the variable's.
   return [
     { label: t('weather.kpi.tmax'), icon: mdiThermometer, color: '#dc2626', value: withUnit(maxOf(days, 't2m_max_c'), 1, '°C') },
-    { label: t('weather.kpi.rhMin'), icon: mdiWaterPercent, color: '#0d9488', value: withUnit(minOf(days, 'rh_min_pct'), 0, '%') },
+    { label: t('weather.kpi.rhMin'), icon: mdiWater, color: '#0d9488', value: withUnit(minOf(days, 'rh_min_pct'), 0, '%') },
     { label: t('weather.vpdMax'), icon: mdiWeatherSunny, color: '#7c3aed', value: withUnit(maxOf(days, 'vpd_max_kpa'), 1, 'kPa') },
     { label: t('weather.kpi.windMax'), icon: mdiWeatherWindy, color: '#475569', value: withUnit(maxOf(days, 'wind_speed_max_ms'), 1, 'm/s') },
     { label: t('weather.kpi.rainTotal'), icon: mdiWeatherRainy, color: '#2563eb', value: rain.length ? `${num(rain.reduce((a, b) => a + b, 0), 1)} mm` : '–' },

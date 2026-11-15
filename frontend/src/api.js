@@ -55,6 +55,9 @@ export const getMonthly = (dataset, params, signal) =>
 export const getHarmonizedMonthly = (params, signal) => get('/stats/harmonized/monthly', params, signal)
 // Hexagons of the harmonized series (MODIS before 2012-02, VIIRS S-NPP / k after), same shape as getHexagons.
 export const getHarmonizedHexagons = (params, signal) => get('/stats/harmonized/hex', params, signal)
+// Typical hexagons of a period (anomalies): the same dates in the other years, averaged; plus `years`.
+export const getHexagonsTypical = (dataset, params, signal) => get(`/datasets/${dataset}/stats/hex/typical`, params, signal)
+export const getHarmonizedHexagonsTypical = (params, signal) => get('/stats/harmonized/hex/typical', params, signal)
 
 export const getDaily = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/daily`, params, signal)

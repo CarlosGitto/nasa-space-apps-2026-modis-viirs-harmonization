@@ -1,18 +1,19 @@
 <script setup>
 // Fire calendar: the app's main control. It answers WHEN (and the map next to it answers WHERE), for the whole
 // world, a preset region or a drawn area, from 2000 to today on the harmonized series (or one dataset as published).
-// Three zoom levels, like any calendar app:
+// Three levels, reached by drilling down (a year label, a month title) and back up with the trail on top:
 //   Years  — years (rows) x months (columns), plus each year's total and the typical month: which years and which
 //            months of the year burn most.
 //   Year   — twelve month calendars, one square per day.
 //   Month  — one big month calendar, with each day's count.
 // A click picks the period the map shows (a month, a year, a day of its month); dragging over days picks a range,
 // Shift + click extends it. Arrow keys move between cells, Enter picks. Colors: the value of each cell against the
-// biggest of the view (linear or log), or "vs. typical": the same month in the other years (blue below, red above).
+// biggest of the view (linear or log), or "anomalies": the same month in the other years (violet below, fire colors above).
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { detectionsCsvUrl, getDaily, getHarmonizedDaily, getHarmonizedMonthly, getMonthly } from '../api'
 import { compact, date, datasetName, errorMessage, monthFull, monthLong, monthName, num, period, weekdays } from '../format'
+import { ANOMALY_RAMP, FIRE_RAMP, rampColor } from '../mapShared'
 import { REGION_GROUPS } from '../regions'
 import { useFiltersStore } from '../stores/filters'
 import { useLoadingBar } from '../stores/loading'
@@ -46,7 +47,8 @@ function weeks(y, m) {
 const level = ref('years') // 'years' | 'year' | 'month'
 const focusYear = ref(new Date().getUTCFullYear())
 const focusMonth = ref(1)
-const measure = ref('detections') // 'detections' | 'frp' | 'anomaly'
+// 'detections' | 'frp' | 'anomaly': shared with the main map (the store), which colors the same way.
+const measure = computed({ get: () => store.measure, set: (m) => store.setMeasure(m) })
 const scale = ref('linear') // 'linear' | 'log'
 const hovered = ref(null) // key of the cell under the mouse (or with the keyboard focus)
 const cursor = ref(null) // key of the cell that takes the Tab focus (roving tabindex)
@@ -176,15 +178,10 @@ const maxDayMonth = computed(() => {
 })
 
 // ----------------------------------------------------------------- colors ---
-const RAMP = ['#fff7ed', '#fed7aa', '#fdba74', '#f97316', '#dc2626', '#7f1d1d']
-const DIVERGING = ['#1d4ed8', '#93c5fd', '#f1f5f9', '#fca5a5', '#b91c1c'] // ¼x .. typical .. 4x
-const hex = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16))
-function ramp(stops, x) {
-  const p = Math.min(1, Math.max(0, x)) * (stops.length - 1)
-  const i = Math.min(stops.length - 2, Math.floor(p))
-  const [a, b] = [hex(stops[i]), hex(stops[i + 1])]
-  return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * (p - i))).join(',')})`
-}
+// The map's palettes (mapShared.js), so a cell and a hexagon of the same color mean the same.
+const RAMP = FIRE_RAMP
+const DIVERGING = ANOMALY_RAMP // ¼x .. typical .. 4x
+const ramp = rampColor
 const level01 = (v, max) => (scale.value === 'log' ? Math.log1p(v) / Math.log1p(max) : v / max)
 // { background, color } of a cell, or null for "no detections".
 function paint(value, max, r) {
@@ -228,7 +225,7 @@ const inRange = (iso) => !!store.start && iso >= store.start && iso <= store.end
 const monthSelected = (y, m) => !!store.start && store.start <= last(y, m) && store.end >= first(y, m)
 const drag = ref(null) // { anchor, current } while dragging over days
 const preview = (iso) => {
-  if (!drag.value) return false
+  if (!drag.value || drag.value.anchor.length !== iso.length) return false
   const [a, b] = [drag.value.anchor, drag.value.current].sort()
   return iso >= a && iso <= b
 }
@@ -236,6 +233,13 @@ const preview = (iso) => {
 function pickMonth(y, m) {
   if (monthInSpan(y, m)) store.setRange(first(y, m), last(y, m))
 }
+// Several months ('YYYY-MM' keys, any order): from the 1st of the earliest to the last day of the latest.
+function pickMonths(a, b) {
+  const [s, e] = [a, b].sort()
+  store.setRange(first(+s.slice(0, 4), +s.slice(5, 7)), last(+e.slice(0, 4), +e.slice(5, 7)))
+}
+const isMonth = (k) => k?.length === 7
+const pickable = (k) => (isMonth(k) ? monthInSpan(+k.slice(0, 4), +k.slice(5, 7)) : inSpan(k))
 function pickYear(y) {
   store.setRange(`${y}-01-01`, `${y}-12-31`)
 }
@@ -255,31 +259,60 @@ function pickDays(a, b) {
   const [s, e] = [a, b].sort()
   store.setRange(s, e)
 }
+// Shortcuts, up to the last day with data (the harmonized series can end days or months before today).
+const presets = computed(() => {
+  if (!span.value) return []
+  const e = span.value.end
+  const clamp = (iso) => (iso < span.value.start ? span.value.start : iso)
+  return [
+    { id: 'last7', start: clamp(addDays(e, -6)), end: e },
+    { id: 'last30', start: clamp(addDays(e, -29)), end: e },
+    { id: 'thisYear', start: clamp(`${yearOf(e)}-01-01`), end: e },
+  ]
+})
+const presetOn = (p) => store.start === p.start && store.end === p.end
+const MEASURES = ['detections', 'frp', 'anomaly']
 
-// Mouse / touch: press on a day, move over others, release. A press without moving is a click.
+// Mouse / touch: press on a day (or a month of the years view), move over others, release. A press without moving
+// is a click. Shift + click extends the period picked to that day (or month).
 const keyAt = (e) => document.elementFromPoint(e.clientX, e.clientY)?.closest?.('[data-k]')?.dataset.k
-function onDown(e, iso) {
-  if (e.button !== 0 || !inSpan(iso)) return
+function onDown(e, k) {
+  if (e.button !== 0 || !pickable(k)) return
   if (e.shiftKey && store.start) {
-    pickDays(store.day ?? store.start, iso)
+    extendTo(k)
     return
   }
-  drag.value = { anchor: iso, current: iso }
+  drag.value = { anchor: k, current: k }
+}
+function extendTo(k) {
+  if (isMonth(k)) {
+    // From the month the period starts in, or ends in, whichever keeps the most of it.
+    const from = k < store.start.slice(0, 7) ? store.end.slice(0, 7) : store.start.slice(0, 7)
+    pickMonths(from, k)
+  } else pickDays(store.day ?? store.start, k)
 }
 function onMove(e) {
   const k = keyAt(e)
   if (k) hovered.value = k
-  if (drag.value && k?.length === 10 && inSpan(k)) drag.value.current = k
+  if (drag.value && k?.length === drag.value.anchor.length && pickable(k)) drag.value.current = k
 }
 function onUp() {
   if (!drag.value) return
   const { anchor, current } = drag.value
   drag.value = null
-  if (anchor === current) pickDay(anchor)
+  if (isMonth(anchor)) {
+    if (anchor === current) pickMonth(+anchor.slice(0, 4), +anchor.slice(5, 7))
+    else pickMonths(anchor, current)
+  } else if (anchor === current) pickDay(anchor)
   else pickDays(anchor, current)
 }
-// Enter / Space on a day (a click with detail 0): pick it. Mouse clicks are handled by onDown/onUp.
+// Enter / Space on a cell (a click with detail 0): pick it, Shift extends. Mouse clicks are handled by onDown/onUp.
 const onDayKey = (e, iso) => { if (e.detail === 0) pickDay(iso) }
+const onMonthKey = (e, y, m) => {
+  if (e.detail !== 0) return
+  if (e.shiftKey && store.start) extendTo(mKey(y, m))
+  else pickMonth(y, m)
+}
 
 // --------------------------------------------------------------- keyboard ---
 function move(e) {
@@ -446,9 +479,7 @@ const regionLabel = computed(() => {
   if (!store.zone) return t('regions.world')
   return store.region && store.region !== 'custom' ? t(`regions.${store.region}`) : t('regions.custom')
 })
-const title = computed(() => (level.value === 'years'
-  ? t('cal.yearsTitle', { from: minYear.value ?? '–', to: maxYear.value ?? '–' })
-  : level.value === 'year' ? String(focusYear.value) : monthLong(first(focusYear.value, focusMonth.value))))
+const yearsTitle = computed(() => t('cal.yearsTitle', { from: minYear.value ?? '–', to: maxYear.value ?? '–' }))
 const legendMax = computed(() => ({ years: maxMonth.value, year: maxDayYear.value, month: maxDayMonth.value })[level.value])
 const legendStyle = computed(() => ({
   background: `linear-gradient(to right, ${(measure.value === 'anomaly' ? DIVERGING : RAMP).join(', ')})`,
@@ -486,36 +517,76 @@ const legendStyle = computed(() => ({
       <template v-if="store.harmonizedReady === false"> · {{ $t('harm.notBuilt') }}</template>
     </p>
 
-    <!-- Zoom level and navigation, like a calendar app. -->
-    <div class="nav">
-      <div class="seg levels" role="group" :aria-label="$t('cal.zoom')">
-        <button type="button" :aria-pressed="level === 'years'" :class="{ on: level === 'years' }" @click="open('years')">{{ $t('cal.years') }}</button>
-        <button type="button" :aria-pressed="level === 'year'" :class="{ on: level === 'year' }" @click="open('year')">{{ $t('cal.year') }}</button>
-        <button type="button" :aria-pressed="level === 'month'" :class="{ on: level === 'month' }" @click="open('month')">{{ $t('cal.month') }}</button>
+    <!-- The period the map shows: typed, a shortcut, or picked on the grid below (all in sync). -->
+    <fieldset class="period" :disabled="!span">
+      <legend>{{ $t('cal.period') }}</legend>
+      <div class="dates">
+        <label>
+          {{ $t('controls.from') }}
+          <input type="date" :value="store.start" :min="span?.start" :max="span?.end" @change="typeDate('start', $event.target.value)" />
+        </label>
+        <label>
+          {{ $t('controls.to') }}
+          <input type="date" :value="store.end" :min="span?.start" :max="span?.end" @change="typeDate('end', $event.target.value)" />
+        </label>
       </div>
-      <div class="pager">
-        <button v-if="level !== 'years'" type="button" class="arrow" :disabled="!canStep(-1)" :aria-label="$t('cal.previous')" @click="step(-1)">‹</button>
-        <h2 aria-live="polite">{{ title }}</h2>
-        <button v-if="level !== 'years'" type="button" class="arrow" :disabled="!canStep(1)" :aria-label="$t('cal.next')" @click="step(1)">›</button>
+      <div class="chips" role="group" :aria-label="$t('cal.presetsLabel')" :title="span ? $t('cal.presetsHint', { date: date(span.end) }) : null">
+        <button
+          v-for="p in presets" :key="p.id" type="button" class="chip" :class="{ on: presetOn(p) }"
+          :aria-pressed="presetOn(p)" @click="store.setRange(p.start, p.end)"
+        >
+          <svg v-if="presetOn(p)" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" fill="currentColor" /></svg>
+          {{ $t(`cal.presets.${p.id}`) }}
+        </button>
+      </div>
+    </fieldset>
+
+    <!-- Where you are, as a trail: all years › a year › a month. A year label or a month title goes one level
+         down; any earlier step of the trail goes back up. ‹ › step a year or a month. -->
+    <div class="nav">
+      <h2 class="crumbs" aria-live="polite">
+        <button v-if="level !== 'years'" type="button" class="crumb" :aria-label="$t('cal.backToYears')" @click="open('years')">{{ yearsTitle }}</button>
+        <span v-else class="crumb current">{{ yearsTitle }}</span>
+        <template v-if="level !== 'years'">
+          <span class="crumb-sep" aria-hidden="true">›</span>
+          <button v-if="level === 'month'" type="button" class="crumb" :aria-label="$t('cal.backToYear', { year: focusYear })" @click="open('year')">{{ focusYear }}</button>
+          <span v-else class="crumb current">{{ focusYear }}</span>
+        </template>
+        <template v-if="level === 'month'">
+          <span class="crumb-sep" aria-hidden="true">›</span>
+          <span class="crumb current">{{ monthFull(focusMonth) }}</span>
+        </template>
+      </h2>
+      <div v-if="level !== 'years'" class="pager">
+        <button type="button" class="arrow" :disabled="!canStep(-1)" :aria-label="$t('cal.previous')" @click="step(-1)">‹</button>
+        <button type="button" class="arrow" :disabled="!canStep(1)" :aria-label="$t('cal.next')" @click="step(1)">›</button>
       </div>
     </div>
 
+    <!-- Color: one measure (single choice) plus the log scale toggle, disabled (not hidden) where it doesn't apply. -->
     <div class="opts">
-      <label>
-        {{ $t('cal.color') }}
-        <select v-model="measure">
-          <option value="detections">{{ $t('cal.measures.detections') }}</option>
-          <option value="frp">{{ $t('cal.measures.frp') }}</option>
-          <option value="anomaly" :disabled="years.length < 2">{{ $t('cal.measures.anomaly') }}</option>
-        </select>
-      </label>
-      <label v-if="measure !== 'anomaly'">
-        {{ $t('cal.scale') }}
-        <select v-model="scale">
-          <option value="linear">{{ $t('cal.linear') }}</option>
-          <option value="log">{{ $t('cal.log') }}</option>
-        </select>
-      </label>
+      <div class="opts-head">
+        <span id="cal-color" class="opts-label">{{ $t('cal.color') }}</span>
+        <button
+          type="button" class="chip small" :class="{ on: scale === 'log' && measure !== 'anomaly' }"
+          :aria-pressed="scale === 'log'" :disabled="measure === 'anomaly'" :title="$t('cal.logHint')"
+          @click="scale = scale === 'log' ? 'linear' : 'log'"
+        >
+          <svg v-if="scale === 'log' && measure !== 'anomaly'" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" fill="currentColor" /></svg>
+          {{ $t('cal.logScale') }}
+        </button>
+      </div>
+      <div class="chips" role="group" aria-labelledby="cal-color">
+        <button
+          v-for="m in MEASURES" :key="m" type="button" class="chip" :class="{ on: measure === m }"
+          :aria-pressed="measure === m" :disabled="m === 'anomaly' && years.length < 2"
+          :title="m !== 'anomaly' ? null : years.length < 2 ? $t('cal.noTypical') : $t('cal.anomalyHint')"
+          @click="store.setMeasure(m)"
+        >
+          <svg v-if="measure === m" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" fill="currentColor" /></svg>
+          {{ $t(`cal.measures.${m}`) }}
+        </button>
+      </div>
     </div>
 
     <p class="readout" aria-hidden="true">
@@ -539,10 +610,11 @@ const legendStyle = computed(() => ({
           <button
             v-for="m in 12" :key="m" type="button" class="cell"
             :data-k="mKey(y, m)" :tabindex="tab(mKey(y, m))" :disabled="!monthInSpan(y, m)"
-            :class="{ off: !monthInSpan(y, m), sel: monthSelected(y, m) }"
+            :class="{ off: !monthInSpan(y, m), sel: monthSelected(y, m) || preview(mKey(y, m)) }"
             :style="monthInSpan(y, m) ? paint(raw(monthly.get(mKey(y, m))), maxMonth, monthRatio(y, m)) : null"
             :aria-label="monthText(y, m)" :aria-pressed="monthSelected(y, m)"
-            @click="pickMonth(y, m)" @dblclick="open('month', y, m)" @focus="hovered = mKey(y, m)"
+            @pointerdown="onDown($event, mKey(y, m))" @click="onMonthKey($event, y, m)"
+            @dblclick="open('month', y, m)" @focus="hovered = mKey(y, m)"
           ></button>
           <span class="bar" :title="fmtValue(yearTotal(y))" aria-hidden="true">
             <span :style="{ width: `${100 * level01(yearTotal(y), maxYear_)}%` }"></span>
@@ -624,16 +696,6 @@ const legendStyle = computed(() => ({
         <b>{{ period(store.start, store.end) }}</b>
         <span class="muted"> · {{ regionLabel }}</span>
       </div>
-      <div class="dates">
-        <label>
-          {{ $t('controls.from') }}
-          <input type="date" :value="store.start" :min="span?.start" :max="span?.end" @change="typeDate('start', $event.target.value)" />
-        </label>
-        <label>
-          {{ $t('controls.to') }}
-          <input type="date" :value="store.end" :min="span?.start" :max="span?.end" @change="typeDate('end', $event.target.value)" />
-        </label>
-      </div>
       <p v-if="summary?.total !== null" class="sum-line">
         {{ $t('common.detections', { n: num(summary.total, store.harmonized ? 1 : 0) }) }}{{ units }}
         · {{ $t('common.mw', { v: num(summary.frp) }) }}
@@ -659,28 +721,59 @@ const legendStyle = computed(() => ({
 .cal { display: flex; flex-direction: column; gap: 8px; }
 .top { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+/* One control height for the panel: segmented controls, select, date fields and buttons. */
 .seg button {
-  font: inherit; font-size: 0.8125rem; padding: 4px 10px; border: 0; border-radius: 6px; background: none;
+  font: inherit; font-size: 0.8125rem; height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: none;
   color: var(--muted); cursor: pointer;
 }
 .seg button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 .seg button:disabled { opacity: 0.45; cursor: not-allowed; }
 .region { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; min-width: 0; flex: 1; justify-content: flex-end; }
-.region select, .opts select {
-  font: inherit; font-size: 0.8125rem; color: var(--text); background: var(--bg);
-  border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; max-width: 100%;
+.region select, .dates input {
+  font: inherit; font-size: 0.8125rem; color: var(--text); background: var(--bg); box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 6px; height: 32px; padding: 0 8px; max-width: 100%; min-width: 0;
 }
 .source { margin: -2px 0 0; font-size: 0.6875rem; color: var(--muted); }
+
+/* Period: From / To and the shortcuts, then a divider before the calendar. */
+.period {
+  display: flex; flex-direction: column; gap: 8px; margin: 2px 0 0; padding: 0 0 12px; min-width: 0;
+  border: 0; border-bottom: 1px solid var(--border);
+}
+.period legend { padding: 0; margin-bottom: 6px; }
+.dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dates label { display: flex; flex-direction: column; gap: 2px; font-size: 0.6875rem; color: var(--muted); min-width: 0; }
+
+/* Chips: pill, outlined; selected = tinted with a check, so the state doesn't rely on color alone. */
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font: inherit; font-size: 0.8125rem; line-height: 1; cursor: pointer; white-space: nowrap;
+}
+.chip svg { width: 14px; height: 14px; margin-left: -2px; flex: none; }
+.chip:hover:not(:disabled) { background: var(--surface-3); }
+.chip.on { background: var(--highlight); border-color: var(--selected); color: var(--selected); font-weight: 600; }
+.chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chip:disabled { opacity: 0.45; cursor: not-allowed; }
+.chip.small { height: 24px; padding: 0 8px; font-size: 0.75rem; }
+.opts-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
 .nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .pager { display: flex; align-items: center; gap: 4px; }
-.pager h2 { margin: 0; font-size: 1.125rem; min-width: 7rem; text-align: center; }
+.crumbs { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; margin: 0; font-size: 1.125rem; font-weight: 600; min-width: 0; }
+.crumb { font: inherit; padding: 0; border: 0; background: none; color: var(--text); }
+button.crumb { color: var(--accent); font-weight: 500; cursor: pointer; }
+button.crumb:hover { text-decoration: underline; }
+button.crumb:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.crumb-sep { color: var(--muted); font-weight: 400; }
 .arrow {
   width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg);
   color: var(--text); font-size: 1.125rem; line-height: 1; cursor: pointer;
 }
 .arrow:disabled { opacity: 0.35; cursor: default; }
-.opts { display: flex; gap: 10px; flex-wrap: wrap; }
-.opts label { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); }
+.opts { display: flex; flex-direction: column; gap: 6px; }
+.opts-label, .period legend { font-size: 0.75rem; font-weight: 600; color: var(--text); }
 .readout { margin: 0; min-height: 2.4em; font-size: 0.75rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .error { margin: 0; color: var(--danger); font-size: 0.75rem; }
@@ -695,7 +788,8 @@ const legendStyle = computed(() => ({
   cursor: default; color: var(--muted);
   background: repeating-linear-gradient(135deg, transparent 0 3px, var(--border) 3px 4px);
 }
-.cell.sel, .day.sel, .big.sel { box-shadow: inset 0 0 0 2px var(--selected); }
+/* A white inner ring under the blue one, so the selection reads on the darkest cells too. */
+.cell.sel, .day.sel, .big.sel { box-shadow: inset 0 0 0 2px var(--selected), inset 0 0 0 3px #fff; }
 .day.pick, .big.pick { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--selected); z-index: 1; }
 .cell:not(.off):hover, .day:not(.off):hover, .big:not(.off):hover { outline: 2px solid var(--text); outline-offset: -1px; z-index: 2; }
 
@@ -755,19 +849,15 @@ const legendStyle = computed(() => ({
 }
 .sum-label { display: block; font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .sum-head b { font-size: 0.9375rem; }
-.dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 2px 0; }
-.dates label { display: flex; flex-direction: column; gap: 2px; font-size: 0.6875rem; color: var(--muted); }
-.dates input {
-  font: inherit; font-size: 0.8125rem; color: var(--text); background: var(--bg);
-  border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; min-width: 0;
-}
 .sum-line { margin: 0; font-size: 0.75rem; }
 .compare.up { color: #b91c1c; }
-.compare.down { color: #1d4ed8; }
+.compare.down { color: #553190; }
 .downloads { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .downloads button, .downloads a {
-  font: inherit; font-size: 0.75rem; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; height: 32px; padding: 0 10px;
+  font: inherit; font-size: 0.8125rem; border-radius: 6px; border: 1px solid var(--border);
   background: var(--bg); color: var(--text); cursor: pointer; text-decoration: none;
 }
+.downloads button:hover:not(:disabled), .downloads a:hover { background: var(--surface-3); }
 .downloads button:disabled { opacity: 0.5; cursor: default; }
 </style>

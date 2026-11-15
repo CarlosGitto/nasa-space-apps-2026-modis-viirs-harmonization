@@ -41,6 +41,10 @@ export const useFiltersStore = defineStore('filters', () => {
   // What the fire calendar and the main map show: 'harmonized' (one series 2000 -> today in MODIS units, MODIS
   // before 2012-02, VIIRS S-NPP / k after) or 'raw' (the dataset chosen in the controls, as published).
   const values = ref('raw')
+  // How the calendar and the main map color: 'detections' (hotspots), 'frp' (fire power) or 'anomaly' (against the
+  // same dates of the other years). Picked in the calendar; the map follows.
+  const measure = ref('detections')
+  const setMeasure = (m) => { measure.value = m }
   const harmonizedReady = ref(null) // null until known; false when the ETL hasn't built the harmonized series
   // Days the harmonized series covers in the lake: from its first month (2000 with the whole MODIS archive) to its
   // last day (it follows the science-quality data, so it can end some days before the near-real-time datasets).
@@ -245,7 +249,7 @@ export const useFiltersStore = defineStore('filters', () => {
 
   return {
     datasets, dataset, start, end, zone, zoneCells, region, viewZone, statsZone, fitTo, error, basemap, day, view, camera, selectedHexes, weatherLayers, weatherScope,
-    values, harmonized, harmonizedReady, span, ready,
+    values, harmonized, harmonizedReady, span, ready, measure, setMeasure,
     currentDataset, queryParams, imagery, compareSides, compareHarmonized, hexHarmonized, imageryDate, isBusy, setBusy,
     loadDatasets, setDataset, setDates, setDay, setRange, setValues, setRegion, setViewBox, setArea, clearZone, setBasemap, setView, setCamera,
     toggleWeatherLayer, setWeatherScope,

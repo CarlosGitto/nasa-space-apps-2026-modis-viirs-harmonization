@@ -80,14 +80,20 @@
       "confidence": "Confianza",
       "day": "Día",
       "night": "Noche",
-      "density": "{n} por 1.000 km² por día"
+      "density": "{n} por 1.000 km² por día",
+      "typical": "Lo habitual: {n} (promedio de {years} años)"
     },
     "zoomIn": "Acercar",
     "zoomOut": "Alejar",
     "contours": "Curvas de nivel",
     "scale": {
       "label": "Escala de color, relativa a lo consultado: de {low} (claro) a {high} (oscuro) detecciones por 1.000 km² por día; mitad de la escala: {mid}.",
-      "unit": "por 1.000 km²/día"
+      "unit": "por 1.000 km²/día",
+      "frpLabel": "Escala de color, relativa a lo consultado: de {low} (claro) a {high} (oscuro) MW de potencia por 1.000 km² por día; mitad de la escala: {mid}.",
+      "frpUnit": "MW por 1.000 km²/día",
+      "anomalyLabel": "Anomalías: violeta, menos focos que las mismas fechas de los otros años (hasta un cuarto); gris, lo habitual; colores de fuego, más (hasta cuatro veces).",
+      "anomalyUnit": "vs. lo habitual",
+      "noYears": "no hay otros años para comparar"
     },
     "hemi": {
       "n": "N",
@@ -147,7 +153,8 @@
     "allDays": "Todos los días · {n} días",
     "showAll": "· Todos los días",
     "day": "Día",
-    "bar": "{date} · {n} detecciones"
+    "bar": "{date} · {n} detecciones",
+    "barFrp": "{date} · {v} MW"
   },
   "cal": {
     "region": "Calendario de fuego",
@@ -156,10 +163,8 @@
     "sourceHarmonized": "MODIS + VIIRS armonizados · una sola serie, {from} – {to}, en unidades MODIS",
     "sourceRaw": "Detecciones originales · {dataset}",
     "modisUnits": " (unidades MODIS)",
-    "zoom": "Zoom del calendario",
-    "years": "Años",
-    "year": "Año",
-    "month": "Mes",
+    "backToYears": "Volver a todos los años",
+    "backToYear": "Volver a {year}",
     "previous": "Anterior",
     "next": "Siguiente",
     "yearsTitle": "{from} – {to}",
@@ -167,13 +172,20 @@
     "measures": {
       "detections": "Focos",
       "frp": "Potencia (FRP)",
-      "anomaly": "vs. lo habitual"
+      "anomaly": "Anomalías"
     },
-    "scale": "Escala",
-    "linear": "Lineal",
-    "log": "Log",
-    "hintYears": "Click en un mes para ver en el mapa dónde se quemó · doble click (o en un año) para abrir sus días.",
-    "hintDays": "Click en un día para verlo en el mapa · arrastrá sobre los días (o Shift + click), o escribí Desde / Hasta abajo, para elegir un rango.",
+    "logScale": "Escala log",
+    "logHint": "Colores logarítmicos: los meses tranquilos siguen viéndose al lado de uno extremo.",
+    "period": "Período",
+    "presetsLabel": "Atajos de período",
+    "presetsHint": "Hasta el último día con datos: {date}",
+    "presets": {
+      "last7": "Últimos 7 días",
+      "last30": "Últimos 30 días",
+      "thisYear": "Este año"
+    },
+    "hintYears": "Click en un mes para ver en el mapa dónde se quemó · arrastrá sobre los meses (o Shift + click) para elegir varios · click en un año (o doble click en un mes) para ver sus días.",
+    "hintDays": "Click en un día para verlo en el mapa · arrastrá sobre los días (o Shift + click) para elegir un rango · la ruta de arriba vuelve atrás.",
     "yearsLabel": "Focos por mes y año",
     "total": "Año",
     "openYear": "{year}: abrir sus días y mostrar el año entero en el mapa",
@@ -187,7 +199,7 @@
     "above": "{p}% más que lo habitual",
     "below": "{p}% menos que lo habitual",
     "relativeHint": "Los colores son relativos a la celda con más actividad de la vista.",
-    "anomalyHint": "Rojo: más focos que el mismo mes de los otros años; azul: menos.",
+    "anomalyHint": "Colores de fuego: más focos que las mismas fechas de los otros años; violeta: menos; gris: lo habitual.",
     "onMap": "En el mapa",
     "peak": "pico el {day}",
     "compareMonth": "{ratio}, comparado con {month} de {years}.",

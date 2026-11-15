@@ -92,7 +92,12 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   what was asked for** (percentiles of the query), so long ranges and far zooms don't wash out.
   The main map keeps the range's scale while the time slider plays; the split view shares one
   scale between its sides. A small legend shows the values. Borders are a whole pixel (not a
-  fraction), light, so they look alike on every screen scale.
+  fraction), a soft neutral gray, so they look alike on every screen scale and stay behind the fire.
+  The main map follows the calendar's **Color**: *Hotspots* (detections density), *Fire power* (FRP
+  density, MW) or *Anomalies*: each hexagon against the same dates of the other years
+  (`/stats/hex/typical`, kept per range while the slider plays), violet below / gray as usual / fire
+  colors above, ¼× to 4×, more opaque the further from usual. Hexagons that usually burn then but
+  have nothing now show up too (violet). Calendar and map share the palettes (`mapShared.js`).
 - **Side panel**: folds to a thin rail (the handle on its edge) that still shows the dataset and
   dates; remembered in the browser.
 - **Mouse coordinates**: bottom right of the map.
@@ -102,8 +107,8 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   remembered in the browser. Drawn in the browser by `maplibre-contour` from the public
   AWS Terrain Tiles (mostly NASA SRTM): nothing is ingested or stored. Off, nothing is
   requested; on, only the visible area, cached. Spaced out by zoom (1000 m from zoom 6,
-  500 m from 9, 100 m from 11, 50 m from 13), olive, under the fire hexagons, whose borders
-  turn neutral gray while the contours are on.
+  500 m from 9, 100 m from 11, 50 m from 13), olive, under the fire hexagons; the hexagon borders stay the
+  same soft line with or without them.
 - **Loading bar** ([src/components/LoadingBar.vue](src/components/LoadingBar.vue),
   [src/stores/loading.js](src/stores/loading.js)): a 3 px line at the very top that grows
   from the left while something loads (fast at first, then slower, never finishing by
@@ -120,13 +125,18 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
     global: the main map and the time slider follow it.
   - **Zoom levels**: *Years* (years × months, each year's total as a bar and a *Typical* row = the mean of each
     month: which years and which seasons burn most), *Year* (twelve month calendars, one square per day) and
-    *Month* (a big calendar with each day's count). ‹ › step a year or a month.
-  - **Picking**: click a month (or a year label) to show it on the map, double-click to open its days; click a
-    day to show it (its month becomes the slider's range); drag over days or Shift + click for a range, or type
-    it in the *From / To* fields of the *On the map* box (both stay in sync). Arrow keys move between cells,
-    Enter picks.
-  - **Color**: hotspots or FRP, linear or log, relative to the busiest cell in view; or *vs. typical*: each month
-    against the same month of the other years (a day against a typical day of its month), blue below, red above.
+    *Month* (a big calendar with each day's count). No tabs: a year label (or double-clicking a month) and a
+    month title drill down, and the trail on top (*2025 – 2026 › 2026 › October*) goes back up. ‹ › step a
+    year or a month.
+  - **Period** (above the grid): *From / To* date fields and shortcut chips (*Last 7 days*, *Last 30 days*,
+    *This year*, up to the last day with data; the matching one is checked). Grid and fields stay in sync.
+  - **Picking**: click a month (or a year label) to show it on the map, drag over months (or Shift + click) for
+    several in a row, even across years; double-click a month to open its days; click a
+    day to show it (its month becomes the slider's range); drag over days or Shift + click for a range. Arrow
+    keys move between cells, Enter picks.
+  - **Color** (chips): *Hotspots*, *FRP* or *Anomalies*, plus a *Log scale* toggle. Hotspots and FRP are
+    relative to the busiest cell in view; *Anomalies* compares each month with the same month of the other
+    years (a day against a typical day of its month), blue below, red above (log doesn't apply, so it's disabled).
   - **Region** ([src/regions.js](src/regions.js)): *Follow the map* (default: the calendar counts what is on
     screen, so zooming the map narrows it), the whole world, hemispheres, continents and fire regions (Amazon,
     Southern Africa, Australia…). A preset filters the calendar and the map and zooms the map to it; a drawn

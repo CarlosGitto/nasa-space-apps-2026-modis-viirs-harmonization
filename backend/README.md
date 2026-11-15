@@ -37,6 +37,7 @@ starts, with every dataset `available: false`.
 | `GET /datasets/{dataset}/stats/monthly` | Detections and FRP per year and month (burn calendar) |
 | `GET /stats/harmonized/daily` | The harmonized series (MODIS units, 2000 onward) per date: same shape as `stats/daily` (fire calendar, day and month views). 404 until `make etl-harmonize` has run |
 | `GET /datasets/{dataset}/stats/hex` | GeoJSON H3 hexagons with detections and FRP, resolution `res` (0–6: 6 is the base cell, coarser levels are its parents). Cells crossing the antimeridian are dropped |
+| `GET /datasets/{dataset}/stats/hex/typical`, `GET /stats/harmonized/hex/typical` | The same hexagons, but what they usually have on the asked dates (`start` and `end` required): those dates in every other year that holds them whole, averaged; `years` says how many (0 = nothing to compare with). The map's anomalies divide by it |
 | `GET /datasets/{dataset}/stats/grid` | GeoJSON polygons with detections and FRP per `cell` degrees (0.1–10) |
 | `GET /hexagons/{h3}` | One res-6 hexagon: identity (center, area, boundary, parents, static source) and its **whole-history profile** per sensor |
 | `GET /hexagons/{h3}/monthly` | Its monthly series per sensor and satellite |

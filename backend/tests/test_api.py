@@ -715,3 +715,32 @@ def test_hexagon_reliability_needs_the_reliability_layer(client):
     # the test lake has no fct_hexagon_reliability_monthly: a clear 404 for a valid hexagon, not a SQL error
     r = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/reliability")
     assert r.status_code == 404 and "not been built" in r.json()["detail"]
+
+
+def test_typical_hexagons_need_dates_and_other_years(client):
+    # anomalies on the map: the same dates in the other years. The test lake only has November 2026: nothing to
+    # compare with, so no features (years = 0) rather than a fake "typical" of zero.
+    assert client.get("/datasets/modis_sp/stats/hex/typical", params={"res": 4}).status_code == 422
+    body = client.get("/datasets/modis_sp/stats/hex/typical", params={"start": "2026-11-01", "end": "2026-11-30", "res": 4}).json()
+    assert body["years"] == 0 and body["features"] == []
+
+
+def test_harmonized_typical_hexagons_need_the_harmonized_layer(client):
+    r = client.get("/stats/harmonized/hex/typical", params={"start": "2025-01-01", "end": "2025-01-31"})
+    assert r.status_code == 404 and "not been built" in r.json()["detail"]
+
+
+def test_typical_windows_are_whole_other_years():
+    from datetime import date
+
+    from app.api import _typical_windows
+
+    con = duckdb.connect()
+    con.execute("create table d as select unnest(generate_series(date '2020-03-15', date '2024-06-30', interval 1 day))::date as acq_date")
+    w = _typical_windows(con, "d", date(2022, 2, 1), date(2022, 2, 28))
+    # 2020-02 starts before the data (2020-03-15); 2022 itself is the asked period; 2024-02 is whole
+    assert w == [(date(2021, 2, 1), date(2021, 2, 28)), (date(2023, 2, 1), date(2023, 2, 28)), (date(2024, 2, 1), date(2024, 2, 28))]
+    # 29 February moves to the 28th in years without it
+    assert (date(2023, 2, 28), date(2023, 3, 1)) in _typical_windows(con, "d", date(2024, 2, 29), date(2024, 3, 1))
+    # a period longer than a year never overlaps itself
+    assert _typical_windows(con, "d", date(2021, 1, 1), date(2022, 6, 30)) == [(date(2023, 1, 1), date(2024, 6, 30))]

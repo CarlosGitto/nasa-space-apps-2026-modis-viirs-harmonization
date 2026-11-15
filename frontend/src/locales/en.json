@@ -80,14 +80,20 @@
       "confidence": "Confidence",
       "day": "Day",
       "night": "Night",
-      "density": "{n} per 1,000 km² per day"
+      "density": "{n} per 1,000 km² per day",
+      "typical": "Usual: {n} (mean of {years} years)"
     },
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "contours": "Contour lines",
     "scale": {
       "label": "Color scale, relative to what was asked for: from {low} (light) to {high} (dark) detections per 1,000 km² per day; middle of the scale: {mid}.",
-      "unit": "per 1,000 km²/day"
+      "unit": "per 1,000 km²/day",
+      "frpLabel": "Color scale, relative to what was asked for: from {low} (light) to {high} (dark) MW of fire power per 1,000 km² per day; middle of the scale: {mid}.",
+      "frpUnit": "MW per 1,000 km²/day",
+      "anomalyLabel": "Anomalies: violet, fewer hotspots than the same dates in the other years (down to a quarter); gray, as usual; fire colors, more (up to four times).",
+      "anomalyUnit": "vs. usual",
+      "noYears": "no other years to compare"
     },
     "hemi": {
       "n": "N",
@@ -147,7 +153,8 @@
     "allDays": "All days · {n} days",
     "showAll": "· All days",
     "day": "Day",
-    "bar": "{date} · {n} detections"
+    "bar": "{date} · {n} detections",
+    "barFrp": "{date} · {v} MW"
   },
   "cal": {
     "region": "Fire calendar",
@@ -156,10 +163,8 @@
     "sourceHarmonized": "Harmonized MODIS + VIIRS · one series, {from} – {to}, in MODIS units",
     "sourceRaw": "Original detections · {dataset}",
     "modisUnits": " (MODIS units)",
-    "zoom": "Calendar zoom",
-    "years": "Years",
-    "year": "Year",
-    "month": "Month",
+    "backToYears": "Back to all years",
+    "backToYear": "Back to {year}",
     "previous": "Previous",
     "next": "Next",
     "yearsTitle": "{from} – {to}",
@@ -167,13 +172,20 @@
     "measures": {
       "detections": "Hotspots",
       "frp": "Fire power (FRP)",
-      "anomaly": "vs. typical"
+      "anomaly": "Anomalies"
     },
-    "scale": "Scale",
-    "linear": "Linear",
-    "log": "Log",
-    "hintYears": "Click a month to see where it burned on the map · double-click it (or a year) to open its days.",
-    "hintDays": "Click a day to see it on the map · drag over days (or Shift + click), or type From / To below, to pick a range.",
+    "logScale": "Log scale",
+    "logHint": "Logarithmic colors: quiet months stay visible next to an extreme one.",
+    "period": "Period",
+    "presetsLabel": "Period shortcuts",
+    "presetsHint": "Up to the last day with data: {date}",
+    "presets": {
+      "last7": "Last 7 days",
+      "last30": "Last 30 days",
+      "thisYear": "This year"
+    },
+    "hintYears": "Click a month to see where it burned on the map · drag over months (or Shift + click) to pick several · click a year (or double-click a month) to see its days.",
+    "hintDays": "Click a day to see it on the map · drag over days (or Shift + click) to pick a range · the trail above goes back.",
     "yearsLabel": "Hotspots per month and year",
     "total": "Year",
     "openYear": "{year}: open its days and show the whole year on the map",
@@ -187,7 +199,7 @@
     "above": "{p}% above usual",
     "below": "{p}% below usual",
     "relativeHint": "Colors are relative to the busiest cell in view.",
-    "anomalyHint": "Red: more hotspots than the same month in the other years; blue: fewer.",
+    "anomalyHint": "Fire colors: more hotspots than the same dates in the other years; violet: fewer; gray: as usual.",
     "onMap": "On the map",
     "peak": "peak {day}",
     "compareMonth": "{ratio} compared with {month} of {years}.",

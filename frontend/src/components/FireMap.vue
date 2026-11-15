@@ -17,7 +17,9 @@
 // click at the center (the crosshair) does, Shift+Enter adds or removes that hexagon.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getDetections, getHarmonizedHexagons, getHexagons, getSelectionWeather, getWeatherMap } from '../api'
+import {
+  getDetections, getHarmonizedHexagons, getHarmonizedHexagonsTypical, getHexagons, getHexagonsTypical, getSelectionWeather, getWeatherMap,
+} from '../api'
 import { date, errorMessage } from '../format'
 import { gibsUrl } from '../gibs'
 import {
@@ -25,8 +27,8 @@ import {
 } from '../hexGrid'
 import { getHexagonEdgeLengthAvg } from 'h3-js'
 import {
-  BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
-  applyScale, densityScale, fitRegion, fmt, HEX_BORDER_WIDTH, hexOpacity, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup,
+  BASE_RES, DETAIL_ZOOM, EMPTY, HEX_ANOMALY_COLOR, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
+  anomalyOpacity, applyScale, densityScale, withAnomaly, fitRegion, fmt, HEX_BORDER_WIDTH, hexOpacity, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup,
   scaleTicks, viewportBbox, whenIdle, withDensity,
 } from '../mapShared'
 import FireScale from './FireScale.vue'
@@ -68,6 +70,10 @@ let untrackSources = null
 const error = ref(null) // the API error (with .status), shown in the user's language
 const info = ref(null) // what's on screen: { total, hexagons, res, truncated }
 const fireTicks = ref(null) // legend of the color scale: [low, middle, high] densities
+const noYears = ref(false) // anomalies with no other year to compare with (the legend says so)
+// Typical hexagons (anomalies) per range, area, view and resolution: asked once, kept while the slider plays.
+const typicals = new Map()
+let paintedMeasure = null // the measure the hexagons' paint is set for
 const mapRef = shallowRef(null) // the MapLibre map, for the mouse coordinates (never made deeply reactive)
 // Color scale per range (dataset, dates, area, resolution): computed from the whole range's hexagons and kept, so
 // while the time slider plays a day is colored against its range and the colors don't jump from day to day.
@@ -112,6 +118,9 @@ const NEXT_LEVEL_ZOOM = { 0: 3, 1: 3, 2: 3, 3: 4.5, 4: 6, 5: 7.5 }
 // Hexagons of the calendar's values: the harmonized series (MODIS units, 2000 onward) or the chosen dataset.
 const hexagons = (params, signal) =>
   store.harmonized ? getHarmonizedHexagons(params, signal) : getHexagons(store.dataset, params, signal)
+// What those hexagons usually have on the same dates of the other years (anomalies).
+const hexagonsTypical = (params, signal) =>
+  store.harmonized ? getHarmonizedHexagonsTypical(params, signal) : getHexagonsTypical(store.dataset, params, signal)
 // Up close the points are always original detections, from the chosen dataset when it covers the dates.
 const pointsCovered = () => {
   const d = store.currentDataset
@@ -131,34 +140,52 @@ async function refresh() {
   loading.value = true
   store.setBusy('map', true)
   try {
-    const [fc, points] = await Promise.all([
+    // Anomalies: what these hexagons usually have on the same dates of the other years, for the whole range (kept
+    // while the slider plays: a day is compared with its share of it).
+    const anomaly = store.measure === 'anomaly'
+    const typicalKey = JSON.stringify([store.values, store.dataset, store.start, store.end, store.zone, res, hexBbox])
+    const [hexes, points, typical] = await Promise.all([
       hexagons({ ...params, bbox: hexBbox, res }, signal),
       zoom >= DETAIL_ZOOM && pointsCovered() ? getDetections(store.dataset, { ...params, limit: POINTS_LIMIT }, signal) : null,
+      anomaly ? typicals.get(typicalKey) ?? hexagonsTypical({ start: store.start, end: store.end, zone: store.zone, bbox: hexBbox, res }, signal) : null,
     ])
     currentRes = res
-    withDensity(fc, store.queryParams.start, store.queryParams.end)
-    // The scale comes from the whole range. Without a day on the slider, that's this answer;
-    // with one, the range's scale kept for this view (or asked once if there is none yet).
-    const key = JSON.stringify([store.values, store.dataset, store.start, store.end, store.zone, res])
-    if (!store.day) scales.set(key, densityScale(fc.features.map((f) => f.properties.density)))
-    else if (!scales.has(key)) {
-      const range = await hexagons({ start: store.start, end: store.end, zone: store.zone, bbox: hexBbox, res }, signal)
-      withDensity(range, store.start, store.end)
-      scales.set(key, densityScale(range.features.map((f) => f.properties.density)))
+    let fc = hexes
+    // Density of what the calendar colors by: detections, or FRP (MW) for fire power.
+    const field = store.measure === 'frp' ? 'frp_sum' : 'detections'
+    withDensity(fc, store.queryParams.start, store.queryParams.end, field)
+    if (anomaly) {
+      typicals.set(typicalKey, typical)
+      if (typicals.size > 30) typicals.delete(typicals.keys().next().value)
+      fc = withAnomaly(fc, typical, daysOf(store.queryParams.start, store.queryParams.end) / daysOf(store.start, store.end))
+      noYears.value = !typical.years
+      fireTicks.value = [0.25, 1, 4]
+    } else {
+      noYears.value = false
+      // The scale comes from the whole range. Without a day on the slider, that's this answer;
+      // with one, the range's scale kept for this view (or asked once if there is none yet).
+      const key = JSON.stringify([store.values, store.dataset, store.measure, store.start, store.end, store.zone, res])
+      if (!store.day) scales.set(key, densityScale(fc.features.map((f) => f.properties.density)))
+      else if (!scales.has(key)) {
+        const range = await hexagons({ start: store.start, end: store.end, zone: store.zone, bbox: hexBbox, res }, signal)
+        withDensity(range, store.start, store.end, field)
+        scales.set(key, densityScale(range.features.map((f) => f.properties.density)))
+      }
+      if (scales.size > 50) scales.delete(scales.keys().next().value)
+      // A day against its range: the range's densities are per day of the whole range, a day's are per that one day,
+      // so compare the day's against the range's totals (density x days of the range).
+      const factor = store.day ? 1 / daysOf(store.start, store.end) : 1
+      applyScale(fc, scales.get(key), factor)
+      fireTicks.value = scaleTicks(scales.get(key), factor)
     }
-    if (scales.size > 50) scales.delete(scales.keys().next().value)
-    // A day against its range: the range's densities are per day of the whole range, a day's are per that one day,
-    // so compare the day's against the range's totals (density x days of the range).
-    const factor = store.day ? 1 / daysOf(store.start, store.end) : 1
-    applyScale(fc, scales.get(key), factor)
-    fireTicks.value = scaleTicks(scales.get(key), factor)
     hexById = new Map(fc.features.map((f) => [f.properties.h3, f]))
     map.getSource('hex').setData(fc)
+    if (paintedMeasure !== store.measure) { paintedMeasure = store.measure; applyContrast() } // colors with their values
     renderWeather() // the halo follows the fire hexagons on screen
     map.getSource('points').setData(points ?? EMPTY)
     info.value = {
       total: fc.features.reduce((s, f) => s + f.properties.detections, 0),
-      hexagons: fc.features.length,
+      hexagons: fc.features.filter((f) => f.properties.detections > 0).length, // not the usual-but-quiet ones (anomalies)
       res,
       truncated: Boolean(points?.truncated),
     }
@@ -240,8 +267,15 @@ function prefetchNextDay(on, date) {
 
 // Fire hexagons a bit stronger while weather is on, so they stay the protagonists.
 // By density (see mapShared.js), lighter once zoomed in to the detections.
-const HEX_OPACITY = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, hexOpacity(0.75), DETAIL_ZOOM + 1, hexOpacity(0.35)]
-const HEX_OPACITY_OVER_WEATHER = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, hexOpacity(0.92), DETAIL_ZOOM + 1, hexOpacity(0.55)]
+// Hexagon borders: a soft neutral gray, so the grid stays in the background and never competes with fire colors.
+const HEX_BORDER_COLOR = '#6b7280'
+// Anomalies: by how far from usual instead (mapShared.js anomalyOpacity), so usual hexagons stay a faint gray.
+const hexFillOpacity = (strong) => {
+  const o = store.measure === 'anomaly' ? anomalyOpacity : hexOpacity
+  return ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, o(strong ? 0.92 : 0.75), DETAIL_ZOOM + 1, o(strong ? 0.55 : 0.35)]
+}
+// The calendar's color: the fire ramp (hotspots, FRP) or violet / gray / fire (anomalies).
+const hexFillColor = () => (store.measure === 'anomaly' ? HEX_ANOMALY_COLOR : HEX_FILL_COLOR)
 
 // Draw the loaded grids in the chosen scope (no request: grids and hexagons are in memory):
 // one group of icons per place, thinned to the zoom, fading away from the fires.
@@ -376,9 +410,9 @@ function addLayers() {
     source: 'hex',
     paint: {
       // Relative scale (mapShared.js): pale to dark over what the query brought.
-      'fill-color': HEX_FILL_COLOR,
+      'fill-color': hexFillColor(),
       // Lighter when zoomed in, so streets and the detections on top stay readable.
-      'fill-opacity': HEX_OPACITY,
+      'fill-opacity': hexFillOpacity(false),
     },
   }, labels)
   // 3D mode: the same hexagons as columns. Heights in meters, per zoom, so a column stays readable from the globe
@@ -387,7 +421,7 @@ function addLayers() {
     id: 'hex-3d', type: 'fill-extrusion', source: 'hex', layout: { visibility: threeD.value ? 'visible' : 'none' },
     filter: ['>', ['get', 'detections'], 0],
     paint: {
-      'fill-extrusion-color': HEX_FILL_COLOR,
+      'fill-extrusion-color': hexFillColor(),
       'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'],
         1, ['*', ['^', LEVEL_3D, 1.2], 3_000_000],
         4, ['*', ['^', LEVEL_3D, 1.2], 700_000],
@@ -409,7 +443,7 @@ function addLayers() {
     type: 'line',
     source: 'grid',
     maxzoom: DETAIL_ZOOM,
-    paint: { 'line-color': '#7c2d12', 'line-width': HEX_BORDER_WIDTH, 'line-opacity': 0.2 }, // applyContrast() sets them
+    paint: { 'line-color': HEX_BORDER_COLOR, 'line-width': HEX_BORDER_WIDTH, 'line-opacity': 0.15 }, // applyContrast() sets them
   }, labels)
   // Zoomed in: the hexagon's limit as a dashed line, so it's never lost.
   map.addLayer({
@@ -417,7 +451,7 @@ function addLayers() {
     type: 'line',
     source: 'grid',
     minzoom: DETAIL_ZOOM,
-    paint: { 'line-color': '#7c2d12', 'line-width': 1.5, 'line-opacity': 0.8, 'line-dasharray': [3, 2] },
+    paint: { 'line-color': HEX_BORDER_COLOR, 'line-width': 1, 'line-opacity': 0.5, 'line-dasharray': [3, 2] },
   }, labels)
   map.addLayer({
     id: 'points',
@@ -676,22 +710,24 @@ function syncImagery() {
   noImagery.value = store.basemap !== 'vector' && !img
 }
 
-// Hexagon borders and fill. High contrast (accessibility menu) makes them stronger; with
-// the contour lines on, the borders turn neutral gray so they don't mix with the olive lines.
-// With weather on, fire hexagons get stronger and an outline, and the grid fades, so fire
+// Hexagon borders and fill. High contrast (accessibility menu) makes them stronger. The borders
+// stay the same soft line whether the contour lines are on or not. With weather on, fire hexagons get stronger and an outline, and the grid fades, so fire
 // stays the protagonist. The fill opacity always follows the fire density (mapShared.js).
 function applyContrast() {
   if (!mapReady) return
   const on = prefs.contrast
   const weatherOn = store.weatherLayers.length > 0
-  const border = prefs.contours ? '#6b7280' : '#7c2d12'
-  map.setPaintProperty('hex-line', 'line-color', border)
-  map.setPaintProperty('hex-line-dashed', 'line-color', border)
   // A whole pixel, light (mapShared.js HEX_BORDER_WIDTH), so they look alike on every screen.
-  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : weatherOn ? 0.08 : prefs.contours ? 0.15 : 0.2)
+  // Soft neutral gray always (contour lines on or off); high contrast makes them dark and stronger.
+  map.setPaintProperty('hex-line', 'line-color', on ? '#7c2d12' : HEX_BORDER_COLOR)
+  map.setPaintProperty('hex-line-dashed', 'line-color', on ? '#7c2d12' : HEX_BORDER_COLOR)
+  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : weatherOn ? 0.08 : 0.15)
   map.setPaintProperty('hex-line', 'line-width', on ? 1.2 : HEX_BORDER_WIDTH)
-  map.setPaintProperty('hex-line-dashed', 'line-width', on ? 2.5 : 1.5)
-  map.setPaintProperty('hex-fill', 'fill-opacity', weatherOn || on ? HEX_OPACITY_OVER_WEATHER : HEX_OPACITY)
+  map.setPaintProperty('hex-line-dashed', 'line-opacity', on ? 0.9 : 0.5)
+  map.setPaintProperty('hex-line-dashed', 'line-width', on ? 2.5 : 1)
+  map.setPaintProperty('hex-fill', 'fill-opacity', hexFillOpacity(weatherOn || on))
+  map.setPaintProperty('hex-fill', 'fill-color', hexFillColor())
+  map.setPaintProperty('hex-3d', 'fill-extrusion-color', hexFillColor())
   map.setLayoutProperty('hex-fire-line', 'visibility', weatherOn ? 'visible' : 'none')
   contourContrast(map, on)
 }
@@ -761,6 +797,8 @@ onBeforeUnmount(() => {
 })
 
 watch(() => [store.values, store.ready, store.dataset, store.queryParams], refresh)
+// The calendar's color changed: the map colors the same way (the paint switches with the new values, in refresh).
+watch(() => store.measure, refresh)
 // Back from the curtain view: the container was hidden, so resize, catch up with
 // where the curtain was left, and load what changed meanwhile.
 watch(() => store.view, (view) => {
@@ -862,7 +900,7 @@ watch(() => prefs.locale, (locale) => {
         }) }}{{ info.truncated ? $t('map.pointsTruncated', { n: fmt(POINTS_LIMIT) }) : '' }}
       </span>
       <span v-if="noImagery" class="warn">{{ $t('controls.noImagery') }}</span>
-      <FireScale v-if="info && fireTicks && !error" :ticks="fireTicks" />
+      <FireScale v-if="info && fireTicks && !error" :ticks="fireTicks" :mode="store.measure" :no-years="noYears" />
     </div>
     <MouseCoords :maps="mapRef ? [mapRef] : []" />
   </div>

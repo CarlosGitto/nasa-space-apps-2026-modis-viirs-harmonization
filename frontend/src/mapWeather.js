@@ -244,6 +244,12 @@ const COMPASS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
 export const compass = (deg) =>
   (deg === null || deg === undefined ? '–' : t(`weather.compass.${COMPASS[Math.round(deg / 45) % 8]}`))
 
+// The same Material icons as the map, inline: emoji render differently per system (🌡 as a black-and-white glyph,
+// 💧 in color). The wind arrow points where the wind blows, as on the map.
+const tipIcon = (path, color, rotate = 0) =>
+  `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" style="vertical-align:-2px;transform:rotate(${rotate}deg)">`
+  + `<path d="${path}" fill="${color}"/></svg>`
+
 // Tooltip lines for a point: the value of each layer's cell there (numbers are ours, safe as HTML).
 export function weatherTooltip(grids, lon, lat) {
   return Object.entries(grids)
@@ -251,9 +257,10 @@ export function weatherTooltip(grids, lon, lat) {
       const cell = grid?.at(lon, lat)
       if (!cell) return null
       const v = `<b>${num(cell[2], 1)}</b>`
-      if (id === 'temperature') return `🌡 ${t('weather.tooltip.temperature', { v })}`
-      if (id === 'precipitation') return `💧 ${t('weather.tooltip.rain', { v })}`
-      return `➤ ${t('weather.tooltip.wind', { v, from: compass(cell[3]) })}`
+      if (id === 'temperature') return `${tipIcon(mdiThermometer, '#dc2626')} ${t('weather.tooltip.temperature', { v })}`
+      if (id === 'precipitation') return `${tipIcon(mdiWater, '#2563eb')} ${t('weather.tooltip.rain', { v })}`
+      const to = Number.isFinite(cell[3]) ? (cell[3] + 180) % 360 : 0
+      return `${tipIcon(mdiArrowUpBold, '#475569', to)} ${t('weather.tooltip.wind', { v, from: compass(cell[3]) })}`
     })
     .filter(Boolean)
     .join('<br>')

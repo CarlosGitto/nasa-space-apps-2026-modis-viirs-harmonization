@@ -33,7 +33,7 @@ export default [
         ignores: [
           '/^panel\\.tabs\\./', '/^obs\\.cols\\./', '/^controls\\.(products|sensors)\\./', '/^gibs\\./',
           '/^errors\\./', '/^a11y\\.(normal|large|xlarge)$/', '/^curtain\\.(fire|trueColor|mapOnly)$/',
-          '/^weather\\.compass\\./', '/^regions\\./', '/^cal\\.(above|below)$/', '/^weather\\.coverage\\.(outside|noData|rainOnly)$/',
+          '/^weather\\.compass\\./', '/^regions\\./', '/^cal\\.(above|below)$/', '/^cal\\.(measures|presets)\\./', '/^weather\\.coverage\\.(outside|noData|rainOnly)$/',
         ],
       }],
       '@intlify/vue-i18n/no-dynamic-keys': 'off', // keys like `panel.tabs.${id}` are deliberate
