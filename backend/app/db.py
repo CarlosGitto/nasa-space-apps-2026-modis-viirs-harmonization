@@ -706,3 +706,91 @@ def precipitation_days(
     )
     cols = ("precipitation_mm", "precipitation_7d_mm", "precipitation_30d_mm", "days_since_rain", "imerg_run")
     return {row[0]: dict(zip(cols, row[1:])) for row in rel.fetchall()}
+
+
+# ------------------------------------------------------------- weather maps ---
+# One day of a weather variable over an area, for the map's weather layers.
+
+
+@dataclass(frozen=True)
+class WeatherLayer:
+    table: str
+    value: str  # column drawn (color)
+    direction: str | None  # column with a direction in degrees (wind arrows), else None
+    product: str  # merra2 | imerg
+    cell: tuple[float, float]  # native cell size (lat, lon) in degrees
+    min_value: float | None  # cells below it are left out (dry cells for rain), else None
+
+
+WEATHER_LAYERS = {
+    # Daily maximum: the hottest hour is the one that matters for fire.
+    "temperature": WeatherLayer(WEATHER, "t2m_max_c", None, "merra2", (0.5, 0.625), None),
+    # Daily mean wind vector: speed and the direction it comes from.
+    "wind": WeatherLayer(WEATHER, "wind_speed_mean_ms", "wind_dir_mean_deg", "merra2", (0.5, 0.625), None),
+    "precipitation": WeatherLayer(PRECIPITATION, "precipitation_mm", None, "imerg", (0.1, 0.1), 0.1),
+}
+
+# At most about this many cells per response: finer grids are averaged into coarser
+# cells (IMERG, 0.1°: ~330 k cells per day over South America).
+MAX_MAP_CELLS = 20_000
+MAP_STEPS = (0.2, 0.25, 0.5, 1.0, 2.0)
+
+
+def weather_extent(cur: duckdb.DuckDBPyConnection, layer: WeatherLayer, day: date) -> BBox | None:
+    """Bounding box of the cells a day has (the loaded area), or None if the day has no data."""
+    row = cur.execute(
+        f"select min(cell_lon)::double, min(cell_lat)::double, max(cell_lon)::double, max(cell_lat)::double "
+        f"from {layer.table} where obs_date = ?",
+        [day],
+    ).fetchone()
+    return BBox(*row) if row[0] is not None else None
+
+
+def weather_map_cell(layer: WeatherLayer, area: BBox) -> tuple[float, float]:
+    """Cell size (lat, lon degrees) to draw an area with: the native grid if it fits in
+    MAX_MAP_CELLS, else the smallest square step, coarser than both native sides, that does."""
+    def cells(dlat: float, dlon: float) -> float:  # cells per side, both ends included
+        # Rounded: (-34.55 - -34.75) / 0.2 is 1.0000000000000142 in floating point.
+        return (round((area.max_lat - area.min_lat) / dlat, 6) + 1) * (round((area.max_lon - area.min_lon) / dlon, 6) + 1)
+
+    if cells(*layer.cell) <= MAX_MAP_CELLS:
+        return layer.cell
+    for step in MAP_STEPS:
+        if step > max(layer.cell) and cells(step, step) <= MAX_MAP_CELLS:
+            return step, step
+    return MAP_STEPS[-1], MAP_STEPS[-1]
+
+
+def weather_map(
+    cur: duckdb.DuckDBPyConnection, layer: WeatherLayer, day: date, area: BBox, cell: tuple[float, float]
+) -> list[tuple]:
+    """(lon, lat, value[, direction]) per cell center for one day inside `area`.
+
+    On the native grid, the cells as stored; on a coarser (square) cell, the mean of the
+    native cells that fall in it, and for wind the mean of the directions as unit vectors.
+    Cells under layer.min_value are left out.
+    """
+    where = "obs_date = ? and cell_lon between ? and ? and cell_lat between ? and ?"
+    params = [day, area.min_lon, area.max_lon, area.min_lat, area.max_lat]
+    keep = f"having avg({layer.value}) >= {layer.min_value}" if layer.min_value is not None else ""
+    step = cell[0]
+    if cell == layer.cell:
+        direction = f", {layer.direction}::double" if layer.direction else ""
+        filt = f" and {layer.value} >= {layer.min_value}" if layer.min_value is not None else ""
+        sql = f"select cell_lon::double, cell_lat::double, {layer.value}::double{direction} from {layer.table} where {where}{filt}"
+    else:
+        lat = f"floor(cell_lat / {step}) * {step} + {step / 2}"
+        lon = f"floor(cell_lon / {step}) * {step} + {step / 2}"
+        direction = ""
+        if layer.direction:
+            # Mean of the unit vectors the wind comes from, back to degrees.
+            rad = f"radians({layer.direction})"
+            direction = f", (degrees(atan2(avg(sin({rad})), avg(cos({rad})))) + 360) % 360"
+        sql = f"select ({lon})::double, ({lat})::double, avg({layer.value})::double{direction} from {layer.table} where {where} group by 1, 2 {keep}"
+    return cur.execute(sql, params).fetchall()
+
+
+def weather_layer_coverage(cur: duckdb.DuckDBPyConnection, layer: WeatherLayer) -> tuple[date, date] | None:
+    """(first, last) day the layer's table has anywhere."""
+    first, last = cur.execute(f"select min(obs_date), max(obs_date) from {layer.table}").fetchone()
+    return (first, last) if first else None

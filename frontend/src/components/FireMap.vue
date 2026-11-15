@@ -8,8 +8,10 @@
 // Always the whole world unless the user draws an area: 4 clicks, then every res-6
 // hexagon whose center is inside it is selected (empty ones too) and the map is filtered.
 // Optional NASA GIBS satellite imagery under the data, for the end day of the selected range.
+// Optional weather layers (temperature, rain, wind arrows) for the same day, under the
+// hexagons; see mapWeather.js.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getDetections, getHexagons } from '../api'
+import { getDetections, getHexagons, getWeatherMap } from '../api'
 import { gibsUrl } from '../gibs'
 import {
   MAX_SELECTION, areaPolygon, cellPolygon, cellsInArea, cellsOutline, covers, gridArea, gridCells,
@@ -19,6 +21,9 @@ import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
   fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
+import {
+  WEATHER_IDS, WEATHER_LAYERS, colorRamp, legendGradient, weatherFeatures, weatherTooltip, windArrowImage,
+} from '../mapWeather'
 import { useFiltersStore } from '../stores/filters'
 
 const store = useFiltersStore()
@@ -31,10 +36,12 @@ const loading = ref(false)
 const error = ref(null)
 const info = ref('')
 const imageryNote = ref('') // warning when the chosen imagery has no picture for that date
+const weatherNotes = ref({}) // layer id -> { first, last } when that day has no data for it
 
 let map = null
 let mapReady = false // set on 'load'; isStyleLoaded() flips to false while sources update
 let controller = null
+let weatherController = null
 let debounce = null
 let resizer = null
 let tooltip = null
@@ -83,6 +90,46 @@ async function refresh() {
   }
 }
 
+// Weather layers for the map's day (the slider's, else the end of the range) over the
+// visible area. Turned-off layers are hidden and emptied; a day without data for a layer
+// leaves a note saying which days it has.
+async function refreshWeather() {
+  if (!mapReady || store.view !== 'map') return
+  weatherController?.abort()
+  weatherController = new AbortController()
+  const { signal } = weatherController
+  const on = store.weatherLayers
+  for (const id of WEATHER_IDS) {
+    map.setLayoutProperty(`wx-${id}`, 'visibility', on.includes(id) ? 'visible' : 'none')
+    if (!on.includes(id)) map.getSource(`wx-${id}`).setData(EMPTY)
+  }
+  if (!on.length) { weatherNotes.value = {}; return }
+  store.setBusy('weather', true)
+  try {
+    const date = store.imageryDate
+    const bbox = viewportBbox(map)
+    const results = await Promise.all(on.map((id) => getWeatherMap(id, { date, bbox }, signal).then((r) => [id, r])))
+    const notes = {}
+    for (const [id, r] of results) {
+      map.getSource(`wx-${id}`).setData(weatherFeatures(id, r))
+      if (!r.cells.length) notes[id] = r.coverage ? { first: r.coverage.first_date, last: r.coverage.last_date } : {}
+    }
+    weatherNotes.value = notes
+    await whenIdle(map)
+  } catch (e) {
+    if (e.name === 'AbortError') return
+    weatherNotes.value = Object.fromEntries(on.map((id) => [id, { error: e.message }]))
+  }
+  if (!signal.aborted) store.setBusy('weather', false)
+}
+
+// Jump to the last week with data for a layer (from its "no data" note).
+function goToWeather(last) {
+  const d = new Date(`${last}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 6)
+  store.setDates(d.toISOString().slice(0, 10), last)
+}
+
 // The whole grid of the visible area, with or without detections: just borders,
 // not clickable. Built in the browser with a margin, so panning reuses it.
 function updateGrid() {
@@ -101,6 +148,7 @@ function scheduleRefresh() {
   debounce = setTimeout(() => {
     updateGrid()
     refresh()
+    refreshWeather()
   }, 250)
 }
 
@@ -124,6 +172,16 @@ function addLayers() {
     // Darkened and desaturated so the fire data stands out.
     paint: { 'raster-brightness-max': 0.65, 'raster-saturation': -0.3 },
   }, labels)
+
+  // Weather (hidden until turned on): cells under the hexagons, wind arrows above them.
+  for (const id of WEATHER_IDS) map.addSource(`wx-${id}`, { type: 'geojson', data: EMPTY })
+  map.addImage('wind-arrow', windArrowImage(), { sdf: true })
+  for (const id of ['temperature', 'precipitation']) {
+    map.addLayer({
+      id: `wx-${id}`, type: 'fill', source: `wx-${id}`, layout: { visibility: 'none' },
+      paint: { 'fill-color': colorRamp(id), 'fill-opacity': id === 'precipitation' ? 0.6 : 0.5, 'fill-antialias': false },
+    }, labels)
+  }
 
   map.addSource('grid', { type: 'geojson', data: EMPTY })
   map.addSource('hex', { type: 'geojson', data: EMPTY })
@@ -170,6 +228,20 @@ function addLayers() {
       'circle-stroke-width': 0.5,
       'circle-opacity': 0.9,
     },
+  }, labels)
+
+  // Wind arrows above the hexagons: rotated to where the wind blows, colored and sized by
+  // speed. MapLibre drops overlapping ones, so zoomed out it thins them out on its own.
+  map.addLayer({
+    id: 'wx-wind', type: 'symbol', source: 'wx-wind', layout: {
+      visibility: 'none',
+      'icon-image': 'wind-arrow',
+      'icon-rotate': ['get', 'to'],
+      'icon-rotation-alignment': 'map',
+      'icon-size': ['interpolate', ['linear'], ['get', 'value'], 0, 0.35, 15, 0.9],
+      'icon-padding': 1,
+    },
+    paint: { 'icon-color': colorRamp('wind'), 'icon-halo-color': '#ffffff', 'icon-halo-width': 1 },
   }, labels)
 
   // Drawn area: outline of the hexagons it selects (it snaps to the grid).
@@ -323,12 +395,15 @@ function onHover(e) {
     return
   }
   const [hit] = map.queryRenderedFeatures(e.point, { layers: ['points', 'hex-fill'] })
-  if (!hit) return hideTooltip()
-  map.getCanvas().style.cursor = 'pointer'
-  const html = hit.layer.id === 'points'
+  const weatherLayers = store.weatherLayers.map((id) => `wx-${id}`)
+  const weather = weatherLayers.length ? weatherTooltip(map.queryRenderedFeatures(e.point, { layers: weatherLayers })) : ''
+  if (!hit && !weather) return hideTooltip()
+  map.getCanvas().style.cursor = hit ? 'pointer' : ''
+  const html = !hit ? '' : hit.layer.id === 'points'
     ? pointPopup(hit.properties)
     : hexPopup(hit.properties, currentRes < BASE_RES ? 'Click to zoom in' : 'Click to open · Shift+click to add')
-  tooltip.setLngLat(e.lngLat).setHTML(html).addTo(map)
+  const day = `<span style="color:#6b7280">Weather ${store.imageryDate} (UTC)</span>`
+  tooltip.setLngLat(e.lngLat).setHTML([html, weather && `${weather}<br>${day}`].filter(Boolean).join('<hr style="margin:4px 0;border:none;border-top:1px solid #e5e7eb">')).addTo(map)
 }
 
 function hideTooltip() {
@@ -375,6 +450,7 @@ onMounted(() => {
     syncZone()
     updateGrid()
     refresh()
+    refreshWeather()
   })
   // The panel opening/closing changes the map's width.
   resizer = new ResizeObserver(() => { if (container.value.clientWidth) map.resize() })
@@ -384,7 +460,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   controller?.abort()
+  weatherController?.abort()
   store.setBusy('map', false)
+  store.setBusy('weather', false)
   clearTimeout(debounce)
   resizer?.disconnect()
   window.removeEventListener('keydown', onKey, { capture: true })
@@ -402,8 +480,11 @@ watch(() => store.view, (view) => {
     map.resize()
     map.jumpTo(camera)
     refresh()
+    refreshWeather()
   })
 })
+// Layers turned on/off, or another day: reload the weather.
+watch(() => [store.weatherLayers, store.imageryDate], refreshWeather)
 // Image type, satellite or day changed: update the imagery.
 // Watch id and date separately: pickLayer() returns a new object every time.
 watch(() => [store.basemap, store.imagery?.layer.id, store.imagery?.date], syncImagery)
@@ -425,6 +506,24 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
         Click {{ AREA_POINTS - draft.length }} more point{{ AREA_POINTS - draft.length === 1 ? '' : 's' }} · Esc cancels
       </span>
       <span v-else-if="areaNote" class="hint">{{ areaNote }}</span>
+    </div>
+
+    <div v-if="store.weatherLayers.length" class="legend" aria-label="Weather legend">
+      <div v-for="id in store.weatherLayers" :key="id" class="legend-item">
+        <span class="legend-title">{{ WEATHER_LAYERS[id].title }}</span>
+        <span class="legend-bar" :style="{ background: legendGradient(id) }"></span>
+        <span class="legend-ticks">
+          <span v-for="[v] in WEATHER_LAYERS[id].stops" :key="v">{{ v }}</span>
+        </span>
+        <span v-if="weatherNotes[id]" class="legend-note">
+          <template v-if="weatherNotes[id].error">{{ weatherNotes[id].error }}</template>
+          <template v-else-if="weatherNotes[id].last">
+            No data on {{ store.imageryDate }} · loaded {{ weatherNotes[id].first }} → {{ weatherNotes[id].last }}
+            <button @click="goToWeather(weatherNotes[id].last)">Go to {{ weatherNotes[id].last }}</button>
+          </template>
+          <template v-else>No data loaded yet (weather_ingest DAG)</template>
+        </span>
+      </div>
     </div>
 
     <div v-if="loading || error || info || imageryNote" class="status">
@@ -456,6 +555,20 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
   align-items: center; flex-wrap: wrap; background: var(--panel); padding: 6px 10px; border-radius: 6px;
   font-size: 13px; box-shadow: var(--shadow);
 }
+.legend {
+  position: absolute; bottom: 28px; right: 12px; width: 250px; display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel); padding: 8px 10px; border-radius: 6px; box-shadow: var(--shadow); font-size: 11px;
+}
+.legend-item { display: flex; flex-direction: column; gap: 3px; }
+.legend-title { color: var(--text); font-weight: 600; }
+.legend-bar { height: 8px; border-radius: 4px; }
+.legend-ticks { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend-note { color: var(--muted); }
+.legend-note button {
+  margin-top: 3px; display: block; font: inherit; font-size: 11px; background: none; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; cursor: pointer;
+}
+@media (max-width: 760px) { .legend { width: auto; left: 12px; bottom: 64px; } }
 .error { color: var(--danger); }
 .warn { color: var(--muted); }
 .spinner {

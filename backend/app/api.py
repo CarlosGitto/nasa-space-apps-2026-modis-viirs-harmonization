@@ -838,3 +838,61 @@ def selection_detections(body: SelectionDetectionsQuery, cur: Cursor) -> Selecti
         dataset=body.dataset, truncated=len(rows) > body.limit,
         rows=[SelectionDetection(**r) for r in rows[: body.limit]],
     )
+
+
+# --------------------------------------------------------------- weather maps ---
+# One day of one weather variable over the map's area: cell centers and values, as
+# compact arrays (thousands of cells; GeoJSON would be ten times bigger).
+
+WeatherLayerId = Literal["temperature", "precipitation", "wind"]
+WEATHER_UNITS = {"temperature": "°C", "precipitation": "mm", "wind": "m/s"}
+
+
+class WeatherCoverage(BaseModel):
+    first_date: date
+    last_date: date
+
+
+class WeatherMap(BaseModel):
+    layer: WeatherLayerId
+    product: Literal["merra2", "imerg"]
+    date: date
+    unit: str
+    cell: tuple[float, float]  # size of each drawn cell, degrees (lat, lon); coarser than native when zoomed out
+    # [lon, lat, value] per cell center; wind adds the direction it comes from: [lon, lat, speed, deg].
+    cells: list[list[float]]
+    coverage: WeatherCoverage | None  # days the layer has anywhere: to say what to pick when `cells` is empty
+
+
+@router.get("/weather/map")
+def weather_map(
+    cur: Cursor,
+    layer: Annotated[WeatherLayerId, Query(description="temperature (daily max) | precipitation (daily total) | wind (daily mean)")],
+    day: Annotated[date, Query(alias="date", description="UTC day")],
+    bbox: Annotated[str | None, Query(description="minLon,minLat,maxLon,maxLat (default: the whole loaded area)")] = None,
+) -> WeatherMap:
+    """A weather layer for the map: one UTC day of temperature (MERRA-2 daily maximum),
+    precipitation (IMERG daily total; dry cells under 0.1 mm left out) or wind (MERRA-2
+    daily mean speed and the direction it comes from) inside bbox."""
+    spec = db.WEATHER_LAYERS[layer]
+    if spec.table not in db.weather_tables(cur):
+        raise HTTPException(404, "no weather data in the lake yet")
+    extent = db.weather_extent(cur, spec, day)
+    area = _parse_bbox(bbox) if bbox else extent
+    rows: list[tuple] = []
+    cell = spec.cell
+    if extent and area:
+        # Only the part of the area with data counts for the cell size.
+        clipped = db.BBox(max(area.min_lon, extent.min_lon), max(area.min_lat, extent.min_lat),
+                          min(area.max_lon, extent.max_lon), min(area.max_lat, extent.max_lat))
+        if clipped.min_lon <= clipped.max_lon and clipped.min_lat <= clipped.max_lat:
+            cell = db.weather_map_cell(spec, clipped)
+            rows = db.weather_map(cur, spec, day, area, cell)
+    coverage = None
+    if not rows:
+        found = db.weather_layer_coverage(cur, spec)
+        coverage = WeatherCoverage(first_date=found[0], last_date=found[1]) if found else None
+    return WeatherMap(
+        layer=layer, product=spec.product, date=day, unit=WEATHER_UNITS[layer], cell=cell, coverage=coverage,
+        cells=[[round(v, 4) if i < 2 else round(v, 2) for i, v in enumerate(r)] for r in rows if r[2] is not None],
+    )

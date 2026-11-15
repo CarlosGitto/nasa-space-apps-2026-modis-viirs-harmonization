@@ -41,6 +41,7 @@ starts, with every dataset `available: false`.
 | `GET /hexagons/{h3}/period` | Its profile for `start`..`end` per sensor: totals, per satellite, daily series |
 | `GET /hexagons/{h3}/detections` | Its detections as a table for a `dataset` and `start`/`end` (MODIS/VIIRS datasets only). `limit` (default 2000) |
 | `GET /hexagons/{h3}/weather` | Its daily weather for `start`..`end` (default: the last 90 days with weather, at most 731): temperature, dew point, relative humidity, VPD and wind (MERRA-2); precipitation, its 7 / 30-day totals and days since rain (IMERG). Any hexagon in the loaded area, with or without detections |
+| `GET /weather/map` | One UTC day (`date`) of a weather `layer` for the map, inside `bbox`: `temperature` (MERRA-2 daily max, °C), `precipitation` (IMERG daily total, mm; dry cells < 0.1 mm left out) or `wind` (MERRA-2 daily mean speed, m/s, and the direction it comes from). Compact `[lon, lat, value(, deg)]` cell centers plus the cell size; fine grids are averaged into coarser cells to stay under ~20 k cells. With no cells, `coverage` says which days the layer has |
 | `POST /hexagons/selection/summary` | Many hexagons at once (`{"h3": [...], "start", "end"}`, up to 5000): per hexagon with any history, its totals and its detections in the dates, per sensor, busiest first |
 | `POST /hexagons/selection/detections` | Detections of many hexagons as one table (`{"h3": [...], "dataset", "start", "end", "limit"}`) |
 

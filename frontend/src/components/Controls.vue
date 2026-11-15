@@ -2,6 +2,7 @@
 // Dataset ("release"), dates, basemap and zone status.
 import { computed } from 'vue'
 import { IMAGE_TYPES } from '../gibs'
+import { WEATHER_LAYERS } from '../mapWeather'
 import { useFiltersStore } from '../stores/filters'
 
 const store = useFiltersStore()
@@ -73,6 +74,17 @@ const fmt = (n) => n.toLocaleString('en-US')
       <template v-else>No satellite imagery for that date</template>
     </p>
 
+    <fieldset v-if="store.view === 'map'" class="weather">
+      <legend>Weather layers</legend>
+      <label v-for="(l, id) in WEATHER_LAYERS" :key="id" class="check">
+        <input type="checkbox" :checked="store.weatherLayers.includes(id)" @change="store.toggleWeatherLayer(id)" />
+        {{ l.label }}
+      </label>
+    </fieldset>
+    <p v-if="store.view === 'map' && store.weatherLayers.length" class="meta">
+      NASA MERRA-2 + GPM IMERG · {{ store.imageryDate }} (UTC, {{ store.day ? 'slider day' : 'end of range' }})
+    </p>
+
     <div class="zone">
       <span>Zone: <b>{{ store.zone ? 'drawn' : 'whole world' }}</b></span>
       <button v-if="store.zone" @click="store.clearZone()">Clear</button>
@@ -95,6 +107,10 @@ select, input {
 }
 .meta { margin: -4px 0 0; font-size: 12px; color: var(--muted); }
 .dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.weather { border: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.weather legend { font-size: 12px; color: var(--muted); padding: 0; margin-bottom: 4px; width: 100%; }
+.weather .check { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
+.weather .check input { padding: 0; margin: 0; }
 .zone { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 .zone button {
   font: inherit; font-size: 12px; background: none; border: 1px solid var(--border); border-radius: 6px;

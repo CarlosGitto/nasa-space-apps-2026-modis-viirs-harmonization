@@ -59,6 +59,9 @@ export const getHexagonPeriod = (h3, params, signal) => get(`/hexagons/${h3}/per
 
 export const getHexagonDetections = (h3, params, signal) => get(`/hexagons/${h3}/detections`, params, signal)
 
+// One UTC day of a weather layer (temperature | precipitation | wind) over a bbox, for the map.
+export const getWeatherMap = (layer, params, signal) => get('/weather/map', { layer, ...params }, signal)
+
 // Daily weather of a hexagon (NASA MERRA-2 + GPM IMERG, from its nearest grid cells).
 export const getHexagonWeather = (h3, params, signal) => get(`/hexagons/${h3}/weather`, params, signal)
 
