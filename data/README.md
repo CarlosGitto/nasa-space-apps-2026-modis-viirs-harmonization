@@ -9,18 +9,31 @@ anyone else (backend, notebooks...). Not committed to git, except this README.
 data/lake/
 ├── catalog.sqlite (+ -wal, -shm)   # DuckLake catalog: which files make up each table and version
 └── files/                          # Parquet files managed by DuckLake (don't edit by hand)
-    ├── firms_raw/<table>/...       # bronze (dlt): append-only, every load kept
-    └── silver/<table>/acq_month=.../  # silver (dbt): incremental by acquisition month
 ```
 
-| Schema | What | Written by |
-|---|---|---|
-| `firms_raw` | Bronze: raw FIRMS detections, every load as new rows (`_dlt_load_id`) | dlt (`firms_ingest_nrt`, `firms_ingest_sp`) |
-| `silver` | Normalized, latest version per detection, invalid rows flagged in `dq_issue` | dbt (incremental) |
-| `gold` | Views over silver with only the valid rows: what consumers read | dbt |
+Everything is organized around **the hexagon**: the H3 resolution-6 cell (~36 km²)
+each detection falls in (`h3_r6`), the project's fixed, sensor-agnostic spatial unit.
 
-Tables: `modis_nrt`, `viirs_nrt`, `modis_sp`, `viirs_sp` (NRT = near real time,
-SP = standard / science-quality).
+| Layer | Tables | What |
+|---|---|---|
+| bronze `firms_raw` | `modis_sp`, `viirs_noaa20_nrt`, … (one per FIRMS product) | Raw detections from dlt, append-only: every load kept (`_dlt_load_id`) |
+| silver | `stg_firms__<table>` (views) | Cleaning, types, `dq_issue`, origin columns (sensor, satellite, product), the hexagon |
+| silver | `int_detections_sp`, `int_detections_nrt` | One table per product: satellites unioned, latest version per detection |
+| silver | `int_static_sources` | Mask of static heat sources (refineries, gas flares, volcanoes) built from SP |
+| **gold** | `dim_hexagon` | One row per hexagon: center, real area, parents, activity, `has_static_source` |
+| **gold** | `fct_hexagon_detections` | Detail: one row per valid detection, SP and NRT, with `is_preferred` and `is_static_source` |
+| **gold** | `fct_hexagon_daily` | Metrics: hexagon × day × product × sensor × satellite × day/night |
+
+How to read gold:
+
+- **`is_preferred`**: filter on it for one continuous series, SP where NASA has
+  published it and NRT for the days after (per satellite), without duplicates.
+- **`is_static_source`**: heat that is not a wildfire. SP flags it (`type` 1/2/3);
+  NRT is matched against `int_static_sources`. The metrics count it apart
+  (`static_detections`), never as fire.
+- **Never add satellites or sensors together** as if they were the same: each one
+  sees fire differently. The metrics keep them on separate rows.
+- **No row means "no detection", not "no fire"**: there is no cloud/coverage mask yet.
 
 Writes are atomic (a reader never sees a half-written table) and every change
 is a snapshot, kept 7 days for time travel (`firms_lake_maintenance` DAG).
@@ -36,11 +49,14 @@ INSTALL ducklake; INSTALL sqlite;
 ATTACH 'ducklake:sqlite:data/lake/catalog.sqlite' AS lake
     (READ_ONLY, DATA_PATH 'data/lake/files/', OVERRIDE_DATA_PATH true);
 
-SELECT * FROM lake.gold.viirs_nrt LIMIT 10;
+-- Continuous VIIRS series (SP + NRT), wildfires only
+SELECT * FROM lake.gold.fct_hexagon_detections
+WHERE sensor = 'viirs' AND is_preferred AND NOT is_static_source
+LIMIT 10;
 
 -- Time travel
 SELECT * FROM lake.snapshots();
-SELECT count(*) FROM lake.gold.modis_sp AT (VERSION => 42);
+SELECT count(*) FROM lake.gold.fct_hexagon_daily AT (VERSION => 42);
 ```
 
 Always attach `READ_ONLY` unless you are the ETL: the SQLite catalog takes a

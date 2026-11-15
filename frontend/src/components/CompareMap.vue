@@ -7,12 +7,13 @@
 //
 // Hexagons use the same fixed color scale on both sides, so a cell that looks lighter
 // on the MODIS side really has fewer detections. Zoomed in, detections are drawn per
-// sensor: MODIS = yellow ring (~1 km pixel), VIIRS = cyan dot (375 m pixel).
+// sensor: MODIS = yellow ring (~1 km pixel), VIIRS = cyan dot (375 m pixel); static
+// heat sources (refineries, gas flares...) in gray on both.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getDetections, getHexagons } from '../api'
 import { GIBS_LAYERS, gibsDate, gibsUrl } from '../gibs'
 import {
-  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STYLE,
+  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE,
   fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
@@ -87,12 +88,15 @@ function addLayers(map) {
   // Like the prototype: VIIRS = solid cyan dot, MODIS = yellow ring with a dark halo (never color alone).
   map.addLayer({ id: 'viirs-pt', type: 'circle', source: 'viirs', paint: {
     'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 2.6, 10, 4.5, 13, 7],
-    'circle-color': VIIRS_COLOR, 'circle-stroke-color': '#000', 'circle-stroke-width': 1.2 } })
+    'circle-color': ['case', ['==', ['get', 'is_static_source'], true], STATIC_COLOR, VIIRS_COLOR],
+    'circle-stroke-color': '#000', 'circle-stroke-width': 1.2 } })
   const ring = ['interpolate', ['linear'], ['zoom'], 7, 5, 10, 9, 13, 16]
   map.addLayer({ id: 'modis-halo', type: 'circle', source: 'modis', paint: {
     'circle-radius': ring, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#000', 'circle-stroke-width': 5 } })
   map.addLayer({ id: 'modis-pt', type: 'circle', source: 'modis', paint: {
-    'circle-radius': ring, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': MODIS_COLOR, 'circle-stroke-width': 2.5 } })
+    'circle-radius': ring, 'circle-color': 'rgba(0,0,0,0)',
+    'circle-stroke-color': ['case', ['==', ['get', 'is_static_source'], true], STATIC_COLOR, MODIS_COLOR],
+    'circle-stroke-width': 2.5 } })
   map.addLayer({ id: 'zone-line', type: 'line', source: 'zone',
     paint: { 'line-color': '#2563eb', 'line-width': 2, 'line-dasharray': [3, 2] } })
 

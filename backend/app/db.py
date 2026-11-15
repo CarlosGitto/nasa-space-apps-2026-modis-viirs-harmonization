@@ -2,14 +2,25 @@
 
 The lake (data/lake at the repo root) is a DuckLake written by the ETL: a SQLite
 catalog (`catalog.sqlite`) plus Parquet files (`files/`). This module attaches
-it read-only as `lake` and queries `lake.gold.<dataset>` (tables or views).
-Every query reads the latest committed snapshot, so new ETL runs show up
-immediately, and writes are atomic, so a half-written table is never seen.
+it read-only as `lake`. Every query reads the latest committed snapshot, so new
+ETL runs show up immediately, and writes are atomic, so a half-written table is
+never seen.
 
-Datasets are the extension point for MODIS, VIIRS and (later) harmonized data:
-each one is a relation `gold.<sensor>_<product>` plus a mapping from the API's
-optional properties to its columns. Endpoints never look at sensor specifics,
-so adding or adjusting a dataset only touches DATASETS below.
+Gold is organized around the hexagon (H3 res 6), the canonical entity:
+  gold.dim_hexagon              one row per hexagon (center, area, parents...)
+  gold.fct_hexagon_detections   detail: one row per detection, SP and NRT
+  gold.fct_hexagon_daily        metrics: hexagon x day x product x satellite x day/night
+
+A MODIS/VIIRS dataset is a filter on those tables (sensor + product, or
+is_preferred for the continuous "best" series). Endpoints only see two base
+relations, whatever the dataset:
+  points_relation  one row per detection             -> /detections, /stats/grid
+  cells_relation   one row per hexagon-day-day/night -> /stats/hex, daily, monthly
+Spatial filters on cells use the hexagon's center: the hexagon is the unit.
+
+Harmonized datasets (from the harmonization team) keep their own contract: a
+table `gold.harmonized_{nrt,sp}` with point columns; their cells are computed
+on the fly.
 """
 
 from __future__ import annotations
@@ -45,21 +56,28 @@ class Sensor(StrEnum):
 class Product(StrEnum):
     nrt = "nrt"  # near real time
     sp = "sp"  # standard processing (science quality, historical)
+    best = "best"  # continuous series: SP where published, NRT after it (is_preferred)
 
 
 class DatasetId(StrEnum):
-    modis_nrt = "modis_nrt"
+    modis_best = "modis_best"
     modis_sp = "modis_sp"
-    viirs_nrt = "viirs_nrt"
+    modis_nrt = "modis_nrt"
+    viirs_best = "viirs_best"
     viirs_sp = "viirs_sp"
+    viirs_nrt = "viirs_nrt"
     harmonized_nrt = "harmonized_nrt"
     harmonized_sp = "harmonized_sp"
 
 
 LAKE_ALIAS = "lake"
 GOLD_SCHEMA = "gold"
+DETECTIONS = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_detections"
+DAILY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_daily"
+HEXAGONS = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.dim_hexagon"
+HEXAGON_TABLES = ("fct_hexagon_detections", "fct_hexagon_daily", "dim_hexagon")
 
-# Every dataset must have these columns (same names in the lake).
+# Harmonized datasets (own relation) must have these columns (same names in the lake).
 REQUIRED_COLUMNS = ("latitude", "longitude", "acq_date", "acq_datetime_utc", "frp", "daynight")
 # The project's fixed spatial unit: the H3 resolution-6 cell of each detection.
 # Taken from the lake when the dataset has it (dbt silver computes it once),
@@ -67,7 +85,7 @@ REQUIRED_COLUMNS = ("latitude", "longitude", "acq_date", "acq_datetime_utc", "fr
 H3_RES = 6
 H3_COLUMN = "h3_r6"
 
-# API property -> lake column. Missing columns are returned as null.
+# Harmonized datasets: API property -> lake column. Missing columns are returned as null.
 OPTIONAL_PROPERTIES = ("satellite", "confidence", "brightness")
 
 
@@ -76,25 +94,36 @@ class Dataset:
     id: DatasetId
     sensor: Sensor
     product: Product
-    columns: dict[str, str]  # optional property -> lake column
+    columns: dict[str, str] | None = None  # harmonized only: optional property -> lake column
+
+    @property
+    def on_hexagon_model(self) -> bool:
+        """MODIS/VIIRS read the hexagon gold tables; harmonized has its own relation."""
+        return self.sensor is not Sensor.harmonized
 
     @property
     def relation(self) -> str:
         return f'{LAKE_ALIAS}.{GOLD_SCHEMA}."{self.id}"'
 
+    def predicate(self, alias: str = "") -> str:
+        """Filter on the hexagon tables (values come from enums, safe to inline)."""
+        p = f"{alias}." if alias else ""
+        product = f"{p}is_preferred" if self.product is Product.best else f"{p}product = '{self.product}'"
+        return f"{p}sensor = '{self.sensor}' and {product}"
 
-_MODIS = {"satellite": "satellite", "confidence": "confidence", "brightness": "brightness"}
-_VIIRS = {"satellite": "satellite", "confidence": "confidence", "brightness": "bright_ti4"}
+
 # Provisional: adjust once the harmonization team defines its output columns.
 _HARMONIZED = {"satellite": "satellite", "confidence": "confidence", "brightness": "brightness"}
 
 DATASETS: dict[DatasetId, Dataset] = {
     d.id: d
     for d in (
-        Dataset(DatasetId.modis_nrt, Sensor.modis, Product.nrt, _MODIS),
-        Dataset(DatasetId.modis_sp, Sensor.modis, Product.sp, _MODIS),
-        Dataset(DatasetId.viirs_nrt, Sensor.viirs, Product.nrt, _VIIRS),
-        Dataset(DatasetId.viirs_sp, Sensor.viirs, Product.sp, _VIIRS),
+        Dataset(DatasetId.modis_best, Sensor.modis, Product.best),
+        Dataset(DatasetId.modis_sp, Sensor.modis, Product.sp),
+        Dataset(DatasetId.modis_nrt, Sensor.modis, Product.nrt),
+        Dataset(DatasetId.viirs_best, Sensor.viirs, Product.best),
+        Dataset(DatasetId.viirs_sp, Sensor.viirs, Product.sp),
+        Dataset(DatasetId.viirs_nrt, Sensor.viirs, Product.nrt),
         Dataset(DatasetId.harmonized_nrt, Sensor.harmonized, Product.nrt, _HARMONIZED),
         Dataset(DatasetId.harmonized_sp, Sensor.harmonized, Product.sp, _HARMONIZED),
     )
@@ -196,26 +225,107 @@ def _ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _tables(cur: duckdb.DuckDBPyConnection) -> set[str]:
+    rows = cur.execute(
+        "select table_name from information_schema.tables where table_catalog = ? and table_schema = ?",
+        [LAKE_ALIAS, GOLD_SCHEMA],
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
 def exists(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> bool:
-    """Whether the dataset's table or view is in the lake (False if there is no lake yet)."""
+    """Whether the dataset has data in the lake (False if there is no lake yet)."""
     if not _attached:
         return False
+    tables = _tables(cur)
+    if not ds.on_hexagon_model:
+        return str(ds.id) in tables
+    if not all(t in tables for t in HEXAGON_TABLES):
+        return False
+    return cur.execute(f"select exists (select 1 from {DAILY} where {ds.predicate()})").fetchone()[0]
+
+
+def hexagon_summaries(cur: duckdb.DuckDBPyConnection) -> dict[DatasetId, tuple[int, date, date]]:
+    """(fire detections, first date, last date) of every MODIS/VIIRS dataset with data,
+    in one pass over the daily metrics (instead of one query per dataset)."""
+    if not _attached or not all(t in _tables(cur) for t in HEXAGON_TABLES):
+        return {}
+    rows = cur.execute(
+        f"select sensor, product, is_preferred, sum(fire_detections), min(acq_date), max(acq_date) "
+        f"from {DAILY} group by all"
+    ).fetchall()
+    out: dict[DatasetId, tuple[int, date, date]] = {}
+
+    def add(ds_id: str, n, first, last):
+        key = DatasetId(ds_id)
+        if key in out:
+            m, f, l = out[key]
+            n, first, last = m + n, min(f, first), max(l, last)
+        out[key] = (int(n or 0), first, last)
+
+    for sensor, product, preferred, n, first, last in rows:
+        if sensor not in ("modis", "viirs") or product not in ("sp", "nrt"):
+            continue
+        add(f"{sensor}_{product}", n, first, last)
+        if preferred:
+            add(f"{sensor}_best", n, first, last)
+    return out
+
+
+def summary(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> tuple[int, date | None, date | None]:
+    """(fire detections, first date, last date) of a dataset that exists."""
+    if ds.on_hexagon_model:
+        query = f"select sum(fire_detections), min(acq_date), max(acq_date) from {DAILY} where {ds.predicate()}"
+    else:
+        query = f"select count(*), min(acq_date), max(acq_date) from {points_relation(cur, ds)}"
+    n, first, last = cur.execute(query).fetchone()
+    return int(n or 0), first, last
+
+
+def points_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
+    """One row per detection, same columns for every dataset:
+
+    latitude, longitude, acq_date, acq_datetime_utc, frp, daynight, satellite,
+    confidence (text), brightness, h3_r6, product, is_static_source.
+    """
+    if ds.on_hexagon_model:
+        return (
+            "(select latitude, longitude, acq_date, acq_datetime_utc, frp, daynight, satellite, "
+            "confidence_raw as confidence, brightness, h3_r6, product, is_static_source "
+            f"from {DETECTIONS} where {ds.predicate()})"
+        )
+    return _harmonized_points(cur, ds)
+
+
+def cells_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset, with_center: bool = False) -> str:
+    """Hexagon rows: h3_r6, acq_date, daynight, detections (fire), static_detections,
+    frp_sum (fire). Several rows per hexagon-day are possible (one per satellite and
+    product): endpoints aggregate them.
+
+    with_center adds latitude/longitude = the hexagon's center (from dim_hexagon), the
+    point spatial filters test. Only join when a bbox/zone needs it: it's the expensive part.
+    """
+    if ds.on_hexagon_model:
+        if not with_center:
+            return (
+                "(select h3_r6, acq_date, daynight, fire_detections as detections, static_detections, "
+                f"fire_frp_sum as frp_sum from {DAILY} where {ds.predicate()})"
+            )
+        return (
+            "(select d.h3_r6, h.center_lat as latitude, h.center_lon as longitude, d.acq_date, d.daynight, "
+            "d.fire_detections as detections, d.static_detections, d.fire_frp_sum as frp_sum "
+            f"from {DAILY} d join {HEXAGONS} h using (h3_r6) where {ds.predicate('d')})"
+        )
+    points = _harmonized_points(cur, ds)
     return (
-        cur.execute(
-            "select count(*) from information_schema.tables "
-            "where table_catalog = ? and table_schema = ? and table_name = ?",
-            [LAKE_ALIAS, GOLD_SCHEMA, str(ds.id)],
-        ).fetchone()[0]
-        > 0
+        "(select h3_r6, h3_cell_to_latlng(h3_r6)[1] as latitude, h3_cell_to_latlng(h3_r6)[2] as longitude, "
+        "acq_date, daynight, count(*) as detections, 0 as static_detections, sum(frp) as frp_sum "
+        f"from {points} where h3_r6 is not null group by h3_r6, acq_date, daynight)"
     )
 
 
-def base_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
-    """Subquery with the common columns of a dataset, whatever its sensor.
-
-    Columns: the required ones, satellite / confidence (as text) / brightness,
-    and h3_r6 (the fixed H3 resolution-6 cell).
-    """
+def _harmonized_points(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
+    """Points of a harmonized dataset, from its own relation (contract in the README)."""
     source = ds.relation
     present = {row[0] for row in cur.execute(f"describe {source}").fetchall()}
 
@@ -225,7 +335,7 @@ def base_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
 
     optional = []
     for prop in OPTIONAL_PROPERTIES:
-        col = ds.columns.get(prop)
+        col = (ds.columns or {}).get(prop)
         if col in present:
             expr = f"cast({_ident(col)} as varchar)" if prop in ("satellite", "confidence") else f"cast({_ident(col)} as double)"
         else:
@@ -242,7 +352,8 @@ def base_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
     optional.append(f"{h3} as {H3_COLUMN}")
 
     return (
-        f"(select {', '.join(REQUIRED_COLUMNS)}, {', '.join(optional)} "
+        f"(select {', '.join(REQUIRED_COLUMNS)}, {', '.join(optional)}, "
+        f"'{ds.product}' as product, false as is_static_source "
         f"from {source} where latitude is not null)"
     )
 

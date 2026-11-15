@@ -30,11 +30,11 @@ starts, with every dataset `available: false`.
 | Endpoint | Returns |
 |---|---|
 | `GET /health` | `{"status": "ok"}` |
-| `GET /datasets` | Every dataset with `available`, `rows`, `start_date`, `end_date` |
-| `GET /datasets/{dataset}/detections` | GeoJSON points, most recent first. `limit` (default 5000, max 50000); `truncated: true` when more matched |
+| `GET /datasets` | Every dataset with `available`, `rows` (wildfire detections), `start_date`, `end_date` |
+| `GET /datasets/{dataset}/detections` | GeoJSON points, most recent first, each with `product` and `is_static_source`. `limit` (default 5000, max 50000); `truncated: true` when more matched |
 | `GET /datasets/{dataset}/stats/daily` | Detections, day/night and FRP per date |
 | `GET /datasets/{dataset}/stats/monthly` | Detections and FRP per year and month (burn calendar) |
-| `GET /datasets/{dataset}/stats/hex` | GeoJSON H3 hexagons with detections and FRP, resolution `res` (0–8). Cells crossing the antimeridian are dropped |
+| `GET /datasets/{dataset}/stats/hex` | GeoJSON H3 hexagons with detections and FRP, resolution `res` (0–6: 6 is the base cell, coarser levels are its parents). Cells crossing the antimeridian are dropped |
 | `GET /datasets/{dataset}/stats/grid` | GeoJSON polygons with detections and FRP per `cell` degrees (0.1–10) |
 
 Common filters (all optional; without them the whole world and all dates):
@@ -44,14 +44,28 @@ Common filters (all optional; without them the whole world and all dates):
 - `zone`: a GeoJSON `Polygon`/`MultiPolygon` geometry (e.g. drawn by the user), as a JSON string. Combines with `bbox`.
 - `daynight=D|N`.
 
+`detections` always counts **wildfires**. Heat from static sources (refineries,
+gas flares, industry, volcanoes) is reported apart as `static_detections`, and
+`/detections` returns those points flagged with `is_static_source`. On the
+aggregated endpoints (hex, daily, monthly) `bbox` and `zone` select hexagons by
+their center: the hexagon is the unit.
+
 The OpenAPI schema (`/openapi.json`) is typed, so the frontend can generate its client from it.
 
 ## Datasets: MODIS, VIIRS and harmonized
 
-`{dataset}` is `<sensor>_<product>`: sensor `modis | viirs | harmonized`,
-product `nrt` (near real time) or `sp` (standard processing). Each one is the
-table or view `gold.<dataset>` in the DuckLake. A dataset that isn't there yet
-is listed as `available: false` and its endpoints return 404.
+`{dataset}` is `<sensor>_<product>`: sensor `modis | viirs | harmonized`, product:
+
+| Product | What |
+|---|---|
+| `best` | One continuous series: SP where NASA has published it, NRT for the days after (`is_preferred` in gold). The default in the app |
+| `sp` | Standard processing (science quality, published ~2–3 months later) |
+| `nrt` | Near real time (within hours, provisional) |
+
+MODIS and VIIRS read the hexagon gold tables (`fct_hexagon_detections`,
+`fct_hexagon_daily`, `dim_hexagon`, see [data/README.md](../data/README.md));
+a dataset is a filter on them. A dataset with no data yet is listed as
+`available: false` and its endpoints return 404.
 
 Every detection has the same properties whatever the sensor: `sensor`,
 `satellite`, `acq_datetime_utc`, `frp`, `confidence`, `daynight`, `brightness`.

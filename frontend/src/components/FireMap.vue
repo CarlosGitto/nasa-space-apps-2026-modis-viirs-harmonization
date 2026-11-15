@@ -8,7 +8,7 @@ import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
 import { getDetections, getHexagons } from '../api'
 import { gibsUrl } from '../gibs'
 import {
-  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STYLE,
+  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE,
   fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
@@ -112,8 +112,9 @@ function addLayers() {
     paint: {
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 7],
       'circle-color': [
-        'interpolate', ['linear'], ['coalesce', ['get', 'frp'], 0],
-        0, '#fde047', 10, '#f97316', 50, '#dc2626', 200, '#7f1d1d',
+        'case', ['==', ['get', 'is_static_source'], true], STATIC_COLOR,
+        ['interpolate', ['linear'], ['coalesce', ['get', 'frp'], 0],
+          0, '#fde047', 10, '#f97316', 50, '#dc2626', 200, '#7f1d1d'],
       ],
       'circle-stroke-color': '#ffffff',
       'circle-stroke-width': 0.5,

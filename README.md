@@ -10,7 +10,7 @@ FIRMS API ──▶ etl/ (Airflow: dlt + dbt) ──▶ data/lake (DuckLake) ─
 | Folder | What | Docs |
 |---|---|---|
 | `etl/` | Airflow (Astro): FIRMS ingestion with dlt, transformations with dbt | Each DAG's docs in the Airflow UI |
-| `data/` | The lake: bronze / silver / gold, plus the dev dataset | [data/README.md](data/README.md) |
+| `data/` | The lake: bronze / silver / gold around the H3 hexagon, plus the dev dataset | [data/README.md](data/README.md) |
 | `backend/` | API over the gold layer (DuckDB + spatial + H3) | [backend/README.md](backend/README.md) |
 | `frontend/` | Map: hexagons, drawn zones, burn calendar, time slider, MODIS \| VIIRS curtain | [frontend/README.md](frontend/README.md) |
 
