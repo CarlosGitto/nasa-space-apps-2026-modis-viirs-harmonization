@@ -82,6 +82,8 @@ def test_split_box_respects_the_10_degree_limit():
     assert split_box((-80, -50, -60, -38)) == [
         (-80, -50, -70, -40), (-70, -50, -60, -40), (-80, -40, -70, -38), (-70, -40, -60, -38)]
     assert split_box((0, 0, 5, 5)) == [(0, 0, 5, 5)]
+    # A sliver under POWER's 2° minimum is widened around its middle.
+    assert split_box((-80, -40, -79.5, -38.5)) == [(-80.75, -40.25, -78.75, -38.25)]
 
 
 def test_area_parse_and_clip():

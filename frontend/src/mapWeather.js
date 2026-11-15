@@ -15,7 +15,7 @@
 //   loaded and one cached grid per layer and day: panning and the slider don't query
 //   the lake again.
 // - "all": the same icons over the whole loaded area.
-import { mdiArrowUp, mdiThermometer, mdiWater } from '@mdi/js'
+import { mdiArrowUpBold, mdiThermometer, mdiWater } from '@mdi/js'
 import { cellToLatLng, gridDiskDistances } from 'h3-js'
 
 export const WEATHER_LAYERS = {
@@ -42,8 +42,9 @@ export const WEATHER_LAYERS = {
     label: 'Wind',
     title: 'Wind',
     unit: ' m/s',
-    icon: mdiArrowUp,
-    stops: [[0, '#94a3b8'], [3, '#7dd3fc'], [7, '#38bdf8'], [12, '#2563eb'], [18, '#1e3a8a']],
+    icon: mdiArrowUpBold,
+    // Dark from the start (light blues got lost on the light basemap): slate -> blue -> violet.
+    stops: [[0, '#475569'], [3, '#0369a1'], [7, '#1d4ed8'], [12, '#4338ca'], [18, '#6b21a8']],
     legend: [2, 7, 14],
   },
 }
@@ -83,8 +84,8 @@ export const colorRamp = (id, prop) => ['interpolate', ['linear'], ['get', prop]
 export const TEMPERATURE_SIZE = 0.5
 export const RAIN_SIZE = ['interpolate', ['linear'], ['sqrt', ['get', 'rain']], 0, 0.32, Math.sqrt(50), 0.8]
 export const rainSize = (mm) => 0.32 + (Math.sqrt(Math.min(mm, 50)) / Math.sqrt(50)) * 0.48
-export const WIND_SIZE = ['interpolate', ['linear'], ['get', 'wind'], 0, 0.4, 15, 0.85]
-export const windSize = (v) => 0.4 + (Math.min(v, 15) / 15) * 0.45
+export const WIND_SIZE = ['interpolate', ['linear'], ['get', 'wind'], 0, 0.55, 15, 1.1]
+export const windSize = (v) => 0.55 + (Math.min(v, 15) / 15) * 0.55
 
 // An MDI icon (24x24 path) drawn on a canvas, for map.addImage(..., { sdf: true }):
 // MapLibre then colors it per feature (icon-color) and adds a halo.

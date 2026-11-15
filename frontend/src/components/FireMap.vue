@@ -21,7 +21,7 @@ import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
   fmt, hexOpacity, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle, withDensity,
 } from '../mapShared'
-import { cellToLatLng, latLngToCell } from 'h3-js'
+import { cellToLatLng, gridDiskDistances, latLngToCell } from 'h3-js'
 import {
   RAIN_SIZE, TEMPERATURE_SIZE, WEATHER_IDS, WEATHER_LAYERS, WIND_SIZE, colorAt, mergedGrids, selectionDay, selectionGrids, colorRamp, fireCandidates, fireNeighborhood, gridCandidates,
   iconImage, rainSize, responseCache, weatherGrid, weatherPoints, weatherRequest, weatherTooltip, windSize,
@@ -61,6 +61,9 @@ const selectionNote = ref('')
 let selectionToken = 0
 let selectionTimer = null
 const SELECTION_MAX_DAYS = 366
+const SELECTION_RINGS = 3 // neighbors around the selected hexagons that get weather too
+const SELECTION_RINGS_MAX_HEXAGONS = 300 // a bigger selection (a drawn area) covers itself
+let selectionArea = new Map() // h3 -> ring distance to a selected hexagon (0 = selected)
 // The layers drawn: the ones turned on, or all three when only a selection has weather.
 const shownLayers = computed(() =>
   store.weatherLayers.length ? store.weatherLayers : selectionWeather.value ? WEATHER_IDS : [])
@@ -190,10 +193,17 @@ function renderWeather() {
   neighborhood = any && store.weatherScope === 'fires' ? fireNeighborhood(fireCells) : new Map()
   const lakeCandidates = !Object.keys(lake).length ? []
     : store.weatherScope === 'fires' ? fireCandidates(neighborhood) : gridCandidates(lake)
-  // Selected hexagons first (ring 1: preferred and fully opaque), then the lake's places.
-  const selectedCandidates = Object.keys(selected).length
-    ? store.selectedHexes.map((h) => { const [lat, lon] = cellToLatLng(h); return { lon, lat, ring: 1 } })
-    : []
+  // Selected hexagons and their neighbors first (selected: ring 1, preferred and fully
+  // opaque; neighbors fading with the distance), then the lake's places.
+  const rings = store.selectedHexes.length <= SELECTION_RINGS_MAX_HEXAGONS ? SELECTION_RINGS : 0
+  selectionArea = Object.keys(selected).length
+    ? new Map(store.selectedHexes.flatMap((h) => gridDiskDistances(h, rings).flatMap((ring, k) => ring.map((n) => [n, k])))
+      .sort((a, b) => b[1] - a[1]))
+    : new Map()
+  const selectedCandidates = [...selectionArea].map(([h, k]) => {
+    const [lat, lon] = cellToLatLng(h)
+    return { lon, lat, ring: k + 1 }
+  })
   const candidates = [...selectedCandidates, ...lakeCandidates]
   map.getSource('wx-points').setData(any ? weatherPoints(candidates, grids, map.getZoom()) : EMPTY)
   for (const id of ['temperature', 'precipitation', 'wind']) {
@@ -218,7 +228,8 @@ function refreshSelectionWeather() {
     const start = store.start && store.start > earliest.toISOString().slice(0, 10) ? store.start : earliest.toISOString().slice(0, 10)
     selectionNote.value = 'Loading the weather of the selection (NASA POWER)…'
     try {
-      const data = await getSelectionWeather({ h3: store.selectedHexes, start, end })
+      const rings = store.selectedHexes.length <= SELECTION_RINGS_MAX_HEXAGONS ? SELECTION_RINGS : 0
+      const data = await getSelectionWeather({ h3: store.selectedHexes, start, end, rings })
       if (token !== selectionToken) return
       selectionWeather.value = data
       selectionNote.value = ''
@@ -364,7 +375,9 @@ function addLayers() {
   map.addLayer(icon('wind', {
     filter: ['has', 'wind'],
     layout: { 'icon-size': WIND_SIZE, 'icon-rotate': ['get', 'to'], 'icon-rotation-alignment': 'map' },
-    paint: { 'icon-color': colorRamp('wind', 'wind') },
+    // A wider halo and full opacity near the fire / selection: wind must read at a glance.
+    paint: { 'icon-color': colorRamp('wind', 'wind'), 'icon-halo-width': 2.5, 'icon-halo-blur': 0.5,
+             'icon-opacity': ['min', 1, ['*', 1.2, ['get', 'fade']]] },
   }), labels)
 
   // Drawn area: outline of the hexagons it selects (it snaps to the grid).
@@ -523,7 +536,7 @@ function onHover(e) {
   const shown = store.weatherScope === 'all' || (currentRes !== null && neighborhood.has(latLngToCell(lat, lng, currentRes)))
   const lakeWeather = store.weatherLayers.length && shown ? weatherTooltip(weatherGrids, lng, lat) : ''
   // Over a selected hexagon: its own (on-demand) weather.
-  const overSelected = currentRes !== null && store.selectedHexes.includes(latLngToCell(lat, lng, BASE_RES))
+  const overSelected = currentRes !== null && selectionArea.has(latLngToCell(lat, lng, BASE_RES))
   const weather = overSelected && selectionWeather.value
     ? weatherTooltip(selectionGrids(selectionWeather.value, selectionShownDay.value), lng, lat) || lakeWeather
     : lakeWeather

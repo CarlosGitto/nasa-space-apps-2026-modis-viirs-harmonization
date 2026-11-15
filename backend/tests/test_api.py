@@ -609,13 +609,31 @@ def test_selection_rejects_bad_input(client, body):
 
 def test_selection_weather_groups_hexagons_by_power_cell(client, fake_power):
     ba, neighbor = _cell(*BUENOS_AIRES), _cell(-34.52, -58.2)
+    # Days the lake doesn't have (it ends Nov 11): asked to POWER.
     body = client.post("/hexagons/selection/weather",
-                       json={"h3": [ba, neighbor, ba], "start": "2026-11-09", "end": "2026-11-11"}).json()
+                       json={"h3": [ba, neighbor, ba], "start": "2026-11-09", "end": "2026-11-13", "rings": 0}).json()
     assert body["cell"] == [0.5, 0.625] and body["cells"] == [[-58.125, -34.5]]  # both in the same POWER cell
     assert body["hexagons"] == {ba: 0, neighbor: 0}
-    assert [d[0] for d in body["days"]] == ["2026-11-09", "2026-11-10", "2026-11-11"]
+    assert [d[0] for d in body["days"]] == ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13"]
     assert body["days"][1][1] == [[30.0, 12.0, 5.0, 270.0]]  # t2m_max, rain, wind speed, direction
-    assert len(fake_power) == 1  # one point request, which also warms the panel's cache
+    # The lake has Nov 9-11; POWER is asked only from Nov 12 on (one point request).
+    assert body["sources"] == {"lake": 0, "power": 1} and len(fake_power) == 1
+    assert str(fake_power[0][2]) == "2026-11-12" and str(fake_power[0][3]) == "2026-11-13"
+
+
+def test_selection_weather_comes_from_the_lake_when_it_has_it(client, fake_power):
+    body = client.post("/hexagons/selection/weather",
+                       json={"h3": [_cell(*BUENOS_AIRES)], "start": "2026-11-01", "end": "2026-11-11", "rings": 0}).json()
+    assert body["sources"] == {"lake": 1, "power": 0} and fake_power == []  # ingested already: POWER not asked
+    assert body["days"][9][1] == [[30.0, 12.0, 5.0, 270.0]]  # Nov 10, rain 12 mm in the lake
+
+
+def test_selection_weather_includes_the_neighbors(client, fake_power):
+    ba = _cell(*BUENOS_AIRES)
+    alone = client.post("/hexagons/selection/weather", json={"h3": [ba], "start": "2026-11-01", "end": "2026-11-11", "rings": 0}).json()
+    around = client.post("/hexagons/selection/weather", json={"h3": [ba], "start": "2026-11-01", "end": "2026-11-11"}).json()
+    assert len(around["cells"]) > len(alone["cells"])  # 3 rings (~18 km) reach the next POWER cell
+    assert around["sources"]["lake"] == 1 and around["sources"]["power"] == len(around["cells"]) - 1
 
 
 def test_selection_weather_uses_regional_requests_for_many_cells(client, monkeypatch, tmp_path):
@@ -632,20 +650,30 @@ def test_selection_weather_uses_regional_requests_for_many_cells(client, monkeyp
         west, south, east, north = box
         cells = [(round(lat, 4), round(lon, 4)) for lat in [x * 0.5 for x in range(int(south * 2), int(north * 2) + 1)]
                  for lon in [x * 0.625 for x in range(int(west / 0.625) - 1, int(east / 0.625) + 2)] if south <= lat <= north and west <= lon <= east]
-        return {c: {date(2026, 11, 10): {"t2m_max_c": 25.0, "precipitation_mm": 0.0, "wind_speed_mean_ms": 3.0,
+        return {c: {start: {"t2m_max_c": 25.0, "precipitation_mm": 0.0, "wind_speed_mean_ms": 3.0,
                                          "wind_dir_mean_deg": 90.0}} for c in cells}
 
     monkeypatch.setattr(power, "_fetch_regional", regional)
     # A drawn area: 8 POWER cells close together, inside one 10° box: by region (4 requests,
     # one per parameter, faked here as one call) beats 8 point requests.
     hexes = [_cell(-34.6 + 0.5 * i, -58.4 - 0.7 * j) for i in range(4) for j in range(2)]
-    body = client.post("/hexagons/selection/weather", json={"h3": hexes, "start": "2026-11-10", "end": "2026-11-10"}).json()
-    assert len(body["cells"]) == 8 and len(requests) == 1
+    query = {"h3": hexes, "start": "2026-11-13", "end": "2026-11-13", "rings": 0}  # a day the lake doesn't have
+    body = client.post("/hexagons/selection/weather", json=query).json()
+    assert len(body["cells"]) == 8 and len(requests) == 1 and body["sources"] == {"lake": 0, "power": 8}
     assert all(v == [25.0, 0.0, 3.0, 90.0] for v in body["days"][0][1])
-    client.post("/hexagons/selection/weather", json={"h3": hexes, "start": "2026-11-10", "end": "2026-11-10"})
+    client.post("/hexagons/selection/weather", json=query)
     assert len(requests) == 1  # cached
 
 
 def test_selection_weather_rejects_long_ranges(client, fake_power):
     r = client.post("/hexagons/selection/weather", json={"h3": [_cell(*BUENOS_AIRES)], "start": "2024-01-01", "end": "2026-11-10"})
     assert r.status_code == 422
+
+
+def test_power_regional_boxes_are_between_2_and_10_degrees():
+    from app import power
+
+    small = power._boxes([(-41.5, -71.875), (-41.0, -71.25)])  # 1.5° wide: under POWER's 2° minimum
+    assert all(2 <= e - w <= 10 and 2 <= n - s <= 10 for w, s, e, n in small)
+    big = power._boxes([(-55.0, -80.0), (10.0, -35.0)])
+    assert len(big) > 1 and all(e - w <= 10 and n - s <= 10 for w, s, e, n in big)
