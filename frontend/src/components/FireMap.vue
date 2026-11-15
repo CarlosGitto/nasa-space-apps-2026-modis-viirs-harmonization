@@ -3,22 +3,15 @@
 // Always the whole world unless the user draws a zone (Terra Draw).
 // Optional NASA GIBS satellite imagery under the data, for the end day of the selected range.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import * as maplibregl from 'maplibre-gl'
-// MapLibre 6 finds its worker relative to its own module URL, which breaks once
-// Vite bundles it. Import the (self-contained) worker as an asset instead.
-import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import { TerraDraw, TerraDrawPolygonMode, TerraDrawRectangleMode } from 'terra-draw'
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
 import { getDetections, getHexagons } from '../api'
 import { gibsUrl } from '../gibs'
+import {
+  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STYLE,
+  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox,
+} from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
-
-maplibregl.setWorkerUrl(maplibreWorkerUrl)
-
-const STYLE = import.meta.env.VITE_MAP_STYLE ?? 'https://tiles.openfreemap.org/styles/positron'
-const POINTS_ZOOM = 7 // from this zoom on, show individual detections
-const POINTS_LIMIT = 5000
-const EMPTY = { type: 'FeatureCollection', features: [] }
 
 const store = useFiltersStore()
 const container = ref(null)
@@ -34,28 +27,14 @@ let draw = null
 let controller = null
 let debounce = null
 
-// H3 resolution for the current zoom: coarser cells when zoomed out.
-const hexRes = (zoom) => (zoom < 3 ? 2 : zoom < 5 ? 3 : 4)
-const fmt = (n) => (n ?? 0).toLocaleString('en-US', { maximumFractionDigits: 1 })
-
-// Visible area as minLon,minLat,maxLon,maxLat; null when the whole world is visible.
-function viewportBbox() {
-  const b = map.getBounds()
-  const west = Math.max(b.getWest(), -180)
-  const east = Math.min(b.getEast(), 180)
-  const south = Math.max(b.getSouth(), -90)
-  const north = Math.min(b.getNorth(), 90)
-  if ((west <= -180 && east >= 180) || west >= east || south >= north) return null
-  return [west, south, east, north].map((v) => v.toFixed(4)).join(',')
-}
-
 async function refresh() {
-  if (!mapReady || !store.dataset || !store.currentDataset?.available) return
+  // Hidden while the MODIS | VIIRS curtain is shown: don't fetch for nothing.
+  if (!mapReady || store.view !== 'map' || !store.dataset || !store.currentDataset?.available) return
   controller?.abort()
   controller = new AbortController()
   const { signal } = controller
   const zoom = map.getZoom()
-  const params = { ...store.queryParams, bbox: viewportBbox() }
+  const params = { ...store.queryParams, bbox: viewportBbox(map) }
   loading.value = true
   try {
     if (zoom < POINTS_ZOOM) {
@@ -89,7 +68,7 @@ function scheduleRefresh() {
 
 function addLayers() {
   // Draw data below the basemap labels so country/city names stay readable.
-  const labels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id
+  const labels = labelLayerId(map)
 
   // NASA GIBS satellite imagery: below the data, hidden until an image type is chosen.
   map.addSource('gibs', {
@@ -116,11 +95,7 @@ function addLayers() {
     source: 'hex',
     paint: {
       // Log scale: a few cells have thousands of detections, most have a handful.
-      // max(1, …) avoids ln(0) and missing values.
-      'fill-color': [
-        'interpolate', ['linear'], ['ln', ['max', 1, ['coalesce', ['get', 'detections'], 1]]],
-        0, '#fde68a', 2, '#fbbf24', 4, '#f97316', 6, '#dc2626', 8, '#7f1d1d',
-      ],
+      'fill-color': HEX_FILL_COLOR,
       'fill-opacity': 0.65,
     },
   }, labels)
@@ -157,11 +132,9 @@ function registerEvents() {
     map.on('mouseenter', layer, () => { if (!tool.value) map.getCanvas().style.cursor = 'pointer' })
     map.on('mouseleave', layer, () => { if (!tool.value) map.getCanvas().style.cursor = '' })
   }
-  popup('hex-fill', (p) => `<b>${fmt(p.detections)}</b> detections<br>Total FRP: ${fmt(p.frp_sum)} MW`)
-  popup('points', (p) => `
-    <b>${p.satellite ?? p.sensor}</b> · ${p.acq_datetime_utc.replace('T', ' ').slice(0, 16)} UTC<br>
-    FRP: ${fmt(p.frp)} MW<br>
-    Confidence: ${p.confidence ?? '–'} · ${p.daynight === 'D' ? 'Day' : p.daynight === 'N' ? 'Night' : '–'}`)
+  popup('hex-fill', hexPopup)
+  popup('points', pointPopup)
+  map.on('moveend', () => store.setCamera(map.getCenter().toArray(), map.getZoom()))
   map.on('moveend', scheduleRefresh)
 }
 
@@ -214,8 +187,8 @@ onMounted(() => {
   map = new maplibregl.Map({
     container: container.value,
     style: STYLE,
-    center: [0, 20],
-    zoom: 1.5,
+    center: store.camera.center, // kept in the store so the curtain view opens at the same place
+    zoom: store.camera.zoom,
     renderWorldCopies: false,
   })
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
@@ -237,6 +210,16 @@ onBeforeUnmount(() => {
 })
 
 watch(() => [store.dataset, store.queryParams], refresh)
+// Back from the curtain view: the container was hidden, so resize, catch up with
+// where the curtain was left, and load what changed meanwhile.
+watch(() => store.view, (view) => {
+  if (view !== 'map' || !map) return
+  requestAnimationFrame(() => {
+    map.resize()
+    map.jumpTo(store.camera)
+    refresh()
+  })
+})
 // Image type, satellite or day changed: update the imagery.
 // Watch id and date separately: pickLayer() returns a new object every time.
 watch(() => [store.basemap, store.imagery?.layer.id, store.imagery?.date], syncImagery)
