@@ -101,6 +101,11 @@ export const useFiltersStore = defineStore('filters', () => {
 
   function setDataset(id) {
     dataset.value = id
+    // The harmonized dataset is in MODIS units: the Compare view and the hexagon report follow it (they stay switchable).
+    if (datasets.value.find((d) => d.id === id)?.sensor === 'harmonized') {
+      compareHarmonized.value = true
+      hexHarmonized.value = true
+    }
     const info = currentDataset.value
     if (!info?.available) return
     const outside = !start.value || !end.value || end.value < info.start_date || start.value > info.end_date

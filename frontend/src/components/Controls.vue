@@ -24,7 +24,8 @@ const groups = computed(() =>
     .map((sensor) => ({
       sensor,
       label: sensorLabel(sensor),
-      options: store.datasets.filter((d) => d.sensor === sensor && selectable(d)),
+      // The harmonized group lists only datasets that have data (not the empty placeholders for future contributions).
+      options: store.datasets.filter((d) => d.sensor === sensor && selectable(d) && (sensor !== 'harmonized' || d.available)),
     }))
     .filter((g) => g.sensor !== 'harmonized' || g.options.some((d) => d.available)),
 )
@@ -45,7 +46,8 @@ const groups = computed(() =>
       <select :value="store.dataset" @change="store.setDataset($event.target.value)">
         <optgroup v-for="g in groups" :key="g.label" :label="g.label">
           <option v-for="d in g.options" :key="d.id" :value="d.id" :disabled="!d.available">
-            {{ g.label }} {{ $t(`controls.products.${d.product}`) }}{{ d.available ? '' : $t('controls.noDataSuffix') }}
+            <template v-if="d.id === 'harmonized_best'">{{ $t('controls.harmonizedBest') }}</template>
+            <template v-else>{{ g.label }} {{ $t(`controls.products.${d.product}`) }}{{ d.available ? '' : $t('controls.noDataSuffix') }}</template>
           </option>
         </optgroup>
       </select>

@@ -38,6 +38,7 @@
       "sp": "SP · science quality",
       "nrt": "NRT · near real-time"
     },
+    "harmonizedBest": "Harmonized · MODIS + VIIRS (MODIS units)",
     "noDataSuffix": " (no data)",
     "meta": "{n} detections · {start} → {end}",
     "from": "From",

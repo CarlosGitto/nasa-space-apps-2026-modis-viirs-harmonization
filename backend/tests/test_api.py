@@ -162,10 +162,11 @@ def test_datasets_lists_all_three_sensors(client):
     body = {d["id"]: d for d in client.get("/datasets").json()}
     assert set(body) == {
         "modis_best", "modis_sp", "modis_nrt", "viirs_best", "viirs_sp", "viirs_nrt", "harmonized_nrt", "harmonized_sp",
-        "modis_harmonized", "viirs_harmonized",
+        "modis_harmonized", "viirs_harmonized", "harmonized_best",
     }
     # the MODIS-units datasets need fct_hexagon_harmonized_daily, which this test lake does not have
-    assert not body["modis_harmonized"]["available"] and not body["viirs_harmonized"]["available"]
+    for harmonized in ("modis_harmonized", "viirs_harmonized", "harmonized_best"):
+        assert not body[harmonized]["available"]
     assert body["modis_sp"] == {
         "id": "modis_sp", "sensor": "modis", "product": "sp", "available": True,
         "rows": 3, "start_date": "2026-11-10", "end_date": "2026-11-11",
@@ -180,6 +181,55 @@ def test_datasets_lists_all_three_sensors(client):
     assert body["viirs_sp"]["available"] is False and body["viirs_sp"]["rows"] == 0
     assert body["harmonized_nrt"]["available"] is True and body["harmonized_nrt"]["sensor"] == "harmonized"
     assert body["harmonized_sp"]["available"] is False
+
+# The harmonized daily layer (fct_hexagon_harmonized_daily) for the spliced series: MODIS before 2012-02, VIIRS from it.
+# Kept: modis 2011-12-15 (4), modis 2012-01-10 (6), viirs 2012-03-05 (3). Left out by the cut: viirs 2012-01-12 (99, VIIRS
+# before the splice) and modis 2012-03-06 (77, MODIS after it).
+HARMONIZED_DAILY = """
+    select h3_latlng_to_cell(-34.6, -58.4, 6) as h3_r6, d as acq_date, date_trunc('month', d)::date as acq_month,
+           'best' as product, s as sensor, 'D' as daynight, true as is_preferred, v::double as fire_detections,
+           2.0 * v as fire_frp_sum, v::double as fire_frp_max, 0::bigint as static_detections,
+           v::bigint as detections_raw, 1.0 as frp_raw
+    from (values (date '2011-12-15', 'modis', 4), (date '2012-01-10', 'modis', 6), (date '2012-01-12', 'viirs', 99),
+                 (date '2012-03-05', 'viirs', 3), (date '2012-03-06', 'modis', 77)) t(d, s, v)
+"""
+
+
+@pytest.fixture
+def harmonized_client(tmp_path, monkeypatch):
+    written_at = tmp_path / "etl_container_path"
+    _build_lake(written_at)
+    con = _attach(written_at)
+    con.execute(f"CREATE TABLE lake.gold.fct_hexagon_harmonized_daily AS {HARMONIZED_DAILY}")
+    con.close()
+    lake = tmp_path / "host_path" / "lake"
+    shutil.move(written_at, lake)
+    monkeypatch.setenv("LAKE_PATH", str(lake))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_harmonized_best_is_one_selectable_series_across_the_splice(harmonized_client):
+    client = harmonized_client
+    info = {d["id"]: d for d in client.get("/datasets").json()}["harmonized_best"]
+    assert info["available"] and info["sensor"] == "harmonized" and info["product"] == "best"
+    assert (info["rows"], info["start_date"], info["end_date"]) == (13, "2011-12-15", "2012-03-05")
+    # the generic dataset endpoints apply the cut: MODIS only before 2012-02, VIIRS only from it
+    months = client.get("/datasets/harmonized_best/stats/monthly").json()
+    assert [(m["year"], m["month"], m["detections"]) for m in months] == [(2011, 12, 4), (2012, 1, 6), (2012, 3, 3)]
+    assert months == client.get("/stats/harmonized/monthly").json()  # same series as the dedicated endpoint
+    hexes = client.get("/datasets/harmonized_best/stats/hex", params={"res": 6}).json()["features"]
+    assert sum(f["properties"]["detections"] for f in hexes) == 13 and sum(f["properties"]["frp_sum"] for f in hexes) == 26
+
+
+def test_harmonized_best_detections_are_the_raw_ones_of_the_series():
+    ds = db.DATASETS[db.DatasetId.harmonized_best]
+    assert ds.on_hexagon_model and ds.daily == db.HARMONIZED_DAILY
+    # points and lists show the raw detections behind it: MODIS before the splice, S-NPP only after it
+    predicate = ds.detections_predicate()
+    assert "satellite = 'S-NPP'" in predicate and "is_preferred" in predicate and "2012-02-01" in predicate
+    assert "satellite" not in ds.predicate()  # the daily table has no satellite column
+
 
 
 def test_detections_geojson(client):

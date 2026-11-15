@@ -68,6 +68,7 @@ class DatasetId(StrEnum):
     viirs_nrt = "viirs_nrt"
     modis_harmonized = "modis_harmonized"  # MODIS, bow-tie merged, size-corrected FRP (fct_hexagon_harmonized_daily)
     viirs_harmonized = "viirs_harmonized"  # VIIRS S-NPP / k per hexagon, in MODIS units (idem)
+    harmonized_best = "harmonized_best"  # ONE series: MODIS before 2012-02, VIIRS S-NPP / k after, in MODIS units
     harmonized_nrt = "harmonized_nrt"
     harmonized_sp = "harmonized_sp"
 
@@ -106,17 +107,18 @@ class Dataset:
     product: Product
     columns: dict[str, str] | None = None  # harmonized only: optional property -> lake column
     harmonized_daily: bool = False  # MODIS/VIIRS in MODIS units: daily metrics from fct_hexagon_harmonized_daily
+    spliced: bool = False  # the continuous series across the MODIS -> VIIRS change (reads fct_hexagon_harmonized_daily)
 
     @property
     def daily(self) -> str:
         """Daily hexagon table of the dataset. The harmonized one has the same columns (and sensor/is_preferred), so
         predicate() works on both; detections of a harmonized dataset (points, one hexagon's list) stay the raw ones."""
-        return HARMONIZED_DAILY if self.harmonized_daily else DAILY
+        return HARMONIZED_DAILY if self.harmonized_daily or self.spliced else DAILY
 
     @property
     def on_hexagon_model(self) -> bool:
-        """MODIS/VIIRS read the hexagon gold tables; harmonized has its own relation."""
-        return self.sensor is not Sensor.harmonized
+        """MODIS/VIIRS and the spliced series read the hexagon gold tables; the other harmonized have their own relation."""
+        return self.sensor is not Sensor.harmonized or self.spliced
 
     @property
     def relation(self) -> str:
@@ -125,8 +127,19 @@ class Dataset:
     def predicate(self, alias: str = "") -> str:
         """Filter on the hexagon tables (values come from enums, safe to inline)."""
         p = f"{alias}." if alias else ""
+        if self.spliced:  # MODIS before the splice, VIIRS from it (sensor and acq_date exist in every table it is used on)
+            return (f"(({p}sensor = 'modis' and {p}acq_date < date '{SPLICE_DATE}') "
+                    f"or ({p}sensor = 'viirs' and {p}acq_date >= date '{SPLICE_DATE}'))")
         product = f"{p}is_preferred" if self.product is Product.best else f"{p}product = '{self.product}'"
         return f"{p}sensor = '{self.sensor}' and {product}"
+
+    def detections_predicate(self, alias: str = "") -> str:
+        """Filter on fct_hexagon_detections (the raw detections behind the dataset). The spliced series keeps preferred
+        rows and, on the VIIRS side, S-NPP only: the satellite its factor k was calibrated on."""
+        if not self.spliced:
+            return self.predicate(alias)
+        p = f"{alias}." if alias else ""
+        return f"{self.predicate(alias)} and {p}is_preferred and ({p}sensor = 'modis' or {p}satellite = 'S-NPP')"
 
 
 # Provisional: adjust once the harmonization team defines its output columns.
@@ -143,6 +156,7 @@ DATASETS: dict[DatasetId, Dataset] = {
         Dataset(DatasetId.viirs_nrt, Sensor.viirs, Product.nrt),
         Dataset(DatasetId.modis_harmonized, Sensor.modis, Product.best, harmonized_daily=True),
         Dataset(DatasetId.viirs_harmonized, Sensor.viirs, Product.best, harmonized_daily=True),
+        Dataset(DatasetId.harmonized_best, Sensor.harmonized, Product.best, spliced=True),
         Dataset(DatasetId.harmonized_nrt, Sensor.harmonized, Product.nrt, _HARMONIZED),
         Dataset(DatasetId.harmonized_sp, Sensor.harmonized, Product.sp, _HARMONIZED),
     )
@@ -261,7 +275,7 @@ def exists(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> bool:
         return str(ds.id) in tables
     if not all(t in tables for t in HEXAGON_TABLES):
         return False
-    if ds.harmonized_daily and "fct_hexagon_harmonized_daily" not in tables:
+    if (ds.harmonized_daily or ds.spliced) and "fct_hexagon_harmonized_daily" not in tables:
         return False
     return cur.execute(f"select exists (select 1 from {ds.daily} where {ds.predicate()})").fetchone()[0]
 
@@ -295,6 +309,12 @@ def hexagon_summaries(cur: duckdb.DuckDBPyConnection) -> dict[DatasetId, tuple[i
             f"select sensor, sum(fire_detections), min(acq_date), max(acq_date) from {HARMONIZED_DAILY} group by sensor"
         ).fetchall():
             add(f"{sensor}_harmonized", n, first, last)
+        n, first, last = cur.execute(
+            f"select sum(fire_detections), min(acq_date), max(acq_date) from {HARMONIZED_DAILY} "
+            f"where {DATASETS[DatasetId.harmonized_best].predicate()}"
+        ).fetchone()
+        if first is not None:
+            add("harmonized_best", n, first, last)
     return out
 
 
@@ -318,7 +338,7 @@ def points_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
         return (
             "(select latitude, longitude, acq_date, acq_datetime_utc, frp, daynight, satellite, "
             "confidence_raw as confidence, brightness, h3_r6, product, is_static_source "
-            f"from {DETECTIONS} where {ds.predicate()})"
+            f"from {DETECTIONS} where {ds.detections_predicate()})"
         )
     return _harmonized_points(cur, ds)
 
@@ -651,7 +671,7 @@ def hexagon_detections(
     cur: duckdb.DuckDBPyConnection, key: int, ds: Dataset, start: date | None, end: date | None, limit: int
 ) -> list[dict]:
     """Detections of one hexagon for a dataset and date range, most recent first (limit + 1 rows)."""
-    clauses, params = ["h3_r6 = ?", ds.predicate()], [key]
+    clauses, params = ["h3_r6 = ?", ds.detections_predicate()], [key]
     if start:
         clauses.append("acq_date >= ?")
         params.append(start)
@@ -744,7 +764,7 @@ def selection_detections(
 ) -> list[dict]:
     """Detections of many hexagons for a dataset and date range, most recent first (limit + 1 rows)."""
     dates, params = _date_clauses(start, end)
-    where = " and ".join([f"h3_r6 in ({_key_list(keys)})", ds.predicate(), *dates])
+    where = " and ".join([f"h3_r6 in ({_key_list(keys)})", ds.detections_predicate(), *dates])
     rel = cur.execute(
         f"select h3_h3_to_string(h3_r6) as h3, {', '.join(DETECTION_COLUMNS)} from {DETECTIONS} where {where} "
         "order by acq_datetime_utc desc limit ?",

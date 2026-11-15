@@ -95,6 +95,13 @@ Every detection has the same properties whatever the sensor: `sensor`,
 `satellite`, `acq_datetime_utc`, `frp`, `confidence`, `daynight`, `brightness`.
 `confidence` is text because the scales differ (MODIS 0–100, VIIRS `l/n/h`).
 
+**`harmonized_best`** is the harmonized series as one selectable dataset: MODIS before 2012-02, VIIRS S-NPP divided by the
+k of each hexagon from then on, in MODIS units (`fct_hexagon_harmonized_daily`; counts are fractional). It goes through the
+generic endpoints (`/datasets/harmonized_best/stats/hex`, `/daily`, `/monthly`, detections), so the map, the calendar and the
+panels use it like any other dataset. Its detections (zoomed-in points, a hexagon's list) are the raw ones behind the series:
+MODIS before the splice, S-NPP only after it. `modis_harmonized` / `viirs_harmonized` are the two sides of the Compare view in
+MODIS units; the UI does not list them.
+
 **Contract for the harmonized data**: a table or view `gold.harmonized_nrt` /
 `gold.harmonized_sp` in the same DuckLake catalog, with:
 

@@ -38,6 +38,7 @@
       "sp": "SP · calidad científica",
       "nrt": "NRT · casi tiempo real"
     },
+    "harmonizedBest": "Armonizado · MODIS + VIIRS (unidades MODIS)",
     "noDataSuffix": " (sin datos)",
     "meta": "{n} detecciones · {start} → {end}",
     "from": "Desde",
