@@ -64,6 +64,11 @@
   latest version per detection, invalid rows kept and flagged in dq_issue.
   sensor: 'modis' | 'viirs'. Extra columns (e.g. SP `type`, lineage) pass through.
 
+  h3_r6: the H3 resolution-6 cell (~36 km²) the detection's center falls in. It is
+  the project's fixed, sensor-agnostic spatial unit: the same id is always the same
+  place, and any time window is aggregated per request (group by h3_r6). Coarser
+  levels come from h3_cell_to_parent. Null when the coordinates are invalid.
+
   Incremental (see dbt_project.yml): only the touched acquisition months are
   recomputed and replaced (delete+insert on acq_month).
 #}
@@ -117,6 +122,8 @@ normalized as (
             upper(nullif(trim(daynight), '')) as daynight
         ),
         date_trunc('month', acq_date)::date as acq_month,
+        case when latitude between -90 and 90 and longitude between -180 and 180
+             then h3_latlng_to_cell(latitude, longitude, 6) end as h3_r6,
         try_strptime(acq_date::varchar || ' ' || lpad(trim(acq_time), 4, '0'), '%Y-%m-%d %H%M') as acq_datetime_utc
     from source
 ),

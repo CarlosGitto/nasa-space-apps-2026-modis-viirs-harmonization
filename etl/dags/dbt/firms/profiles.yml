@@ -7,7 +7,10 @@ firms:
       # (see include/firms/config.py). Same env var and defaults as Airflow.
       path: ":memory:"
       threads: 1
-      extensions: [ducklake, sqlite]
+      extensions:
+        - ducklake
+        - sqlite
+        - {name: h3, repo: community}  # H3 grid: silver's h3_r6
       attach:
         - path: "ducklake:sqlite:{{ env_var('FIRMS_LAKE_PATH', '/usr/local/airflow/data/lake') }}/catalog.sqlite"
           alias: lake
