@@ -13,9 +13,7 @@
 
 with hourly as (
     select * from ({{ source_sql }})
-    {% if is_incremental() and execute %}
-    where {{ incremental_months_scope(source_sql, target_load_col='last_load_id', date_col='obs_date') }}
-    {% endif %}
+    where {{ pending_months_scope(source_sql, 'obs_date', var('weather_months_per_run', 2), target_load_col='last_load_id') }}
 )
 
 select

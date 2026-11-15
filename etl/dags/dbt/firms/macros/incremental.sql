@@ -49,3 +49,57 @@
     {% if not loop.last %}union all by name{% endif %}
     {% endfor %}
 {% endmacro %}
+
+
+{#
+  Bounded incremental scope for the big weather models: the months whose newest source
+  load is newer than the newest one the model already has FOR THAT MONTH, oldest first,
+  at most `max_months` per run. Returns a SQL predicate on the source rows.
+
+  Unlike incremental_months_scope (one global watermark), months left for later stay
+  pending: their source load is still newer than what the model has for them, whatever
+  else ran in between. So a backlog (a long backfill landing before dbt runs, or dbt
+  failing for a while) is worked through in steps that fit in memory, instead of one
+  query over every month at once (which ran DuckDB out of its 4 GB).
+
+  The first build (no table yet) and a --full-refresh also take only the oldest
+  `max_months`; later runs take the rest.
+
+    source_sql        the model's source query (rows to filter)
+    date_col          date column of the source rows
+    max_months        months per run
+    source_load_col   load id column in the source rows        (default _dlt_load_id)
+    target_load_col   load id column stored in {{ this }}      (default _dlt_load_id)
+    month_col         month column stored in {{ this }}        (default obs_month)
+#}
+{% macro pending_months_scope(source_sql, date_col, max_months, source_load_col='_dlt_load_id', target_load_col='_dlt_load_id', month_col='obs_month') %}
+    {% if not execute %}
+        {{ return("true") }}
+    {% endif %}
+    {% set target_months %}
+        {% if is_incremental() %}
+        select {{ month_col }} as m, max({{ target_load_col }}) as l from {{ this }} group by 1
+        {% else %}
+        select null::date as m, null::varchar as l where false
+        {% endif %}
+    {% endset %}
+    {% set pending = run_query(
+        "with s as (select date_trunc('month', " ~ date_col ~ ")::date as m, max(" ~ source_load_col ~ ") as l "
+        ~ "from (" ~ source_sql ~ ") where " ~ date_col ~ " is not null group by 1), "
+        ~ "t as (" ~ target_months ~ ") "
+        ~ "select strftime(s.m, '%Y-%m-%d') from s left join t using (m) where t.l is null or s.l > t.l order by 1"
+    ).columns[0].values() %}
+    {% set months = pending[:max_months] %}
+    {% do log(this ~ ": " ~ (pending | length) ~ " pending months, this run: " ~ (months | join(", ") or "none"), info=true) %}
+    {% if months | length == 0 %}
+        {{ return("false") }}
+    {% endif %}
+    {% set month_list = [] %}
+    {% for m in months %}
+        {% do month_list.append("date '" ~ m ~ "'") %}
+    {% endfor %}
+    {{ return(
+        "(" ~ date_col ~ " >= date '" ~ months[0] ~ "' and " ~ date_col ~ " < date '" ~ months[-1] ~ "' + interval 1 month"
+        ~ " and date_trunc('month', " ~ date_col ~ ") in (" ~ month_list | join(", ") ~ "))"
+    ) }}
+{% endmacro %}

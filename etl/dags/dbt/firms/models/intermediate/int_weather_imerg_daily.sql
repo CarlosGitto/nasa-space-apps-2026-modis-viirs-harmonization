@@ -1,7 +1,9 @@
 -- GPM IMERG daily precipitation per grid cell, one version per cell and day: Final
 -- (research grade) when NASA has published it, else Late (near real time); within a
 -- run, the latest load. imerg_run says which one. Invalid rows stay, flagged in dq_issue.
--- Incremental: only the months touched by new loads are recomputed, so a month whose
+-- Incremental: only the months with new loads are recomputed, at most
+-- var('weather_months_per_run') per run (pending_months_scope: a backlog is worked
+-- through in steps that fit in memory, the rest stays pending), so a month whose
 -- Final arrives later switches from Late to Final on the next run.
 --
 -- ~330 k cells per day over South America: deduplicated with a grouped arg_max, which
@@ -15,9 +17,7 @@
 with source as (
     select cell_lat, cell_lon, obs_date, obs_month, imerg_run, precipitation_mm, dq_issue, _dlt_load_id
     from ({{ source_sql }})
-    {% if is_incremental() and execute %}
-    where {{ incremental_months_scope(source_sql, date_col='obs_date') }}
-    {% endif %}
+    where {{ pending_months_scope(source_sql, 'obs_date', var('weather_months_per_run', 2)) }}
 ),
 
 latest as (

@@ -1,7 +1,9 @@
 -- MERRA-2 hourly weather per grid cell, latest version of each cell and hour. Invalid
 -- rows stay, flagged in dq_issue. Kept hourly in silver so a later model can match the
 -- weather at the exact hour of a satellite overpass.
--- Incremental: only the months touched by new loads are recomputed.
+-- Incremental: only the months with new loads are recomputed, at most
+-- var('weather_months_per_run') per run (pending_months_scope: a backlog is worked
+-- through in steps that fit in memory, the rest stays pending).
 --
 -- ~260 k rows per day over South America: deduplicated with a grouped arg_max, which
 -- DuckDB can spill to disk, instead of a window over every row. The per-file lineage
@@ -18,9 +20,7 @@
 with source as (
     select cell_lat, cell_lon, time_utc, obs_date, obs_month, {{ value_columns | join(', ') }}
     from ({{ source_sql }})
-    {% if is_incremental() and execute %}
-    where {{ incremental_months_scope(source_sql, date_col='obs_date') }}
-    {% endif %}
+    where {{ pending_months_scope(source_sql, 'obs_date', var('weather_months_per_run', 1)) }}
 ),
 
 latest as (
