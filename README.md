@@ -1,15 +1,18 @@
 # MODIS · VIIRS fire detections
 
 NASA Space Apps 2026. NASA FIRMS active-fire detections from **MODIS** and
-**VIIRS**, ingested into a local lake and shown on a map.
+**VIIRS**, with the weather around them (NASA Earthdata: MERRA-2 and GPM IMERG),
+ingested into a local lake and shown on a map.
 
 ```
-FIRMS API ──▶ etl/ (Airflow: dlt + dbt) ──▶ data/lake (DuckLake) ──▶ backend/ (FastAPI) ──▶ frontend/ (Vue map)
+FIRMS API ───────┐
+                 ├──▶ etl/ (Airflow: dlt + dbt) ──▶ data/lake (DuckLake) ──▶ backend/ (FastAPI) ──▶ frontend/ (Vue map)
+NASA Earthdata ──┘
 ```
 
 | Folder | What | Docs |
 |---|---|---|
-| `etl/` | Airflow (Astro): FIRMS ingestion with dlt, transformations with dbt | Each DAG's docs in the Airflow UI |
+| `etl/` | Airflow (Astro): FIRMS and weather ingestion with dlt, transformations with dbt | Each DAG's docs in the Airflow UI |
 | `data/` | The lake: bronze / silver / gold around the H3 hexagon, plus the dev dataset | [data/README.md](data/README.md) |
 | `backend/` | API over the gold layer (DuckDB + spatial + H3) | [backend/README.md](backend/README.md) |
 | `frontend/` | Map: hexagons, drawn zones, burn calendar, time slider, MODIS \| VIIRS curtain | [frontend/README.md](frontend/README.md) |
@@ -30,6 +33,7 @@ Linux steps inside it**: the Makefile relies on `make`, `bash` and `setfacl`.
 | [Node.js](https://nodejs.org/) + npm | 22 LTS (≥ 20.19) | Frontend (Vue + Vite) |
 | acl (`setfacl`) | any | **Linux only**: lets your user read what Airflow writes in `data/` |
 | FIRMS MAP_KEY | — | Free key to download from NASA FIRMS |
+| NASA Earthdata Login | — | Free account to download the weather (MERRA-2, GPM IMERG) |
 
 You don't need to install Python yourself: uv downloads the version pinned in
 `.python-version` (3.14) the first time you run `make etl-setup` or `make backend-setup`.
@@ -96,6 +100,21 @@ Request it (free, it arrives by email) at
 https://firms.modaps.eosdis.nasa.gov/api/map_key/. You'll paste it into `etl/.env`
 in the next section. Don't commit it.
 
+### 7. NASA Earthdata Login
+
+Create a free account at https://urs.earthdata.nasa.gov/users/new, then approve
+the two applications the weather DAG goes through (a script can't click "Approve":
+until you do it once in a browser, every download answers **403**):
+
+1. In your profile, **Applications → Authorized Apps → Approve More Applications**:
+   approve **NASA GESDISC DATA ARCHIVE** (MERRA-2 and IMERG are GES DISC data).
+2. Open this file once in the browser, logged in to Earthdata, and approve what it
+   asks for (OPeNDAP, which cuts the files to the area): it should end up showing
+   an XML document.
+   https://opendap.earthdata.nasa.gov/collections/C1276812863-GES_DISC/granules/M2T1NXSLV.5.12.4%3AMERRA2_400.tavg1_2d_slv_Nx.20250101.nc4.dmr
+
+Your username and password go into `etl/.env` in the next section.
+
 ### Optional: DuckDB CLI
 
 Only needed to query the lake by hand (see [data/README.md](data/README.md)). It
@@ -122,7 +141,7 @@ If every command prints a version, continue with [First time](#first-time).
 From the repo root:
 
 ```bash
-# 1. FIRMS key and area (edit etl/.env and replace YOUR_MAP_KEY)
+# 1. Keys and area: edit etl/.env and replace YOUR_MAP_KEY and the YOUR_EARTHDATA_* values
 cp etl/.env.example etl/.env
 
 # 2. Install everything and prepare data/
@@ -135,7 +154,13 @@ make etl-start
 
 # 4. Load the dev dataset: South America, 2025 to today (~2 h, runs in Airflow)
 make etl-seed-dev
+
+# 5. Load its weather: same area and dates (runs in Airflow, queued after the fire loads)
+make etl-seed-weather-dev
 ```
+
+Fire and weather cover the same area and dates. If you change either, change
+both: see [data/README.md](data/README.md#changing-the-region-or-the-dates).
 
 Follow the load at **http://etl.localhost:6563** (Airflow UI; `make etl-start` prints the URL).
 The map works while it loads; it just shows what has landed so far.
@@ -153,7 +178,8 @@ make frontend-dev     # 3. App                              → http://localhost
 Open **http://localhost:5173**. Stop with `Ctrl+C` (backend, frontend) and `make etl-stop` (Airflow).
 
 Once the dev dataset is loaded, Airflow keeps it current on its own: NRT every
-day, SP every week (each new month NASA publishes).
+day, SP every week (each new month NASA publishes), weather every day (whatever
+NASA has published since the last run).
 
 `make` alone lists every command.
 
@@ -165,5 +191,9 @@ day, SP every week (each new month NASA publishes).
 | `uv sync` fails with `Required uv version >=0.9` | `uv self update` |
 | Airflow tasks fail with `Permission denied` on `data/` | Run `make etl-setup` again (it sets the folder permissions) |
 | `conn_id firms_default isn't defined` | `etl/.env` is missing the key line: copy it from `etl/.env.example`, then `make etl-restart` |
+| `conn_id earthdata_default isn't defined` | Same for the Earthdata line (`AIRFLOW_CONN_EARTHDATA_DEFAULT`), then `make etl-restart` |
+| Weather tasks fail with `Earthdata refused the request (401 …)` | Wrong username/password in `etl/.env`, then `make etl-restart` |
+| Weather tasks fail with `Earthdata refused the request (403 …)` | An application not approved yet in your Earthdata account: do both parts of [step 7](#7-nasa-earthdata-login), then clear the failed task |
+| The hexagon panel shows weather but no temperature or wind for the last weeks | Expected: MERRA-2 is published weeks late; precipitation (IMERG Late) is there |
 | The `duckdb` CLI can't open the lake | Use DuckDB 1.5.6 (same as the project); see [data/README.md](data/README.md) for the `ATTACH` |
 | macOS | The lake catalog uses SQLite WAL, which isn't shared across Docker Desktop's VM: run the backend in a container too |

@@ -25,6 +25,11 @@ each detection falls in (`h3_r6`), the project's fixed, sensor-agnostic spatial 
 | **gold** | `fct_hexagon_daily` | Metrics: hexagon × day × product × sensor × satellite × day/night |
 | **gold** | `fct_hexagon_monthly` | Continuous series (`is_preferred`) per hexagon × month × sensor × satellite |
 | **gold** | `fct_hexagon_profile` | The hexagon's "ficha": one row per hexagon × sensor with its whole history (last detection, last 7/30 days, totals, FRP max/mean/p90, peak day and month, 12-month climatology, static share) |
+| bronze `weather_raw` | `merra2_slv_hourly`, `imerg_final_daily`, `imerg_late_daily` | NASA Earthdata weather grids from dlt, values as in the file, append-only |
+| silver | `stg_weather__<table>` (views) | Units (°C, m/s, mm), relative humidity, VPD, wind speed and direction, `dq_issue` |
+| silver | `int_weather_merra2_hourly`, `int_weather_imerg_daily` | Latest version per grid cell and time step; IMERG Final preferred over Late |
+| **gold** | `fct_weather_daily` | MERRA-2 cell × UTC day: temperature, dew point, relative humidity, VPD, wind (max, mean, direction) |
+| **gold** | `fct_precipitation_daily` | IMERG cell × UTC day: precipitation (mm), `imerg_run` final or late |
 
 How to read gold:
 
@@ -84,6 +89,49 @@ NRT (near real time):                   day after SP ─────────
 
 Instead of downloading, you can copy someone's `data/lake/` folder (stop Airflow
 first so nothing is writing): the catalog and its files travel together.
+
+## Weather (NASA Earthdata)
+
+Weather comes from two NASA products, loaded by the `weather_ingest` DAG and
+transformed by `weather_dbt`:
+
+| Product | Variables | Grid | Published |
+|---|---|---|---|
+| MERRA-2 `M2T1NXSLV` (hourly reanalysis) | 2 m temperature and dew point, 10 m wind | 0.5° × 0.625° (~55 km) | ~3–6 weeks late |
+| GPM IMERG daily, Final / Late | precipitation | 0.1° (~10 km) | Late ~14 h; Final months later |
+
+How to read it:
+
+- **Keyed by grid cell, not by hexagon.** One MERRA-2 cell covers ~90 hexagons;
+  an IMERG cell, ~3. To get a hexagon's weather, take the cell whose center
+  (`cell_lat`, `cell_lon`) is nearest to the hexagon's center (the backend's
+  `/hexagons/{h3}/weather` does exactly that).
+- **UTC days** (`obs_date`), like FIRMS `acq_date`, so they join on the same date.
+- **Relative humidity and VPD** are derived from temperature and dew point
+  (Magnus formula); wind direction is where the wind comes from (0° = north).
+- **The most recent weeks have no MERRA-2 yet**: accepted for now. Precipitation
+  is there (IMERG Late) and switches to Final when NASA publishes it.
+- **Accumulations** (last 7 / 30 days, days since rain) are not stored: the
+  backend computes them for the requested cell and dates.
+
+Loading the dev weather: `make etl-seed-weather-dev` (Airflow running, after
+adding the `earthdata_default` connection to `etl/.env`, see `etl/.env.example`).
+
+## Changing the region or the dates
+
+Fire and weather cover **the same area and dates on purpose**: weather is only
+useful where and when there are detections to explain. If you change one,
+change the other:
+
+| What | Where |
+|---|---|
+| Area of the scheduled runs | `FIRMS_AREA` in `etl/.env` (weather follows it; `WEATHER_AREA` only to override) |
+| Area of the dev seeds | `DEV_AREA` in the Makefile (used by `etl-seed-dev` and `etl-seed-weather-dev`) |
+| Dates of the dev seeds | `DEV_SP_RANGES` / `DEV_NRT_START` and `DEV_WEATHER_RANGES` in the Makefile |
+| First day for an empty lake | `SP_DEFAULT_START` (`etl/dags/firms_ingest_sp.py`) and `WEATHER_DEFAULT_START` (`etl/include/weather/config.py`) |
+
+Data already in the lake for the old area stays there: changing the area only
+affects new loads.
 
 ## Setup (once per machine)
 
