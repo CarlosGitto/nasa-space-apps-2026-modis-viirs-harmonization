@@ -8,8 +8,13 @@
 // Always the whole world unless the user draws an area: 4 clicks, then every res-6
 // hexagon whose center is inside it is selected (empty ones too) and the map is filtered.
 // Optional NASA GIBS satellite imagery under the data, for the end day of the selected range.
+//
+// Keyboard: with the map focused, arrows move it and +/− zoom (MapLibre); Enter does what a
+// click at the center (the crosshair) does, Shift+Enter adds or removes that hexagon.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { getDetections, getHexagons } from '../api'
+import { errorMessage } from '../format'
 import { gibsUrl } from '../gibs'
 import {
   MAX_SELECTION, areaPolygon, cellPolygon, cellsInArea, cellsOutline, covers, gridArea, gridCells,
@@ -17,20 +22,23 @@ import {
 import { getHexagonEdgeLengthAvg } from 'h3-js'
 import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
-  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle,
+  fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
+import { usePrefsStore } from '../stores/prefs'
 
 const store = useFiltersStore()
+const prefs = usePrefsStore()
+const { t } = useI18n()
 const container = ref(null)
 const AREA_POINTS = 4
 const tool = ref(null) // 'area' while drawing an area, else null
 const draft = ref([]) // [lng, lat] of the points clicked so far
-const areaNote = ref('') // e.g. area too big to select its hexagons
+const areaNote = ref(null) // { n } hexagons selected, or { tooBig: true }
 const loading = ref(false)
-const error = ref(null)
-const info = ref('')
-const imageryNote = ref('') // warning when the chosen imagery has no picture for that date
+const error = ref(null) // the API error (with .status), shown in the user's language
+const info = ref(null) // what's on screen: { total, hexagons, res, truncated }
+const noImagery = ref(false) // the chosen imagery has no picture for that date
 
 let map = null
 let mapReady = false // set on 'load'; isStyleLoaded() flips to false while sources update
@@ -67,16 +75,18 @@ async function refresh() {
     hexById = new Map(fc.features.map((f) => [f.properties.h3, f]))
     map.getSource('hex').setData(fc)
     map.getSource('points').setData(points ?? EMPTY)
-    const total = fc.features.reduce((s, f) => s + f.properties.detections, 0)
-    const grid = res === BASE_RES ? 'base grid, H3 res 6' : `H3 res ${res}`
-    info.value = `${fmt(total)} detections in ${fmt(fc.features.length)} hexagons (${grid})`
-    if (points?.truncated) info.value += ` · showing the ${fmt(POINTS_LIMIT)} most recent points`
+    info.value = {
+      total: fc.features.reduce((s, f) => s + f.properties.detections, 0),
+      hexagons: fc.features.length,
+      res,
+      truncated: Boolean(points?.truncated),
+    }
     error.value = null
     await whenIdle(map) // drawn (data and imagery) before the time slider moves on
     if (!signal.aborted) store.setBusy('map', false)
   } catch (e) {
     if (e.name === 'AbortError') return // a newer refresh owns the busy flag
-    error.value = e.message
+    error.value = e
     store.setBusy('map', false)
   } finally {
     if (!signal.aborted) loading.value = false
@@ -233,7 +243,7 @@ function syncZone() {
 function startArea() {
   tool.value = 'area'
   draft.value = []
-  areaNote.value = ''
+  areaNote.value = null
   map.doubleClickZoom.disable() // quick clicks are points, not zoom
   map.getCanvas().style.cursor = 'crosshair'
   hideTooltip()
@@ -271,9 +281,7 @@ function addAreaPoint(lngLat) {
   if (draft.value.length < AREA_POINTS) return drawDraft(null)
   const polygon = areaPolygon(draft.value)
   const cells = cellsInArea(polygon)
-  areaNote.value = cells
-    ? `${fmt(cells.length)} hexagons selected`
-    : `Area too big to select its hexagons (max ${fmt(MAX_SELECTION)}): used as a filter only`
+  areaNote.value = cells ? { n: cells.length } : { tooBig: true }
   stopArea()
   store.setArea(polygon, cells)
 }
@@ -285,7 +293,7 @@ function onKey(e) {
 }
 
 function clearZone() {
-  areaNote.value = ''
+  areaNote.value = null
   store.clearZone()
 }
 
@@ -306,7 +314,7 @@ function onClick(e) {
     const camera = map.cameraForBounds(polygonBounds(feature.geometry), { padding: 40 })
     if (!camera) return
     camera.zoom = Math.max(camera.zoom, NEXT_LEVEL_ZOOM[currentRes] ?? camera.zoom)
-    map.easeTo({ ...camera, duration: 800 })
+    map.easeTo({ ...camera, duration: prefs.reduceMotion ? 0 : 800 })
     return
   }
   const additive = e.originalEvent.shiftKey || e.originalEvent.ctrlKey || e.originalEvent.metaKey
@@ -327,7 +335,7 @@ function onHover(e) {
   map.getCanvas().style.cursor = 'pointer'
   const html = hit.layer.id === 'points'
     ? pointPopup(hit.properties)
-    : hexPopup(hit.properties, currentRes < BASE_RES ? 'Click to zoom in' : 'Click to open · Shift+click to add')
+    : hexPopup(hit.properties, (currentRes < BASE_RES ? t('map.popup.zoomHint') : t('map.popup.openHint')))
   tooltip.setLngLat(e.lngLat).setHTML(html).addTo(map)
 }
 
@@ -353,7 +361,27 @@ function syncImagery() {
   const img = store.imagery // { layer, date } or null
   map.setLayoutProperty('gibs', 'visibility', img ? 'visible' : 'none')
   if (img) map.getSource('gibs').setTiles([gibsUrl(img.layer.id, img.date)])
-  imageryNote.value = store.basemap !== 'vector' && !img ? 'No satellite imagery for that date' : ''
+  noImagery.value = store.basemap !== 'vector' && !img
+}
+
+// High contrast (accessibility menu): stronger hexagon borders and fill.
+function applyContrast() {
+  if (!mapReady) return
+  const on = prefs.contrast
+  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : 0.4)
+  map.setPaintProperty('hex-line', 'line-width', on ? 0.8 : 0.3)
+  map.setPaintProperty('hex-line-dashed', 'line-width', on ? 2.5 : 1.5)
+  map.setPaintProperty('hex-fill', 'fill-opacity',
+    ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, on ? 0.85 : 0.65, DETAIL_ZOOM + 1, on ? 0.45 : 0.3])
+}
+
+// Enter on the focused map = a click at its center (the crosshair).
+function onMapKey(e) {
+  if (e.key !== 'Enter') return
+  e.preventDefault()
+  const canvas = map.getCanvas()
+  const point = new maplibregl.Point(canvas.clientWidth / 2, canvas.clientHeight / 2)
+  onClick({ point, lngLat: map.unproject(point), originalEvent: e })
 }
 
 onMounted(() => {
@@ -364,12 +392,16 @@ onMounted(() => {
     zoom: store.camera.zoom,
     renderWorldCopies: false,
     boxZoom: false, // Shift + click selects hexagons; box zoom would swallow it
+    locale: { ...mapLocale(), 'Map.Title': t('map.label') }, // the canvas' label for screen readers
   })
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
   map.on('load', () => {
     addLayers()
     registerEvents()
     mapReady = true
+    localizeBasemap(map, prefs.locale)
+    applyContrast()
+    map.getCanvas().addEventListener('keydown', onMapKey)
     syncImagery()
     syncSelection()
     syncZone()
@@ -409,29 +441,42 @@ watch(() => store.view, (view) => {
 watch(() => [store.basemap, store.imagery?.layer.id, store.imagery?.date], syncImagery)
 watch(() => store.selectedHexes, syncSelection)
 watch(() => [store.zone, store.zoneCells], syncZone)
-watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
+watch(() => store.zone, (zone) => { if (!zone) areaNote.value = null })
+watch(() => prefs.contrast, applyContrast)
+watch(() => prefs.locale, (locale) => {
+  if (!mapReady) return
+  localizeBasemap(map, locale)
+  map.getCanvas().setAttribute('aria-label', t('map.label'))
+})
 </script>
 
 <template>
   <div class="map-wrap">
     <div ref="container" class="map"></div>
+    <!-- Where Enter acts when the map has the keyboard focus. -->
+    <div class="crosshair" aria-hidden="true"></div>
 
     <div class="toolbar">
-      <button :class="{ active: tool === 'area' }" @click="tool === 'area' ? stopArea() : startArea()">
-        ▱ Area (4 points)
+      <button :aria-pressed="tool === 'area'" :class="{ active: tool === 'area' }" @click="tool === 'area' ? stopArea() : startArea()">
+        <span aria-hidden="true">▱</span> {{ $t('map.area') }}
       </button>
-      <button v-if="store.zone" @click="clearZone">✕ Clear area</button>
-      <span v-if="tool" class="hint">
-        Click {{ AREA_POINTS - draft.length }} more point{{ AREA_POINTS - draft.length === 1 ? '' : 's' }} · Esc cancels
+      <button v-if="store.zone" @click="clearZone"><span aria-hidden="true">✕</span> {{ $t('map.clearArea') }}</button>
+      <span v-if="tool" class="hint" role="status">{{ $t('map.areaHint', AREA_POINTS - draft.length) }}</span>
+      <span v-else-if="areaNote" class="hint" role="status">
+        {{ areaNote.tooBig ? $t('map.areaTooBig', { max: fmt(MAX_SELECTION) }) : $t('map.areaSelected', { n: fmt(areaNote.n) }) }}
       </span>
-      <span v-else-if="areaNote" class="hint">{{ areaNote }}</span>
     </div>
 
-    <div v-if="loading || error || info || imageryNote" class="status">
-      <span v-if="loading" class="spinner" aria-label="Loading"></span>
-      <span v-if="error" class="error">{{ error }}</span>
-      <span v-else>{{ info }}</span>
-      <span v-if="imageryNote" class="warn">{{ imageryNote }}</span>
+    <div v-if="loading || error || info || noImagery" class="status" role="status">
+      <span v-if="loading" class="spinner" role="img" :aria-label="$t('common.loading')"></span>
+      <span v-if="error" class="error">{{ errorMessage(error) }}</span>
+      <span v-else-if="info">
+        {{ $t('map.summary', {
+          detections: fmt(info.total), hexagons: fmt(info.hexagons),
+          grid: info.res === BASE_RES ? $t('map.gridBase') : $t('map.gridRes', { res: info.res }),
+        }) }}{{ info.truncated ? $t('map.pointsTruncated', { n: fmt(POINTS_LIMIT) }) : '' }}
+      </span>
+      <span v-if="noImagery" class="warn">{{ $t('controls.noImagery') }}</span>
     </div>
   </div>
 </template>
@@ -439,22 +484,27 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
 <style scoped>
 .map-wrap { position: relative; height: 100%; }
 .map { position: absolute; inset: 0; }
+.crosshair {
+  display: none; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+  pointer-events: none; border: 2px solid var(--focus); border-radius: 50%; box-shadow: 0 0 0 2px #ffffff;
+}
+.map-wrap:has(.maplibregl-canvas:focus-visible) .crosshair { display: block; }
 .toolbar {
   position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
 }
 .toolbar button {
   background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-  padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; box-shadow: var(--shadow);
+  padding: 6px 10px; font: inherit; font-size: 0.8125rem; cursor: pointer; box-shadow: var(--shadow);
 }
-.toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.toolbar button.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .hint {
-  background: var(--panel); padding: 5px 8px; border-radius: 6px; font-size: 12px; color: var(--muted);
+  background: var(--panel); padding: 5px 8px; border-radius: 6px; font-size: 0.75rem; color: var(--muted);
   box-shadow: var(--shadow);
 }
 .status {
   position: absolute; bottom: 28px; left: 12px; right: 12px; max-width: fit-content; display: flex; gap: 8px;
   align-items: center; flex-wrap: wrap; background: var(--panel); padding: 6px 10px; border-radius: 6px;
-  font-size: 13px; box-shadow: var(--shadow);
+  font-size: 0.8125rem; box-shadow: var(--shadow);
 }
 .error { color: var(--danger); }
 .warn { color: var(--muted); }

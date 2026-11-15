@@ -11,21 +11,24 @@ async function get(path, params = {}, signal) {
   }
   const qs = query.toString()
   const res = await fetch(`${BASE}${path}${qs ? `?${qs}` : ''}`, { signal })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail ?? `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw await httpError(res)
   return res.json()
+}
+
+// The API's messages are English, for developers: the error keeps the HTTP status so
+// the UI shows its own message in the user's language (format.js errorMessage).
+async function httpError(res) {
+  const detail = (await res.json().catch(() => ({}))).detail
+  const error = new Error(typeof detail === 'string' ? detail : `HTTP ${res.status}`)
+  error.status = res.status
+  return error
 }
 
 async function post(path, body, signal) {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
   })
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({}))).detail
-    throw new Error(typeof detail === 'string' ? detail : `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw await httpError(res)
   return res.json()
 }
 

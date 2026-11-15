@@ -4,6 +4,7 @@
 // slider, so a hexagon of the area that burns on the day shown comes up here.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSelectionSummary } from '../../api'
+import { date, errorMessage } from '../../format'
 import { useFiltersStore } from '../../stores/filters'
 import HexHistory from './HexHistory.vue'
 import HexPeriod from './HexPeriod.vue'
@@ -18,7 +19,7 @@ const props = defineProps({
 const store = useFiltersStore()
 
 const summary = ref([])
-const error = ref(null)
+const error = ref(null) // the API error (with .status), shown in the user's language
 const loading = ref(false)
 const open = ref(null) // h3 whose ficha is expanded
 const shown = ref(PAGE)
@@ -34,7 +35,7 @@ async function load() {
     summary.value = await getSelectionSummary({ h3: props.hexes, start, end }, controller.signal)
   } catch (e) {
     if (e.name === 'AbortError') return
-    error.value = e.message
+    error.value = e
     summary.value = []
   }
   loading.value = false
@@ -52,40 +53,51 @@ const rows = computed(() => {
 })
 const empty = computed(() => props.hexes.length - rows.value.length)
 
+const summaryValues = computed(() => ({
+  with: num(rows.value.length), total: num(props.hexes.length), empty: num(empty.value),
+  start: date(store.queryParams.start), end: date(store.queryParams.end),
+}))
+
 const toggle = (h3) => { open.value = open.value === h3 ? null : h3 }
 </script>
 
 <template>
   <section class="ranking">
-    <p class="muted">
-      <b>{{ num(rows.length) }}</b> de {{ num(hexes.length) }} hexágonos con detecciones
-      {{ isPeriod ? `entre ${store.queryParams.start} y ${store.queryParams.end}` : 'en toda la historia' }}
-      · {{ num(empty) }} sin detecciones
-      <span v-if="loading"> · cargando…</span>
+    <p class="muted" aria-live="polite">
+      {{ isPeriod ? $t('ranking.summaryPeriod', summaryValues) : $t('ranking.summaryHistory', summaryValues) }}
+      <span v-if="loading">{{ $t('obs.loading') }}</span>
     </p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error" role="alert">{{ errorMessage(error) }}</p>
 
     <table v-if="rows.length">
+      <caption class="sr-only">{{ $t('ranking.caption') }}</caption>
       <thead>
         <tr>
-          <th>Hexágono</th>
-          <th class="n">MODIS</th>
-          <th class="n">VIIRS</th>
-          <th>{{ isPeriod ? 'Fuente fija' : 'Última detección' }}</th>
-          <th></th>
+          <th scope="col">{{ $t('ranking.hexagon') }}</th>
+          <th scope="col" class="n">MODIS</th>
+          <th scope="col" class="n">VIIRS</th>
+          <th scope="col">{{ (isPeriod ? $t('ranking.staticSource') : $t('ranking.lastDetection')) }}</th>
         </tr>
       </thead>
       <tbody>
         <template v-for="r in rows.slice(0, shown)" :key="r.h3">
+          <!-- The whole row is clickable; the button in its first cell is the keyboard and screen-reader way in. -->
           <tr class="row" :class="{ open: open === r.h3 }" @click="toggle(r.h3)">
-            <td><code>{{ r.h3 }}</code></td>
+            <td>
+              <button
+                class="expand" :aria-expanded="open === r.h3" :aria-controls="`ficha-${r.h3}`"
+                :aria-label="$t('ranking.open', { id: r.h3 })" @click.stop="toggle(r.h3)"
+              >
+                <span class="caret" aria-hidden="true">{{ open === r.h3 ? '▾' : '▸' }}</span>
+                <code>{{ r.h3 }}</code>
+              </button>
+            </td>
             <td class="n">{{ num(isPeriod ? r.modis_period : r.modis_total) }}</td>
             <td class="n">{{ num(isPeriod ? r.viirs_period : r.viirs_total) }}</td>
-            <td>{{ isPeriod ? (r.static_period ? num(r.static_period) : '–') : (r.last_date ?? '–') }}</td>
-            <td class="caret">{{ open === r.h3 ? '▾' : '▸' }}</td>
+            <td>{{ isPeriod ? (r.static_period ? num(r.static_period) : '–') : date(r.last_date) }}</td>
           </tr>
-          <tr v-if="open === r.h3">
-            <td colspan="5" class="ficha-cell">
+          <tr v-if="open === r.h3" :id="`ficha-${r.h3}`">
+            <td colspan="4" class="ficha-cell">
               <HexHistory v-if="!isPeriod" :h3="r.h3" />
               <HexPeriod v-else :h3="r.h3" />
             </td>
@@ -94,27 +106,31 @@ const toggle = (h3) => { open.value = open.value === h3 ? null : h3 }
       </tbody>
     </table>
     <button v-if="rows.length > shown" class="more" @click="shown += PAGE">
-      Mostrar {{ num(Math.min(PAGE, rows.length - shown)) }} más
+      {{ $t('ranking.showMore', { n: num(Math.min(PAGE, rows.length - shown)) }) }}
     </button>
-    <p class="muted small">Detecciones de incendio (serie continua SP + NRT). Click en una fila para ver su ficha.</p>
+    <p class="muted small">{{ $t('ranking.footer') }}</p>
   </section>
 </template>
 
 <style scoped>
 .ranking { display: flex; flex-direction: column; gap: 8px; }
-table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
-th { text-align: left; font-weight: 600; padding: 6px; border-bottom: 1px solid var(--border); background: #f9fafb; }
-td { padding: 5px 6px; border-bottom: 1px solid #f3f4f6; }
+table { border-collapse: collapse; width: 100%; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; padding: 6px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+td { padding: 5px 6px; border-bottom: 1px solid var(--surface-3); }
 .n { text-align: right; }
 .row { cursor: pointer; }
-.row:hover, .row.open { background: #eff6ff; }
-.caret { color: var(--muted); width: 16px; }
-.ficha-cell { padding: 10px; background: #fcfcfd; }
+.row:hover, .row.open { background: var(--highlight); }
+.expand {
+  display: inline-flex; gap: 6px; align-items: center; border: none; background: none; padding: 0;
+  font: inherit; color: var(--text); cursor: pointer;
+}
+.caret { color: var(--muted); width: 10px; }
+.ficha-cell { padding: 10px; background: var(--surface-1); }
 .more {
   align-self: flex-start; border: 1px solid var(--border); background: var(--panel); border-radius: 6px;
-  padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  padding: 4px 10px; font: inherit; font-size: 0.75rem; color: var(--text); cursor: pointer;
 }
-.muted { color: var(--muted); font-size: 12px; margin: 0; }
-.small { font-size: 11px; }
-.error { color: var(--danger); font-size: 12px; margin: 0; }
+.muted { color: var(--muted); font-size: 0.75rem; margin: 0; }
+.small { font-size: 0.6875rem; }
+.error { color: var(--danger); font-size: 0.75rem; margin: 0; }
 </style>

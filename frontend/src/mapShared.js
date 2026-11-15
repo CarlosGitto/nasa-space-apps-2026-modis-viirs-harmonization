@@ -3,6 +3,8 @@ import * as maplibregl from 'maplibre-gl'
 // MapLibre 6 finds its worker relative to its own module URL, which breaks once
 // Vite bundles it. Import the (self-contained) worker as an asset instead.
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
+import { num } from './format'
+import { i18n } from './i18n'
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl)
 
@@ -26,7 +28,7 @@ export const hexRes = (zoom) => (zoom < 3 ? 2 : zoom < 4.5 ? 3 : zoom < 6 ? 4 : 
 export const SENSOR_COLORS = { modis: '#eb6834', viirs: '#2a78d6' }
 export const SENSOR_LABELS = { modis: 'MODIS', viirs: 'VIIRS' }
 
-export const fmt = (n) => (n ?? 0).toLocaleString('en-US', { maximumFractionDigits: 1 })
+export const fmt = (n) => num(n ?? 0, 1)
 
 // Visible area as minLon,minLat,maxLon,maxLat; null when the whole world is visible.
 // padKm widens it: the backend picks hexagons by their center, so pad by about one
@@ -66,16 +68,35 @@ export const HEX_FILL_COLOR = [
 // Heat that is not a wildfire (refineries, gas flares, industry, volcanoes) is drawn gray.
 export const STATIC_COLOR = '#6b7280'
 
+// Map tooltips, in the user's language. Every value inserted is a number, a date or an
+// id from our own API, so the HTML stays safe.
+const t = (key, values) => i18n.global.t(key, values)
+
 // p.h3 is the cell's fixed H3 id: the same id is always the same place.
 // `hint` tells what a click does (zoom in, or open the panel).
 export const hexPopup = (p, hint = '') =>
-  `<b>${fmt(p.detections)}</b> detections<br>Total FRP: ${fmt(p.frp_sum)} MW<br>` +
-  (p.static_detections ? `<span style="color:${STATIC_COLOR}">+ ${fmt(p.static_detections)} static-source detections (not wildfires)</span><br>` : '') +
-  `<span style="color:#6b7280">Cell ${p.h3}</span>` +
-  (hint ? `<br><span style="color:#6b7280">${hint}</span>` : '')
+  `<b>${fmt(p.detections)}</b> ${t('map.popup.detections')}<br>${t('map.popup.frpTotal')}: ${fmt(p.frp_sum)} MW<br>` +
+  (p.static_detections ? `<span class="popup-static">${t('map.popup.static', { n: fmt(p.static_detections) })}</span><br>` : '') +
+  `<span class="popup-muted">${t('map.popup.cell', { id: p.h3 })}</span>` +
+  (hint ? `<br><span class="popup-muted">${hint}</span>` : '')
 
 export const pointPopup = (p) => `
-  ${p.is_static_source ? `<b style="color:${STATIC_COLOR}">Static source (not a wildfire)</b><br>` : ''}
+  ${p.is_static_source ? `<b class="popup-static">${t('map.popup.staticSource')}</b><br>` : ''}
   <b>${p.satellite ?? p.sensor}</b> · ${(p.product ?? '').toUpperCase()} · ${p.acq_datetime_utc.replace('T', ' ').slice(0, 16)} UTC<br>
   FRP: ${fmt(p.frp)} MW<br>
-  Confidence: ${p.confidence ?? '–'} · ${p.daynight === 'D' ? 'Day' : p.daynight === 'N' ? 'Night' : '–'}`
+  ${t('map.popup.confidence')}: ${p.confidence ?? '–'} · ${p.daynight === 'D' ? t('map.popup.day') : p.daynight === 'N' ? t('map.popup.night') : '–'}`
+
+// Basemap place names in the user's language (OpenMapTiles has name:es, name:en...),
+// falling back to the local name.
+export function localizeBasemap(map, locale) {
+  for (const layer of map.getStyle().layers) {
+    if (layer.type !== 'symbol' || !JSON.stringify(map.getLayoutProperty(layer.id, 'text-field') ?? '').includes('name')) continue
+    map.setLayoutProperty(layer.id, 'text-field', ['coalesce', ['get', `name:${locale}`], ['get', 'name:latin'], ['get', 'name']])
+  }
+}
+
+// Texts of MapLibre's own controls (zoom buttons...).
+export const mapLocale = () => ({
+  'NavigationControl.ZoomIn': i18n.global.t('map.zoomIn'),
+  'NavigationControl.ZoomOut': i18n.global.t('map.zoomOut'),
+})

@@ -16,7 +16,7 @@ export const GIBS_LAYERS = [
 // Image types the user can choose. For each one, satellites in order of preference.
 export const IMAGE_TYPES = {
     truecolor: {
-        label: 'Satellite · true color',
+        labelKey: 'gibs.truecolor',
         layers: [
             'VIIRS_NOAA20_CorrectedReflectance_TrueColor',
             'VIIRS_SNPP_CorrectedReflectance_TrueColor',
@@ -25,7 +25,7 @@ export const IMAGE_TYPES = {
         ],
     },
     fire: {
-        label: 'Satellite · fire & burn scars',
+        labelKey: 'gibs.fire',
         layers: [
             'VIIRS_NOAA20_CorrectedReflectance_BandsM11-I2-I1',
             'VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1',

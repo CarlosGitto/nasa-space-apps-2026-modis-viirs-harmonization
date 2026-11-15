@@ -5,6 +5,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { listDatasets } from '../api'
+import { errorMessage } from '../format'
 import { pickLayer } from '../gibs'
 
 const DEFAULT_DAYS = 7
@@ -75,7 +76,7 @@ export const useFiltersStore = defineStore('filters', () => {
       datasets.value = await listDatasets()
       error.value = null
     } catch (e) {
-      error.value = `Could not connect to the backend: ${e.message}`
+      error.value = errorMessage(e) // shown in the user's language (App.vue)
       return
     }
     const available = datasets.value.filter((d) => d.available)
