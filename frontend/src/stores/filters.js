@@ -23,11 +23,19 @@ export const useFiltersStore = defineStore('filters', () => {
   const start = ref(null)
   const end = ref(null)
   const zone = ref(null)
+  const zoneCells = ref([]) // res-6 cells of a drawn area ([] when none, or too many to list)
   const error = ref(null)
   const basemap = ref('vector') // 'vector' (OpenFreeMap) or an image type: 'truecolor' | 'fire'
   const day = ref(null) // one day within start..end picked on the time slider, or null = the whole range
   const view = ref('map') // 'map' | 'compare' (MODIS | VIIRS curtain)
   const camera = ref({ center: [0, 20], zoom: 1.5 }) // shared by both views
+  const selectedHexes = ref([]) // H3 res-6 ids open in the hexagon panel, in click order
+  // Maps still loading a change (data and imagery): the time slider waits for them before
+  // showing the next day, so the picture always matches the day on the slider.
+  const busy = ref({}) // view -> true while loading
+
+  const isBusy = computed(() => Object.values(busy.value).some(Boolean))
+  const setBusy = (key, value) => { busy.value = { ...busy.value, [key]: value } }
 
   const currentDataset = computed(() => datasets.value.find((d) => d.id === dataset.value) ?? null)
 
@@ -102,15 +110,39 @@ export const useFiltersStore = defineStore('filters', () => {
     setDates(first, last)
   }
 
-  const setZone = (geometry) => { zone.value = geometry }
-  const clearZone = () => { zone.value = null }
+  // A drawn area filters the map and selects all its hexagons, empty ones included,
+  // so any of them that burns on a day shown later appears in the panel too.
+  // cells === null: too big to select, the area only filters.
+  function setArea(geometry, cells) {
+    zone.value = geometry
+    zoneCells.value = cells ?? []
+    selectedHexes.value = cells ? [...cells] : []
+  }
+  const clearZone = () => {
+    if (zoneCells.value.length) selectedHexes.value = []
+    zone.value = null
+    zoneCells.value = []
+  }
   const setBasemap = (type) => { basemap.value = type }
-  const setView = (v) => { view.value = v }
+  const setView = (v) => {
+    view.value = v
+    selectedHexes.value = [] // the panel belongs to the main map
+  }
+
+  // Plain click: only this hexagon. Shift/Ctrl/Cmd click: add it, or take it out if already there.
+  function selectHex(id, additive = false) {
+    const has = selectedHexes.value.includes(id)
+    if (!additive) selectedHexes.value = [id]
+    else selectedHexes.value = has ? selectedHexes.value.filter((h) => h !== id) : [...selectedHexes.value, id]
+  }
+  const removeHex = (id) => { selectedHexes.value = selectedHexes.value.filter((h) => h !== id) }
+  const clearSelection = () => { selectedHexes.value = [] }
   const setCamera = (center, zoom) => { camera.value = { center, zoom } }
 
   return {
-    datasets, dataset, start, end, zone, error, basemap, day, view, camera,
-    currentDataset, queryParams, imagery, compareSides, imageryDate,
-    loadDatasets, setDataset, setDates, setDay, setMonth, setZone, clearZone, setBasemap, setView, setCamera,
+    datasets, dataset, start, end, zone, zoneCells, error, basemap, day, view, camera, selectedHexes,
+    currentDataset, queryParams, imagery, compareSides, imageryDate, isBusy, setBusy,
+    loadDatasets, setDataset, setDates, setDay, setMonth, setArea, clearZone, setBasemap, setView, setCamera,
+    selectHex, removeHex, clearSelection,
   }
 })
