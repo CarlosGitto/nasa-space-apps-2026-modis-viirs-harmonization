@@ -3,6 +3,7 @@ import * as maplibregl from 'maplibre-gl'
 // MapLibre 6 finds its worker relative to its own module URL, which breaks once
 // Vite bundles it. Import the (self-contained) worker as an asset instead.
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
+import { cellArea } from 'h3-js'
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl)
 
@@ -58,10 +59,29 @@ export const labelLayerId = (map) => map.getStyle().layers.find((l) => l.type ==
 // Hexagon fill: fixed log scale (not relative to what's on screen), so the same
 // color means the same number of detections everywhere, on both sides of the curtain.
 // max(1, …) avoids ln(0) and missing values.
+// Hexagons are colored by fire DENSITY, not count: detections per 1,000 km² per day of
+// the range. Zoomed out, one coarse hexagon (res 2, ~87,000 km²) adds up thousands of
+// detections; colored by count, whole continents saturated to red ("the world on
+// fire"). By density, a big hexagon with scattered fires stays pale and only real hot
+// spots go dark, the same at every zoom and for any date range. Log scale (ln density).
+const DENSITY = ['ln', ['max', 0.01, ['coalesce', ['get', 'density'], 0.01]]]
 export const HEX_FILL_COLOR = [
-  'interpolate', ['linear'], ['ln', ['max', 1, ['coalesce', ['get', 'detections'], 1]]],
-  0, '#fde68a', 2, '#fbbf24', 4, '#f97316', 6, '#dc2626', 8, '#7f1d1d',
+  'interpolate', ['linear'], DENSITY,
+  -2, '#fef3c7', 0, '#fde68a', 2, '#fbbf24', 4, '#f97316', 6, '#dc2626', 8, '#7f1d1d',
 ]
+// Opacity by density too: little activity reads as a faint tint, hot spots as solid.
+export const hexOpacity = (max) => ['interpolate', ['linear'], DENSITY, -2, max * 0.3, 1, max * 0.65, 4, max]
+
+const DAY_MS = 86_400_000
+// Adds `density` (detections per 1,000 km² per day) to GET /stats/hex features.
+export function withDensity(fc, start, end) {
+  if (!fc?.features) return fc
+  const days = start && end ? Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / DAY_MS) + 1) : 1
+  for (const f of fc.features) {
+    f.properties.density = (f.properties.detections / cellArea(f.properties.h3, 'km2')) * 1000 / days
+  }
+  return fc
+}
 
 // Heat that is not a wildfire (refineries, gas flares, industry, volcanoes) is drawn gray.
 export const STATIC_COLOR = '#6b7280'
@@ -70,6 +90,7 @@ export const STATIC_COLOR = '#6b7280'
 // `hint` tells what a click does (zoom in, or open the panel).
 export const hexPopup = (p, hint = '') =>
   `<b>${fmt(p.detections)}</b> detections<br>Total FRP: ${fmt(p.frp_sum)} MW<br>` +
+  (p.density !== undefined ? `<span style="color:#6b7280">${fmt(p.density)} per 1,000 km² per day</span><br>` : '') +
   (p.static_detections ? `<span style="color:${STATIC_COLOR}">+ ${fmt(p.static_detections)} static-source detections (not wildfires)</span><br>` : '') +
   `<span style="color:#6b7280">Cell ${p.h3}</span>` +
   (hint ? `<br><span style="color:#6b7280">${hint}</span>` : '')
