@@ -11,11 +11,13 @@
 // Optional weather layers (temperature, rain, wind arrows) for the same day, under the
 // hexagons; see mapWeather.js.
 //
+// 3D: the fire hexagons rise as columns, height = the same level as their color, and the map tilts.
+//
 // Keyboard: with the map focused, arrows move it and +/− zoom (MapLibre); Enter does what a
 // click at the center (the crosshair) does, Shift+Enter adds or removes that hexagon.
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getDetections, getHexagons, getSelectionWeather, getWeatherMap } from '../api'
+import { getDetections, getHarmonizedHexagons, getHexagons, getSelectionWeather, getWeatherMap } from '../api'
 import { date, errorMessage } from '../format'
 import { gibsUrl } from '../gibs'
 import {
@@ -24,7 +26,7 @@ import {
 import { getHexagonEdgeLengthAvg } from 'h3-js'
 import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
-  applyScale, densityScale, fmt, HEX_BORDER_WIDTH, hexOpacity, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup,
+  applyScale, densityScale, fitRegion, fmt, HEX_BORDER_WIDTH, hexOpacity, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup,
   scaleTicks, viewportBbox, whenIdle, withDensity,
 } from '../mapShared'
 import FireScale from './FireScale.vue'
@@ -41,6 +43,14 @@ import { usePrefsStore } from '../stores/prefs'
 
 const store = useFiltersStore()
 const prefs = usePrefsStore()
+const threeD = ref(false)
+const LEVEL_3D = ['max', 0.04, ['coalesce', ['get', 'level'], 0]] // a little column even for the faintest hexagon
+function toggle3d() {
+  threeD.value = !threeD.value
+  if (!mapReady) return
+  map.setLayoutProperty('hex-3d', 'visibility', threeD.value ? 'visible' : 'none')
+  map.easeTo({ pitch: threeD.value ? 55 : 0, bearing: threeD.value ? -15 : 0, duration: prefs.reduceMotion ? 0 : 900, essential: true })
+}
 const { t } = useI18n()
 const container = ref(null)
 const AREA_POINTS = 4
@@ -99,9 +109,18 @@ const selectionShownDay = computed(() => selectionDay(selectionWeather.value, st
 // Smallest zoom showing a finer grid than `res`: clicking a coarse hexagon always goes down a level.
 const NEXT_LEVEL_ZOOM = { 0: 3, 1: 3, 2: 3, 3: 4.5, 4: 6, 5: 7.5 }
 
+// Hexagons of the calendar's values: the harmonized series (MODIS units, 2000 onward) or the chosen dataset.
+const hexagons = (params, signal) =>
+  store.harmonized ? getHarmonizedHexagons(params, signal) : getHexagons(store.dataset, params, signal)
+// Up close the points are always original detections, from the chosen dataset when it covers the dates.
+const pointsCovered = () => {
+  const d = store.currentDataset
+  return d?.available && d.start_date <= store.queryParams.end && d.end_date >= store.queryParams.start
+}
+
 async function refresh() {
   // Hidden while the MODIS | VIIRS curtain is shown: don't fetch for nothing.
-  if (!mapReady || store.view !== 'map' || !store.dataset || !store.currentDataset?.available) return
+  if (!mapReady || store.view !== 'map' || !store.ready) return
   controller?.abort()
   controller = new AbortController()
   const { signal } = controller
@@ -113,17 +132,17 @@ async function refresh() {
   store.setBusy('map', true)
   try {
     const [fc, points] = await Promise.all([
-      getHexagons(store.dataset, { ...params, bbox: hexBbox, res }, signal),
-      zoom >= DETAIL_ZOOM ? getDetections(store.dataset, { ...params, limit: POINTS_LIMIT }, signal) : null,
+      hexagons({ ...params, bbox: hexBbox, res }, signal),
+      zoom >= DETAIL_ZOOM && pointsCovered() ? getDetections(store.dataset, { ...params, limit: POINTS_LIMIT }, signal) : null,
     ])
     currentRes = res
     withDensity(fc, store.queryParams.start, store.queryParams.end)
     // The scale comes from the whole range. Without a day on the slider, that's this answer;
     // with one, the range's scale kept for this view (or asked once if there is none yet).
-    const key = JSON.stringify([store.dataset, store.start, store.end, store.zone, res])
+    const key = JSON.stringify([store.values, store.dataset, store.start, store.end, store.zone, res])
     if (!store.day) scales.set(key, densityScale(fc.features.map((f) => f.properties.density)))
     else if (!scales.has(key)) {
-      const range = await getHexagons(store.dataset, { start: store.start, end: store.end, zone: store.zone, bbox: hexBbox, res }, signal)
+      const range = await hexagons({ start: store.start, end: store.end, zone: store.zone, bbox: hexBbox, res }, signal)
       withDensity(range, store.start, store.end)
       scales.set(key, densityScale(range.features.map((f) => f.properties.density)))
     }
@@ -362,6 +381,22 @@ function addLayers() {
       'fill-opacity': HEX_OPACITY,
     },
   }, labels)
+  // 3D mode: the same hexagons as columns. Heights in meters, per zoom, so a column stays readable from the globe
+  // (a res-2 hexagon is ~150 km wide) down to the res-6 grid (~3.7 km).
+  map.addLayer({
+    id: 'hex-3d', type: 'fill-extrusion', source: 'hex', layout: { visibility: threeD.value ? 'visible' : 'none' },
+    filter: ['>', ['get', 'detections'], 0],
+    paint: {
+      'fill-extrusion-color': HEX_FILL_COLOR,
+      'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'],
+        1, ['*', ['^', LEVEL_3D, 1.2], 3_000_000],
+        4, ['*', ['^', LEVEL_3D, 1.2], 700_000],
+        7, ['*', ['^', LEVEL_3D, 1.2], 80_000],
+        10, ['*', ['^', LEVEL_3D, 1.2], 10_000]],
+      'fill-extrusion-opacity': 0.9,
+      'fill-extrusion-vertical-gradient': true,
+    },
+  }, labels)
   // While weather is on: a dark outline around the fire hexagons so they stand out.
   map.addLayer({
     id: 'hex-fire-line', type: 'line', source: 'hex', layout: { visibility: 'none' },
@@ -545,6 +580,20 @@ function clearZone() {
   store.clearZone()
 }
 
+// "Follow the map": the calendar counts what is on screen. Zoomed out to (almost) the whole world: no zone.
+let followTimer = null
+function followView() {
+  clearTimeout(followTimer)
+  followTimer = setTimeout(() => {
+    if (!map || store.view !== 'map') return
+    const b = map.getBounds()
+    const round = (v) => Math.round(v * 10) / 10
+    const box = [Math.max(-180, b.getWest()), Math.max(-85, b.getSouth()), Math.min(180, b.getEast()), Math.min(85, b.getNorth())].map(round)
+    const world = map.getZoom() < 2 || box[2] - box[0] >= 300
+    store.setViewBox(world || box[0] >= box[2] ? null : box)
+  }, 400)
+}
+
 function polygonBounds(geometry) {
   const bounds = new maplibregl.LngLatBounds()
   for (const [lon, lat] of geometry.coordinates[0]) bounds.extend([lon, lat])
@@ -615,6 +664,7 @@ function registerEvents() {
   // Only while shown: hidden behind the curtain view, the curtain owns the camera.
   map.on('moveend', () => { if (store.view === 'map') store.setCamera(map.getCenter().toArray(), map.getZoom()) })
   map.on('moveend', scheduleRefresh)
+  map.on('moveend', followView)
 }
 
 // Keep the GIBS layer in line with the chosen image type and the end of the date range.
@@ -702,6 +752,7 @@ onBeforeUnmount(() => {
   store.setBusy('map', false)
   store.setBusy('weather', false)
   clearTimeout(debounce)
+  clearTimeout(followTimer)
   resizer?.disconnect()
   window.removeEventListener('keydown', onKey, { capture: true })
   cancelAnimationFrame(draftFrame)
@@ -709,7 +760,7 @@ onBeforeUnmount(() => {
   map?.remove()
 })
 
-watch(() => [store.dataset, store.queryParams], refresh)
+watch(() => [store.values, store.ready, store.dataset, store.queryParams], refresh)
 // Back from the curtain view: the container was hidden, so resize, catch up with
 // where the curtain was left, and load what changed meanwhile.
 watch(() => store.view, (view) => {
@@ -731,6 +782,8 @@ watch(() => store.weatherScope, renderWeather)
 watch(() => [store.basemap, store.imagery?.layer.id, store.imagery?.date], syncImagery)
 watch(() => store.selectedHexes, syncSelection)
 watch(() => [store.zone, store.zoneCells], syncZone)
+// A preset region was picked: zoom to it (only while shown; the curtain view fits itself).
+watch(() => store.fitTo, (f) => { if (map && f && store.view === 'map') fitRegion(map, f.bbox, prefs.reduceMotion) })
 watch(() => store.zone, (zone) => { if (!zone) areaNote.value = null })
 watch(() => prefs.contrast, applyContrast)
 watch(() => prefs.contours, syncContours)
@@ -752,6 +805,9 @@ watch(() => prefs.locale, (locale) => {
         <span aria-hidden="true">▱</span> {{ $t('map.area') }}
       </button>
       <button v-if="store.zone" @click="clearZone"><span aria-hidden="true">✕</span> {{ $t('map.clearArea') }}</button>
+      <button :aria-pressed="threeD" :class="{ active: threeD }" :title="$t('map.view3dHint')" @click="toggle3d">
+        {{ $t('map.view3d') }}
+      </button>
       <button :aria-pressed="prefs.contours" :class="{ active: prefs.contours }" @click="prefs.contours = !prefs.contours">
         <span aria-hidden="true">⛰</span> {{ $t('map.contours') }}
       </button>

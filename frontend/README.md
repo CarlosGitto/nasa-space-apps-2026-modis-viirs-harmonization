@@ -1,10 +1,10 @@
 # frontend
 
-Map of fire detections for the FIRMS data served by `backend/`.
+A **fire calendar** of the FIRMS data served by `backend/`: the calendar says *when* it burned (2000 → today, on
+the harmonized MODIS + VIIRS series), the map next to it says *where*.
 
 Stack: **Vue 3 + Vite** (with Pinia for the shared state), **MapLibre GL JS**
-(map), **Terra Draw** (draw a zone), **Apache ECharts** (burn calendar). Plain
-JavaScript.
+(map), **Apache ECharts** (hexagon charts). Plain JavaScript.
 
 ## Run
 
@@ -113,9 +113,29 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   (satellite imagery), amber (calendar and slider), gray (basemap); several at once
   blend. Shows only after 150 ms, so quick loads don't flicker; full and still with reduced motion.
   New loads join with `useLoadingBar(kind, loadingRef)`, or `trackMapSources` for map tiles.
-- **Burn calendar** ([src/components/BurnCalendar.vue](src/components/BurnCalendar.vue)):
-  detections per month × year (`/stats/monthly`) for the dataset and zone.
-  Clicking a month sets the map dates to that month.
+- **Fire calendar** ([src/components/FireCalendar.vue](src/components/FireCalendar.vue)): the app's main
+  control, at the top of the left panel. It picks the period the map shows.
+  - **Values**: *Harmonized* (one series 2000 → today in MODIS units, `/stats/harmonized/{monthly,daily}`; the
+    default once `make etl-harmonize` has built it) or *Raw* (the chosen dataset as published). The switch is
+    global: the main map and the time slider follow it.
+  - **Zoom levels**: *Years* (years × months, each year's total as a bar and a *Typical* row = the mean of each
+    month: which years and which seasons burn most), *Year* (twelve month calendars, one square per day) and
+    *Month* (a big calendar with each day's count). ‹ › step a year or a month.
+  - **Picking**: click a month (or a year label) to show it on the map, double-click to open its days; click a
+    day to show it (its month becomes the slider's range); drag over days or Shift + click for a range. Arrow
+    keys move between cells, Enter picks.
+  - **Color**: hotspots or FRP, linear or log, relative to the busiest cell in view; or *vs. typical*: each month
+    against the same month of the other years (a day against a typical day of its month), blue below, red above.
+  - **Region** ([src/regions.js](src/regions.js)): *Follow the map* (default: the calendar counts what is on
+    screen, so zooming the map narrows it), the whole world, hemispheres, continents and fire regions (Amazon,
+    Southern Africa, Australia…). A preset filters the calendar and the map and zooms the map to it; a drawn
+    area works the same.
+  - **On the map** box: the period in numbers, its peak day, and for a single month how it compares with the
+    same month of the other years and its rank. Downloads: *Calendar CSV* (one row per day, in the calendar's
+    values) and *Hotspots CSV* (every original detection of the period and region, `detections.csv`).
+- **Period badge** (top of the map): the calendar's period (and the slider's day) the map is showing.
+- **3D** (map toolbar): the fire hexagons rise as columns whose height follows the same level as their color,
+  and the map tilts.
 
 ## Languages (English / Spanish)
 
@@ -147,14 +167,16 @@ Target: WCAG 2.2 AA, following the WAI-ARIA authoring practices on top of native
   **Enter** acts at the center (crosshair) like a click, **Shift+Enter** adds a hexagon,
   Esc cancels a drawing. The panel's tabs move with the arrows, Home and End; opening
   the panel focuses it and closing it (✕ or Esc) returns the focus.
-- **Screen readers**: map status, area notes and loading are announced; charts and the
-  burn calendar have a text summary; tables have captions.
+- **Screen readers**: map status, area notes and loading are announced; charts have a text
+  summary; every fire calendar cell is a button whose label says its value; tables have captions.
 - **Lint**: `make frontend-lint` fails on text written straight into a template, keys
   missing from (or unused in) the locales, and common accessibility mistakes.
 
 ## Manual check
 
-1. On load: world map with hexagons and the world burn calendar, nothing drawn.
+1. On load: the fire calendar (Years level) next to a world map with hexagons, nothing drawn. Click a month: the
+   map shows it and its badge says so; double-click: its days. Pick "South America": the map zooms there and the
+   calendar recounts. Zoom the map with "Follow the map": the calendar recounts what's on screen.
 2. Click a hexagon: the map zooms into it. Repeat until the base grid (res 6), then
    click one: the panel opens with its observations and fichas. Shift + click a
    neighbor: two fichas under "Detalle". Zoom past 10: dashed borders, points on top.

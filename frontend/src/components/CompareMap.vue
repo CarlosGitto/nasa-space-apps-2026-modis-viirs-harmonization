@@ -22,7 +22,7 @@ import { GIBS_LAYERS, gibsDate, gibsUrl, pickLayer } from '../gibs'
 import { cellsOutline } from '../hexGrid'
 import {
   EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE, applyScale, densityScale, HEX_BORDER_WIDTH, hexOpacity,
-  fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup,
+  fitRegion, fmt, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup,
   scaleTicks, viewportBbox, whenIdle, withDensity,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
@@ -450,6 +450,7 @@ watch(() => JSON.stringify([mode.value, epochValues.value, store.dataset, SIDES.
 watch(detMode, render)
 watch(() => [mode.value, epochImagery.value, img.value.left, img.value.right, config.value.left.imageryDay, config.value.right.imageryDay], syncImagery)
 watch(() => [store.zone, store.zoneCells], syncZone)
+watch(() => store.fitTo, (f) => { if (bothReady() && f) fitRegion(maps.left, f.bbox, prefs.reduceMotion) })
 watch(() => prefs.locale, (locale) => { if (bothReady()) for (const m of [maps.left, maps.right]) localizeBasemap(m, locale) })
 watch(() => prefs.contrast, applyContrastBoth)
 </script>

@@ -22,7 +22,7 @@ export default [
     rules: {
       // Symbols, numbers and technical names (sensor names, language codes) are not translated.
       '@intlify/vue-i18n/no-raw-text': ['error', {
-        ignorePattern: '^[\\s\\-–—·:/%|()+×▶◀▾▸▼▲❚✕▱⚠⛰*.,0-9]*$',
+        ignorePattern: '^[\\s\\-–—·:/%|()+×▶◀▾▸▼▲❚✕▱⚠⛰◎‹›¼⤓⛰*.,0-9]*$',
         ignoreText: ['MODIS', 'VIIRS', 'ES', 'EN', '· POWER'],
       }],
       '@intlify/vue-i18n/no-missing-keys': 'error',
@@ -33,7 +33,7 @@ export default [
         ignores: [
           '/^panel\\.tabs\\./', '/^obs\\.cols\\./', '/^controls\\.(products|sensors)\\./', '/^gibs\\./',
           '/^errors\\./', '/^a11y\\.(normal|large|xlarge)$/', '/^curtain\\.(fire|trueColor|mapOnly)$/',
-          '/^weather\\.compass\\./', '/^weather\\.coverage\\.(outside|noData|rainOnly)$/',
+          '/^weather\\.compass\\./', '/^regions\\./', '/^cal\\.(above|below)$/', '/^weather\\.coverage\\.(outside|noData|rainOnly)$/',
         ],
       }],
       '@intlify/vue-i18n/no-dynamic-keys': 'off', // keys like `panel.tabs.${id}` are deliberate

@@ -1,5 +1,6 @@
 <script setup>
-// Dataset ("release"), dates, basemap and zone status.
+// Dataset ("release") for the raw values and the points up close, exact dates, basemap, weather layers and zone
+// status. Folded under the fire calendar, which picks the period and the region.
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { date, num } from '../format'
@@ -32,14 +33,6 @@ const groups = computed(() =>
 
 <template>
   <section class="controls">
-    <div class="view" role="group" :aria-label="$t('controls.view')">
-      <button :aria-pressed="store.view === 'map'" :class="{ on: store.view === 'map' }" @click="store.setView('map')">
-        {{ $t('controls.map') }}
-      </button>
-      <button :aria-pressed="store.view === 'compare'" :class="{ on: store.view === 'compare' }" @click="store.setView('compare')">
-        {{ $t('controls.compare') }}
-      </button>
-    </div>
     <label>
       {{ $t('controls.dataset') }}
       <select :value="store.dataset" @change="store.setDataset($event.target.value)">
@@ -117,12 +110,6 @@ const groups = computed(() =>
 
 <style scoped>
 .controls { display: flex; flex-direction: column; gap: 10px; }
-.view { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
-.view button {
-  flex: 1; border: none; background: none; padding: 6px 8px; border-radius: 6px;
-  font: inherit; font-size: 0.8125rem; color: var(--muted); cursor: pointer;
-}
-.view button.on { background: var(--accent); color: var(--on-accent); }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--muted); }
 select, input {
   font: inherit; font-size: 0.875rem; color: var(--text); background: var(--bg);

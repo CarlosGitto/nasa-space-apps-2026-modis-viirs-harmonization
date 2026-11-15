@@ -155,3 +155,10 @@ export const mapLocale = () => ({
   'NavigationControl.ZoomIn': i18n.global.t('map.zoomIn'),
   'NavigationControl.ZoomOut': i18n.global.t('map.zoomOut'),
 })
+
+// Zoom a map to a region's [w, s, e, n] (null = the whole world), animated unless the user asked for less motion.
+export function fitRegion(map, box, reduceMotion) {
+  const duration = reduceMotion ? 0 : 900
+  if (!box) return map.easeTo({ center: [0, 20], zoom: 1.5, duration, essential: true })
+  map.fitBounds([[box[0], box[1]], [box[2], box[3]]], { padding: 32, maxZoom: 7, duration, essential: true })
+}

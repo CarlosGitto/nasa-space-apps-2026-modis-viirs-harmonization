@@ -5,7 +5,7 @@
 // goes back to the whole range. ▶ plays the days in a loop.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getDaily } from '../api'
+import { getDaily, getHarmonizedDaily } from '../api'
 import { date, num } from '../format'
 import { useFiltersStore } from '../stores/filters'
 import { useLoadingBar } from '../stores/loading'
@@ -56,14 +56,15 @@ const label = computed(() => `${title.value} · ${subtitle.value}`) // for scree
 
 async function loadCounts() {
   counts.value = {}
-  if (!store.dataset || !store.currentDataset?.available || !days.value.length) return
+  if (!store.ready || !days.value.length) return
   controller?.abort()
   controller = new AbortController()
   const { signal } = controller
   loading.value = true
   try {
     // The whole range (not just the slider's day), so every bar has its height.
-    const rows = await getDaily(store.dataset, { start: store.start, end: store.end, zone: store.zone }, signal)
+    const params = { start: store.start, end: store.end, zone: store.statsZone }
+    const rows = store.harmonized ? await getHarmonizedDaily(params, signal) : await getDaily(store.dataset, params, signal)
     counts.value = Object.fromEntries(rows.map((r) => [r.date, r.detections]))
   } catch (e) {
     if (e.name !== 'AbortError') counts.value = {}
@@ -124,7 +125,7 @@ function showAll() {
   store.setDay(null)
 }
 
-watch(() => [store.dataset, store.start, store.end, store.zone], loadCounts, { immediate: true })
+watch(() => [store.values, store.ready, store.dataset, store.start, store.end, store.statsZone], loadCounts, { immediate: true })
 // A new range or dataset: stop playing (the day was reset by the store).
 watch(() => [store.dataset, store.start, store.end], stop)
 // The split view has no time slider (each side is a whole period): stop, keep the day for when the map comes back.
