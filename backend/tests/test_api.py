@@ -162,7 +162,10 @@ def test_datasets_lists_all_three_sensors(client):
     body = {d["id"]: d for d in client.get("/datasets").json()}
     assert set(body) == {
         "modis_best", "modis_sp", "modis_nrt", "viirs_best", "viirs_sp", "viirs_nrt", "harmonized_nrt", "harmonized_sp",
+        "modis_harmonized", "viirs_harmonized",
     }
+    # the MODIS-units datasets need fct_hexagon_harmonized_daily, which this test lake does not have
+    assert not body["modis_harmonized"]["available"] and not body["viirs_harmonized"]["available"]
     assert body["modis_sp"] == {
         "id": "modis_sp", "sensor": "modis", "product": "sp", "available": True,
         "rows": 3, "start_date": "2026-11-10", "end_date": "2026-11-11",
@@ -677,3 +680,9 @@ def test_power_regional_boxes_are_between_2_and_10_degrees():
     assert all(2 <= e - w <= 10 and 2 <= n - s <= 10 for w, s, e, n in small)
     big = power._boxes([(-55.0, -80.0), (10.0, -35.0)])
     assert len(big) > 1 and all(e - w <= 10 and n - s <= 10 for w, s, e, n in big)
+
+
+def test_harmonized_calendar_needs_the_harmonized_layer(client):
+    # the test lake has no fct_hexagon_harmonized_daily: clear 404, not a SQL error
+    r = client.get("/stats/harmonized/monthly")
+    assert r.status_code == 404 and "not been built" in r.json()["detail"]

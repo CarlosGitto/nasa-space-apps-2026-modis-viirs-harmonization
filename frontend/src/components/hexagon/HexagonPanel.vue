@@ -91,6 +91,20 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
+        <!-- Raw or harmonized values (MODIS units) of the fichas; the weather tab has no such choice. -->
+        <div
+          v-if="tab !== 'weather' && !(store.selectedHexes.length > STACK_MAX) && !(store.selectedHexes.length > 1 && mode === 'grouped')"
+          class="mode values" role="group" :aria-label="$t('harm.fichaValues')"
+        >
+          <button :aria-pressed="!store.hexHarmonized" :class="{ on: !store.hexHarmonized }" @click="store.hexHarmonized = false">
+            {{ $t('harm.raw') }}
+          </button>
+          <button :aria-pressed="store.hexHarmonized" :class="{ on: store.hexHarmonized }" @click="store.hexHarmonized = true">
+            {{ $t('harm.harmonized') }}
+          </button>
+          <small v-if="store.hexHarmonized">{{ $t('harm.fichaNote') }}</small>
+        </div>
+
         <div v-if="store.selectedHexes.length > 1 && mode === 'grouped'" class="wip">
           <strong>{{ $t('panel.wipTitle') }}</strong>
           <p>{{ $t('panel.wipText') }}</p>
@@ -143,6 +157,8 @@ h2:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 }
 .mode button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .mode small { font-size: 0.625rem; opacity: 0.8; }
+.mode.values { align-items: center; gap: 4px; margin-bottom: 8px; }
+.mode.values small { margin-left: 6px; color: var(--muted); opacity: 1; }
 .card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .wip { border: 1px dashed var(--border); border-radius: 8px; padding: 12px; font-size: 0.8125rem; background: var(--wip); }
 .wip p { margin: 6px 0 0; color: var(--text); }

@@ -321,5 +321,52 @@
       "loadedFor": "Data loaded for this place: {coverage}.",
       "see": "See {start} → {end}"
     }
+  },
+  "harm": {
+    "values": "Values",
+    "raw": "Raw",
+    "harmonized": "Harmonized",
+    "harmonizedUnits": "Harmonized (MODIS units)",
+    "modisUnitsSuffix": " · MODIS units",
+    "curtainHint": "Harmonized: MODIS with bow-tie duplicates merged and size-corrected FRP; VIIRS S-NPP divided by the factor k of each hexagon (VIIRS / MODIS, calibrated where both sensors have complete data; elsewhere the regional or global k). Both sides are in MODIS units, so they should look alike. Zoomed in, points are still the raw detections.",
+    "fichaValues": "Ficha values",
+    "fichaNote": "MODIS merged · VIIRS S-NPP ÷ k · MODIS units",
+    "calendarValues": "Calendar values",
+    "calendarHint": "One series from 2000 to today in MODIS units: MODIS until January 2012, VIIRS S-NPP ÷ k from February 2012.",
+    "calendarRawHint": "Data of the chosen dataset, unadjusted.",
+    "calendarLabel": "Harmonized burn calendar (MODIS units): detections by month and year. Busiest month: {month} {year}, with {n} detections.",
+    "detectionsModis": "{n} detections (MODIS units)",
+    "detectionsUnit": "detections",
+    "notBuilt": "The harmonized data hasn't been built yet (make etl-harmonize).",
+    "historyNote": "Harmonized values: MODIS units (VIIRS ÷ the cell's k).",
+    "monthlyModis": "Detections per month · MODIS units",
+    "monthly": "Monthly",
+    "mean12": "12-month mean",
+    "show": "Show",
+    "labelSpan": "from {start} to {end}",
+    "labelPeak": "highest month: {month}, {value}",
+    "labelTrend": "12-month mean between {min} and {max}",
+    "k": {
+      "note": "k (VIIRS / MODIS): FRP {frp}, detections {count} · {source}",
+      "own": "the cell's own",
+      "global": "global",
+      "inherited": "inherited from the resolution {res} cell"
+    },
+    "reliability": {
+      "title": "Detection reliability",
+      "index": "Reliability index",
+      "persistentShare": "% persistent",
+      "sensorMean": "{sensor} · mean index",
+      "persistentNote": "{v} persistent",
+      "meanValue": "{v} · mean index",
+      "persistentValue": "{v} persistent detections",
+      "explain": "The index is the probability that another sensor confirms the detection (0 to 1), based on its confidence, its persistence and its FRP. It measures whether the detection is seen again, not whether it is a real wildfire. Moderate discrimination (AUC 0.66 MODIS · 0.73 VIIRS). Each year weighs by its detections. Not comparable across sensors: each was calibrated against a different target (MODIS confirmed by VIIRS, which happens 93% of the time; VIIRS confirmed by NOAA-20, 66%), so a higher index for MODIS doesn't make it more reliable."
+    },
+    "series": {
+      "title": "Continuous MODIS + VIIRS series",
+      "frp": "FRP (MW)",
+      "detections": "Detections",
+      "explain": "Months without downloaded data are left blank (they are not zero). Before February 2012, MODIS (without bow-tie duplicates); after, VIIRS S-NPP ÷ k, in MODIS units. {k}. The monthly value is noisy: go by the 12-month mean."
+    }
   }
 }

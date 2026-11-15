@@ -69,11 +69,12 @@ class DetectionCollection(BaseModel):
     truncated: bool  # true when more detections matched than `limit`
 
 
+# detections are fractional on the harmonized datasets (a VIIRS detection = 1 / k MODIS-sized ones)
 class DailyStat(BaseModel):
     date: date
-    detections: int
-    day: int
-    night: int
+    detections: float
+    day: float
+    night: float
     frp_sum: float | None
     frp_mean: float | None
     static_detections: int
@@ -82,7 +83,7 @@ class DailyStat(BaseModel):
 class MonthlyStat(BaseModel):
     year: int
     month: int  # 1-12
-    detections: int
+    detections: float
     frp_sum: float | None
     static_detections: int
 
@@ -93,7 +94,7 @@ class PolygonGeometry(BaseModel):
 
 
 class CellProperties(BaseModel):
-    detections: int
+    detections: float
     frp_sum: float | None
     static_detections: int
 
@@ -112,7 +113,7 @@ class GridCollection(BaseModel):
 
 class HexProperties(BaseModel):
     h3: str  # H3 cell index
-    detections: int
+    detections: float
     frp_sum: float | None
     static_detections: int
 
@@ -426,6 +427,30 @@ def monthly_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[
     ]
 
 
+@router.get("/stats/harmonized/monthly")
+def harmonized_monthly_stats(cur: Cursor, filters: FiltersDep) -> list[MonthlyStat]:
+    """Burn calendar of the harmonized series: ONE continuous series across the MODIS -> VIIRS change, in MODIS units
+    (MODIS with merged bow-tie duplicates before 2012-02, VIIRS S-NPP divided by the k of each hexagon after).
+    Detections are fractional; FRP in MW."""
+    if not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    base = db.harmonized_series_relation(with_center=filters.bbox is not None or filters.zone is not None)
+    where, params = filters.where()
+    rows = cur.execute(
+        f"""
+        select year(acq_date), month(acq_date), sum(detections), sum(frp_sum), sum(static_detections)
+        from {base}
+        where {where}
+        group by all
+        order by 1, 2
+        """,
+        params,
+    ).fetchall()
+    return [
+        MonthlyStat(year=y, month=m, detections=n, frp_sum=fs, static_detections=st) for y, m, n, fs, st in rows
+    ]
+
+
 # ------------------------------------------------------------- one hexagon ---
 # The hexagon is the canonical entity: these endpoints hand over its products
 # (identity, profile, monthly series, period summary, detections), precomputed
@@ -445,7 +470,7 @@ class HexagonSensorProfile(BaseModel):
     first_date: date | None
     last_date: date | None
     active_days: int
-    fire_detections: int
+    fire_detections: float  # fractional when harmonized
     fire_frp_sum: float
     fire_frp_max: float | None
     fire_frp_mean: float | None
@@ -453,11 +478,11 @@ class HexagonSensorProfile(BaseModel):
     high_conf_share: float | None
     day_share: float | None
     peak_date: date | None
-    peak_day_detections: int | None
+    peak_day_detections: float | None
     peak_month: int | None  # 1-12
-    climatology: list[int]  # detections per month of the year, Jan..Dec
-    last_7d: int
-    last_30d: int
+    climatology: list[float]  # detections per month of the year, Jan..Dec
+    last_7d: float
+    last_30d: float
     data_end_date: date | None  # last_7d / last_30d are relative to this day
     static_detections: int
     static_share: float | None
@@ -492,15 +517,51 @@ class HexagonMonth(BaseModel):
     static_detections: int
 
 
+class HexagonHarmonizedMonth(BaseModel):
+    """One month of the series spliced across the MODIS -> VIIRS change, in MODIS units."""
+
+    month: date = Field(validation_alias="acq_month")
+    harmonized_source: Literal["modis", "viirs"]  # MODIS before 2012-02, VIIRS S-NPP / k from then on
+    detections_harmonized: float
+    frp_harmonized: float  # MW, summed over the month
+    m_detections: int | None  # MODIS side, raw (merged duplicates, size-corrected FRP)
+    m_frp_sum: float | None
+    m_satellites: int | None  # 1 = Terra only (before 2002-07)
+    v_detections: int | None  # VIIRS S-NPP side, raw
+    v_frp_sum: float | None
+    k_count: float  # VIIRS / MODIS factor used for this cell
+    k_frp: float
+    k_res: int  # H3 resolution the k comes from: 6 = the cell's own, 0 = global
+
+
+class HexagonReliabilityMonth(BaseModel):
+    """Persistence and reliability of the wildfire detections of one hexagon in one month, per sensor."""
+
+    month: date = Field(validation_alias="acq_month")
+    sensor: Sensor
+    detections: int
+    persistent_detections: int  # another pass of the same sensor within 1.5 km, 1-36 h away
+    persistent_share: float
+    reliability_mean: float  # mean probability that an independent sensor confirms the detection (0-1)
+    reliability_sum: float  # expected number of confirmed detections (to average over several months)
+
+
+class HexagonHarmonized(BaseModel):
+    months: list[HexagonHarmonizedMonth]
+    # Months whose data was fully downloaded for the sensor that defines the series. A month without a row in
+    # `months` is a zero only if it is listed here; otherwise there is no data for it.
+    covered_months: list[date]
+
+
 class HexagonDay(BaseModel):
     date: date
-    detections: int
+    detections: float
     static_detections: int
 
 
 class HexagonPeriodSensor(BaseModel):
     sensor: Sensor
-    fire_detections: int
+    fire_detections: float
     active_days: int
     fire_frp_sum: float
     fire_frp_max: float | None
@@ -566,14 +627,23 @@ def _hexagon(cur: duckdb.DuckDBPyConnection, h3_id: str) -> tuple[int, tuple]:
 
 
 @router.get("/hexagons/{h3_id}")
-def hexagon(h3_id: HexId, cur: Cursor) -> HexagonInfo:
+def hexagon(
+    h3_id: HexId,
+    cur: Cursor,
+    harmonized: Annotated[bool, Query(description="Profile in MODIS units (MODIS merged, VIIRS S-NPP / k)")] = False,
+) -> HexagonInfo:
     """Identity and whole-history profile of a hexagon, one profile per sensor."""
+    if harmonized and not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
     key, (h3, lon, lat, area, boundary, r5, r4, r3, first, last, has_static) = _hexagon(cur, h3_id)
     return HexagonInfo(
         h3=h3, resolution=db.H3_RES, center=(lon, lat), area_km2=area, boundary=json.loads(boundary),
         parents=HexagonParents(r5=r5, r4=r4, r3=r3), first_date=first, last_date=last,
         has_static_source=has_static,
-        profiles=[HexagonSensorProfile(**p) for p in db.hexagon_profiles(cur, key)],
+        profiles=[
+            HexagonSensorProfile(**p)
+            for p in (db.hexagon_profiles_harmonized(cur, key) if harmonized else db.hexagon_profiles(cur, key))
+        ],
     )
 
 
@@ -584,12 +654,44 @@ def hexagon_monthly(h3_id: HexId, cur: Cursor) -> list[HexagonMonth]:
     return [HexagonMonth(month=r.pop("acq_month"), **r) for r in db.hexagon_monthly(cur, key)]
 
 
+@router.get("/hexagons/{h3_id}/harmonized")
+def hexagon_harmonized(h3_id: HexId, cur: Cursor) -> HexagonHarmonized:
+    """Monthly series of the hexagon as ONE continuous series across the MODIS -> VIIRS change (MODIS units).
+
+    Before 2012-02 it is MODIS (bow-tie duplicates merged, size-corrected FRP); from then on VIIRS S-NPP divided
+    by the cell's k. A month with no row had no detection ONLY if it is in `covered_months`; otherwise the data was
+    never downloaded for it (the client should leave a gap, not a zero).
+    """
+    key, _ = _hexagon(cur, h3_id)
+    if not db.harmonized_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    return HexagonHarmonized(
+        months=[HexagonHarmonizedMonth.model_validate(r) for r in db.hexagon_harmonized(cur, key)],
+        covered_months=db.hexagon_covered_months(cur, key),
+    )
+
+
+@router.get("/hexagons/{h3_id}/reliability")
+def hexagon_reliability(h3_id: HexId, cur: Cursor) -> list[HexagonReliabilityMonth]:
+    """Persistence and reliability index of the hexagon's detections, per month and sensor.
+
+    The index is the probability that an independent sensor confirms a detection (logistic on confidence, persistence
+    and FRP; out-of-fold AUC 0.66 MODIS / 0.73 VIIRS): a measure of how likely it is to be seen again, not of how
+    likely it is to be a real fire. To average over several months weight by `detections`.
+    """
+    key, _ = _hexagon(cur, h3_id)
+    if not db.reliability_ready(cur):
+        raise HTTPException(404, "the reliability index has not been built yet")
+    return [HexagonReliabilityMonth.model_validate(r) for r in db.hexagon_reliability(cur, key)]
+
+
 @router.get("/hexagons/{h3_id}/period")
 def hexagon_period(
     h3_id: HexId,
     cur: Cursor,
     start: Annotated[date | None, Query(description="First acquisition date (inclusive)")] = None,
     end: Annotated[date | None, Query(description="Last acquisition date (inclusive)")] = None,
+    harmonized: Annotated[bool, Query(description="In MODIS units (MODIS merged, VIIRS S-NPP / k)")] = False,
 ) -> HexagonPeriod:
     """Profile of the hexagon for a date range, per sensor (continuous series).
 
@@ -597,9 +699,13 @@ def hexagon_period(
     """
     if start and end and end < start:
         raise HTTPException(422, "end must be on or after start")
+    if harmonized and not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
     key, _ = _hexagon(cur, h3_id)
     by_sensor: dict[str, dict] = {}
-    for sensor, satellite, day, daynight, fire, frp_sum, frp_max, high, static in db.hexagon_period(cur, key, start, end):
+    for sensor, satellite, day, daynight, fire, frp_sum, frp_max, high, static in db.hexagon_period(
+        cur, key, start, end, harmonized
+    ):
         s = by_sensor.setdefault(sensor, {"fire": 0, "frp": 0.0, "frp_max": None, "high": 0, "day": 0,
                                           "static": 0, "sats": {}, "daily": {}})
         s["fire"] += fire
@@ -620,10 +726,10 @@ def hexagon_period(
             active_days=sum(1 for f, _ in s["daily"].values() if f > 0),
             fire_frp_sum=s["frp"],
             fire_frp_max=s["frp_max"],
-            high_conf_share=s["high"] / s["fire"] if s["fire"] else None,
+            high_conf_share=s["high"] / s["fire"] if s["fire"] and not harmonized else None,  # no confidence there
             day_share=s["day"] / s["fire"] if s["fire"] else None,
             static_detections=s["static"],
-            satellites=s["sats"],
+            satellites={} if harmonized else s["sats"],
             daily=[HexagonDay(date=d, detections=f, static_detections=st) for d, (f, st) in sorted(s["daily"].items())],
         )
         for sensor, s in sorted(by_sensor.items())

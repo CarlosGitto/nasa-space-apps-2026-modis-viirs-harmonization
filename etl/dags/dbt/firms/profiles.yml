@@ -24,3 +24,5 @@ firms:
           alias: lake
           options:
             data_path: "{{ env_var('FIRMS_LAKE_PATH', '/usr/local/airflow/data/lake') }}/files/"
+            # the catalog keeps the path of the first writer; override it when run from the host (see config.attach_sql)
+            override_data_path: true

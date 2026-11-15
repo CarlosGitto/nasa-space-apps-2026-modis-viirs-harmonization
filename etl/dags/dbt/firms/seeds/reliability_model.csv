@@ -1,0 +1,3 @@
+sensor,intercept,b_conf,b_pairs,b_lfrp,auc_oof,n_train,confirmed_rate
+modis,0.91256,1.48065,1.18446,0.151569,0.664346,113604,0.931279
+viirs,-1.10889,0.236116,0.67831,0.534016,0.729548,577170,0.662001

@@ -22,6 +22,7 @@ function initialLocale() {
 const numberFormats = {
   integer: { maximumFractionDigits: 0, useGrouping: 'always' },
   decimal1: { maximumFractionDigits: 1, useGrouping: 'always' },
+  decimal2: { minimumFractionDigits: 2, maximumFractionDigits: 2 },
   decimal4: { minimumFractionDigits: 4, maximumFractionDigits: 4 },
   percent: { style: 'percent', maximumFractionDigits: 0 },
 }
