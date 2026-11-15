@@ -831,6 +831,65 @@ def _selection_keys(cur: duckdb.DuckDBPyConnection, ids: list[str], start: date 
     return keys
 
 
+class SelectionWeatherQuery(BaseModel):
+    h3: SelectionIds
+    start: date
+    end: date
+
+
+class SelectionWeather(BaseModel):
+    """The map's weather values for the POWER cells under a selection, every day of the range."""
+
+    start: date
+    end: date
+    cell: tuple[float, float]  # POWER cell size (lat, lon), degrees
+    cells: list[tuple[float, float]]  # [lon, lat] of each cell center
+    hexagons: dict[str, int]  # h3 -> index in `cells`
+    # Per day: [t2m_max_c, precipitation_mm, wind_speed_mean_ms, wind_dir_mean_deg] per cell (index order).
+    days: list[tuple[date, list[list[float | None]]]]
+
+
+SELECTION_WEATHER_MAX_DAYS = 366
+
+
+@router.post("/hexagons/selection/weather")
+def selection_weather(body: SelectionWeatherQuery, cur: Cursor) -> SelectionWeather:
+    """Daily weather (NASA POWER, on demand) of the selected hexagons, for the map: max
+    temperature, rain and mean wind of the POWER cell under each hexagon, every day of
+    the range, so the time slider animates it without more requests.
+
+    Hexagons are grouped by POWER cell (0.5° x 0.625°: ~90 hexagons each). A few cells
+    are asked as points (which also warms the panel's cache); more, by region, one
+    request per parameter and 10° box. Cached; 503 if POWER doesn't answer.
+    """
+    yesterday = date.today() - timedelta(days=1)
+    end = min(body.end, yesterday)
+    if end < body.start:
+        raise HTTPException(422, "end must be on or after start (and not in the future)")
+    if (end - body.start).days + 1 > SELECTION_WEATHER_MAX_DAYS:
+        raise HTTPException(422, f"at most {SELECTION_WEATHER_MAX_DAYS} days per request")
+    ids = list(dict.fromkeys(body.h3))
+    try:
+        keys = db.hexagon_keys(cur, ids)
+    except db.InvalidHexagon as e:
+        raise HTTPException(422, str(e)) from None
+    centers = dict(zip(ids, db.hexagon_centers(cur, keys)))
+    try:
+        values = power.map_values(list(centers.values()), body.start, end)
+    except power.PowerUnavailable as e:
+        raise HTTPException(503, f"{e}; try again in a minute") from None
+    cells = sorted(values)
+    index = {c: i for i, c in enumerate(cells)}
+    names = list(power.MAP_PARAMETERS.values())
+    all_days = sorted({d for days in values.values() for d in days})
+    return SelectionWeather(
+        start=body.start, end=end, cell=power.GRID,
+        cells=[(lon, lat) for lat, lon in cells],
+        hexagons={h: index[power.cell_of(*c)] for h, c in centers.items()},
+        days=[(d, [[values[c].get(d, {}).get(n) for n in names] for c in cells]) for d in all_days],
+    )
+
+
 @router.post("/hexagons/selection/summary")
 def selection_summary(body: SelectionSummaryQuery, cur: Cursor) -> list[HexagonSummary]:
     """The hexagons of a selection that have any history, busiest in the chosen dates first.
