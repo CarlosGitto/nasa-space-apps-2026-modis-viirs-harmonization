@@ -1,10 +1,10 @@
 <script setup>
 import { computed, onMounted } from 'vue'
-import { datasetName, date } from './format'
+import { period } from './format'
 import A11yMenu from './components/A11yMenu.vue'
-import BurnCalendar from './components/BurnCalendar.vue'
 import CompareMap from './components/CompareMap.vue'
 import Controls from './components/Controls.vue'
+import FireCalendar from './components/FireCalendar.vue'
 import FireMap from './components/FireMap.vue'
 import LanguageSwitch from './components/LanguageSwitch.vue'
 import LoadingBar from './components/LoadingBar.vue'
@@ -37,7 +37,7 @@ onMounted(() => store.loadDatasets())
       </button>
       <h1 v-if="collapsed" class="sr-only">{{ $t('app.title') }}</h1>
       <p v-if="collapsed" class="rail">
-        {{ $t('app.railSummary', { dataset: datasetName(store.currentDataset), start: date(store.start), end: date(store.end) }) }}
+        {{ $t('app.railSummary', { period: period(store.start, store.end) }) }}
       </p>
       <div v-show="!collapsed" id="sidebar-content" class="panel-content">
         <header>
@@ -51,12 +51,29 @@ onMounted(() => store.loadDatasets())
           </div>
         </header>
         <p v-if="store.error" class="error" role="alert">{{ $t('app.backendDown', { error: store.error }) }}</p>
-        <Controls />
-        <BurnCalendar />
+        <FireCalendar />
+        <div class="view" role="group" :aria-label="$t('controls.view')">
+          <button :aria-pressed="store.view === 'map'" :class="{ on: store.view === 'map' }" @click="store.setView('map')">
+            {{ $t('controls.map') }}
+          </button>
+          <button :aria-pressed="store.view === 'compare'" :class="{ on: store.view === 'compare' }" @click="store.setView('compare')">
+            {{ $t('controls.compare') }}
+          </button>
+        </div>
+        <details class="more">
+          <summary>{{ $t('app.moreControls') }}</summary>
+          <Controls />
+        </details>
       </div>
     </aside>
     <main id="map" class="map-area" tabindex="-1" :aria-label="$t('app.mapArea')">
       <div class="map-slot">
+        <!-- The map is the calendar's "where": it always says which period of the calendar it shows. -->
+        <div v-if="store.view === 'map' && store.start" class="period" aria-hidden="true">
+          <b>{{ period(store.start, store.end) }}</b>
+          <span v-if="store.day" class="day">{{ period(store.day, store.day) }}</span>
+          <small>{{ store.harmonized ? $t('cal.badgeHarmonized') : $t('cal.badgeRaw') }}</small>
+        </div>
         <!-- The main map stays alive (keeps its drawn zone); the curtain is built on demand. -->
         <FireMap v-show="store.view === 'map'" />
         <CompareMap v-if="store.view === 'compare'" />
@@ -71,12 +88,12 @@ onMounted(() => store.loadDatasets())
 <style scoped>
 /* Widths in rem: with a bigger text size the side panels grow with it. */
 .layout {
-  display: grid; grid-template-columns: 21.25rem 1fr; height: 100vh;
+  display: grid; grid-template-columns: 27.5rem 1fr; height: 100vh;
   transition: grid-template-columns 0.2s ease;
 }
-.layout.with-hex { grid-template-columns: 21.25rem 1fr minmax(23.75rem, 34vw); }
+.layout.with-hex { grid-template-columns: 27.5rem 1fr minmax(23.75rem, 32vw); }
 .layout.folded { grid-template-columns: 2.75rem 1fr; }
-.layout.folded.with-hex { grid-template-columns: 2.75rem 1fr minmax(23.75rem, 34vw); }
+.layout.folded.with-hex { grid-template-columns: 2.75rem 1fr minmax(23.75rem, 32vw); }
 :global(html[data-reduce-motion]) .layout { transition: none; }
 .panel {
   position: relative; z-index: 3; min-height: 0; display: flex; flex-direction: column;
@@ -110,7 +127,26 @@ header p { margin: 2px 0 0; font-size: 0.75rem; color: var(--muted); }
 .error { margin: 0; color: var(--danger); font-size: 0.8125rem; }
 .map-area { min-height: 0; display: flex; flex-direction: column; container: map-area / inline-size; }
 .map-area:focus { outline: none; }
-.map-slot { flex: 1; min-height: 0; }
+.map-slot { flex: 1; min-height: 0; position: relative; }
+.period {
+  position: absolute; z-index: 2; top: 12px; left: 50%; transform: translateX(-50%); pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; padding: 6px 14px; border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent); box-shadow: var(--shadow); white-space: nowrap;
+  max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis;
+}
+.period b { font-size: 1.125rem; }
+.period .day { font-size: 0.875rem; font-weight: 600; color: var(--selected); }
+.period small { font-size: 0.6875rem; color: var(--muted); }
+/* Narrow map: under the toolbar instead of next to it. */
+@container map-area (max-width: 44rem) { .period { top: 56px; } }
+.view { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.view button {
+  flex: 1; border: none; background: none; padding: 6px 8px; border-radius: 6px;
+  font: inherit; font-size: 0.8125rem; color: var(--muted); cursor: pointer;
+}
+.view button.on { background: var(--accent); color: var(--on-accent); }
+.more summary { cursor: pointer; font-size: 0.8125rem; font-weight: 600; padding: 4px 0; }
+.more[open] summary { margin-bottom: 8px; }
 @media (max-width: 760px) {
   .layout, .layout.with-hex { grid-template-columns: 1fr; grid-template-rows: auto 60vh; height: auto; }
   .panel { border-right: none; border-bottom: 1px solid var(--border); }

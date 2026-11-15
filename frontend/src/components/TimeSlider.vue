@@ -1,12 +1,14 @@
 <script setup>
 // Time slider under the map: walk the selected range (From → To) one day at a time.
 // The bars are detections per day (same dataset and zone as the map), so the busy
-// days stand out. Moving the handle shows only that day on the map; "All days"
+// days stand out; they take the calendar's color (store.measure): the fire ramp by hotspots or
+// FRP, or, for anomalies, each day against a typical day of its month in the other years. Moving the handle shows only that day on the map; "All days"
 // goes back to the whole range. ▶ plays the days in a loop.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getDaily } from '../api'
+import { getDaily, getHarmonizedDaily, getHarmonizedMonthly, getMonthly } from '../api'
 import { date, num } from '../format'
+import { ANOMALY_RAMP, FIRE_RAMP, anomalyLevel, rampColor } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
 import { useLoadingBar } from '../stores/loading'
 
@@ -19,6 +21,8 @@ const loading = ref(false)
 useLoadingBar('stats', loading)
 const { t } = useI18n()
 const counts = ref({}) // 'YYYY-MM-DD' -> detections
+const frp = ref({}) // 'YYYY-MM-DD' -> FRP sum (MW)
+const monthly = ref(new Map()) // 'YYYY-MM' -> detections, for the anomalies' typical day
 const playing = ref(false)
 let timer = null
 let controller = null
@@ -38,11 +42,44 @@ const days = computed(() => {
 })
 
 const index = computed(() => (store.day ? days.value.indexOf(store.day) : -1))
-const max = computed(() => Math.max(1, ...days.value.map((d) => counts.value[d] ?? 0)))
+// Height and color follow the calendar's measure: FRP for fire power, detections otherwise.
+const valueOf = (d) => (store.measure === 'frp' ? frp.value[d] : counts.value[d]) ?? 0
+const max = computed(() => Math.max(1, ...days.value.map(valueOf)))
 // sqrt scale: quiet days stay visible next to very busy ones.
-const barHeight = (d) => {
+const share = (d) => Math.sqrt(valueOf(d) / max.value)
+const barHeight = (d) => (valueOf(d) ? Math.max(4, 100 * share(d)) : 0)
+
+// Anomalies, as the calendar: a day against a typical day of its month = the mean of that month over the other
+// years whose month is whole in the data, divided by its days. null when there is no other year.
+const pad = (n) => String(n).padStart(2, '0')
+const daysIn = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate()
+function dayRatio(d) {
+  const span = store.span
+  if (!span) return null
+  const [y, m] = [+d.slice(0, 4), +d.slice(5, 7)]
+  const whole = (yy) => `${yy}-${pad(m)}-01` >= span.start && `${yy}-${pad(m)}-${pad(daysIn(yy, m))}` <= span.end
+  const years = []
+  for (let yy = +span.start.slice(0, 4); yy <= +span.end.slice(0, 4); yy++) if (yy !== y && whole(yy)) years.push(yy)
+  if (!years.length) return null
+  const base = years.reduce((a, yy) => a + (monthly.value.get(`${yy}-${pad(m)}`) ?? 0), 0) / years.length / daysIn(y, m)
   const n = counts.value[d] ?? 0
-  return n ? Math.max(4, 100 * Math.sqrt(n / max.value)) : 0
+  return base === 0 ? (n > 0 ? 4 : 1) : n / base
+}
+const NEUTRAL = ANOMALY_RAMP[(ANOMALY_RAMP.length - 1) / 2]
+function barColor(d) {
+  if (store.measure !== 'anomaly') return rampColor(FIRE_RAMP, 0.15 + 0.85 * share(d))
+  const r = dayRatio(d)
+  return r === null ? NEUTRAL : rampColor(ANOMALY_RAMP, anomalyLevel(r))
+}
+function barTitle(d) {
+  const base = store.measure === 'frp'
+    ? t('slider.barFrp', { date: pretty(d), v: fmt(frp.value[d]) })
+    : t('slider.bar', { date: pretty(d), n: fmt(counts.value[d]) })
+  if (store.measure !== 'anomaly') return base
+  const r = dayRatio(d)
+  if (r === null) return `${base} · ${t('cal.noTypical')}`
+  const p = Math.round((r - 1) * 100)
+  return `${base} · ${p === 0 ? t('cal.asTypical') : t(p > 0 ? 'cal.above' : 'cal.below', { p: num(Math.abs(p)) })}`
 }
 
 const fmt = (n) => num(n ?? 0)
@@ -56,15 +93,18 @@ const label = computed(() => `${title.value} · ${subtitle.value}`) // for scree
 
 async function loadCounts() {
   counts.value = {}
-  if (!store.dataset || !store.currentDataset?.available || !days.value.length) return
+  frp.value = {}
+  if (!store.ready || !days.value.length) return
   controller?.abort()
   controller = new AbortController()
   const { signal } = controller
   loading.value = true
   try {
     // The whole range (not just the slider's day), so every bar has its height.
-    const rows = await getDaily(store.dataset, { start: store.start, end: store.end, zone: store.zone }, signal)
+    const params = { start: store.start, end: store.end, zone: store.statsZone }
+    const rows = store.harmonized ? await getHarmonizedDaily(params, signal) : await getDaily(store.dataset, params, signal)
     counts.value = Object.fromEntries(rows.map((r) => [r.date, r.detections]))
+    frp.value = Object.fromEntries(rows.map((r) => [r.date, r.frp_sum ?? 0]))
   } catch (e) {
     if (e.name !== 'AbortError') counts.value = {}
   } finally {
@@ -124,7 +164,25 @@ function showAll() {
   store.setDay(null)
 }
 
-watch(() => [store.dataset, store.start, store.end, store.zone], loadCounts, { immediate: true })
+watch(() => [store.values, store.ready, store.dataset, store.start, store.end, store.statsZone], loadCounts, { immediate: true })
+
+// The months of every year (same values and zone), for the anomalies' typical day: asked only while they're shown.
+let monthlyCtl = null
+async function loadMonthly() {
+  monthly.value = new Map()
+  if (store.measure !== 'anomaly' || !store.ready) return
+  monthlyCtl?.abort()
+  monthlyCtl = new AbortController()
+  const { signal } = monthlyCtl
+  try {
+    const params = { zone: store.statsZone }
+    const rows = store.harmonized ? await getHarmonizedMonthly(params, signal) : await getMonthly(store.dataset, params, signal)
+    monthly.value = new Map(rows.map((r) => [`${r.year}-${pad(r.month)}`, r.detections]))
+  } catch (e) {
+    if (e.name !== 'AbortError') monthly.value = new Map()
+  }
+}
+watch(() => [store.measure, store.values, store.ready, store.dataset, store.statsZone], loadMonthly, { immediate: true })
 // A new range or dataset: stop playing (the day was reset by the store).
 watch(() => [store.dataset, store.start, store.end], stop)
 // The split view has no time slider (each side is a whole period): stop, keep the day for when the map comes back.
@@ -132,6 +190,7 @@ watch(() => store.view, (view) => { if (view !== 'map') stop() })
 onBeforeUnmount(() => {
   stop()
   controller?.abort()
+  monthlyCtl?.abort()
 })
 </script>
 
@@ -156,10 +215,10 @@ onBeforeUnmount(() => {
         <rect
           v-for="(d, i) in days" :key="d"
           :x="i + 0.1" :y="100 - barHeight(d)" width="0.8" :height="barHeight(d)"
-          :class="{ on: d === store.day }"
+          :class="{ on: d === store.day, dim: store.day && d !== store.day }" :style="{ fill: barColor(d) }"
           @click="stop(); select(i)"
         >
-          <title>{{ $t('slider.bar', { date: pretty(d), n: fmt(counts[d]) }) }}</title>
+          <title>{{ barTitle(d) }}</title>
         </rect>
       </svg>
       <input
@@ -192,9 +251,10 @@ onBeforeUnmount(() => {
 .link { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
 .track { position: relative; min-width: 0; }
 .bars { display: block; width: 100%; height: 34px; }
-.bars rect { fill: #fdba74; cursor: pointer; }
-.bars rect:hover { fill: #f97316; }
-.bars rect.on { fill: #b91c1c; }
+/* Colored like the calendar (inline fill). With a day picked, the others step back so it stands out. */
+.bars rect { cursor: pointer; transition: opacity 0.15s; }
+.bars rect.dim { opacity: 0.35; }
+.bars rect:hover { opacity: 1; }
 input[type='range'] { display: block; width: 100%; margin: 2px 0 0; accent-color: var(--accent); }
 input[type='range'].idle { opacity: 0.45; } /* "All days": the handle isn't selecting anything yet */
 .ends { display: flex; justify-content: space-between; white-space: nowrap; font-size: 0.6875rem; color: var(--muted); }

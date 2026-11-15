@@ -72,14 +72,58 @@ export const HEX_FILL_COLOR = ['interpolate', ['linear'], LEVEL, ...FIRE_RAMP.fl
 // Opacity by level too: little activity reads as a faint tint, hot spots as solid.
 export const hexOpacity = (max) => ['interpolate', ['linear'], LEVEL, 0, max * 0.35, 0.5, max * 0.7, 1, max]
 
+// Anomalies (the calendar's and the map's): a value against the same dates of the other years. Violet below,
+// neutral gray as usual, fire colors above: no blue, which reads as "the map cooled down". Lightness is close to
+// symmetric on both arms (OKLab L .38/.61/.82 | .94 | .84/.65/.45). Levels: ¼× .. 1× .. 4× (log2, clamped).
+export const ANOMALY_RAMP = ['#553190', '#8b74c2', '#c9bfe3', '#ecebe8', '#fbbf77', '#ea580c', '#9a1b1b']
+export const HEX_ANOMALY_COLOR = ['interpolate', ['linear'], LEVEL, ...ANOMALY_RAMP.flatMap((c, i) => [i / (ANOMALY_RAMP.length - 1), c])]
+// Opacity by how far from usual: a usual hexagon is a faint tint, big departures (either way) are solid.
+export const anomalyOpacity = (max) => ['interpolate', ['linear'], ['coalesce', ['get', 'strength'], 0], 0, max * 0.2, 1, max]
+export const ANOMALY_LOG2_CLAMP = 2
+// A color x (0..1) along a ramp of hex stops, for HTML/SVG (the calendar's cells, the time slider's bars).
+const rgb = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16))
+export function rampColor(stops, x) {
+  const p = Math.min(1, Math.max(0, x)) * (stops.length - 1)
+  const i = Math.min(stops.length - 2, Math.floor(p))
+  const [a, b] = [rgb(stops[i]), rgb(stops[i + 1])]
+  return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * (p - i))).join(',')})`
+}
+export const anomalyLevel = (ratio) =>
+  (Math.max(-ANOMALY_LOG2_CLAMP, Math.min(ANOMALY_LOG2_CLAMP, Math.log2(Math.max(ratio, 1e-6)))) + ANOMALY_LOG2_CLAMP) / (2 * ANOMALY_LOG2_CLAMP)
+
 const DAY_MS = 86_400_000
-const perArea = (f) => (f.properties.detections / cellArea(f.properties.h3, 'km2')) * 1000
-// Adds `density` (detections per 1,000 km² per day of start..end) to GET /stats/hex features.
-export function withDensity(fc, start, end) {
+export const daysBetween = (start, end) => (start && end ? Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / DAY_MS) + 1) : 1)
+const perArea = (f, field) => ((f.properties[field] ?? 0) / cellArea(f.properties.h3, 'km2')) * 1000
+// Adds `density` (per 1,000 km² per day of start..end) to GET /stats/hex features: of detections, or of FRP (MW)
+// when the color is fire power.
+export function withDensity(fc, start, end, field = 'detections') {
   if (!fc?.features) return fc
-  const days = start && end ? Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / DAY_MS) + 1) : 1
-  for (const f of fc.features) f.properties.density = perArea(f) / days
+  const days = daysBetween(start, end)
+  for (const f of fc.features) f.properties.density = perArea(f, field) / days
   return fc
+}
+
+// Anomalies: each hexagon's detections against its typical (GET .../stats/hex/typical: the same dates of the other
+// years, averaged). `share` = days shown / days of the typical's period (a day of the slider against its range).
+// Hexagons that usually burn then but have nothing now are added (0 detections: the strongest "below").
+// A pseudo-count of 1 keeps a single detection over a typical of 0.1 from reading as 10×.
+export function withAnomaly(fc, typical, share = 1) {
+  const years = typical?.years ?? 0
+  const usual = new Map((typical?.features ?? []).map((f) => [f.properties.h3, f]))
+  const features = [...(fc?.features ?? [])]
+  const seen = new Set(features.map((f) => f.properties.h3))
+  for (const [h3, f] of usual) {
+    if (!seen.has(h3)) features.push({ ...f, properties: { h3, detections: 0, frp_sum: 0, static_detections: 0 } })
+  }
+  for (const f of features) {
+    const p = f.properties
+    if (!years) { Object.assign(p, { level: 0.5, strength: 0, ratio: null, typical: null }); continue }
+    const typ = (usual.get(p.h3)?.properties.detections ?? 0) * share
+    const ratio = (p.detections + 1) / (typ + 1)
+    const level = anomalyLevel(ratio)
+    Object.assign(p, { typical: typ, years, ratio, level, strength: Math.abs(level - 0.5) * 2 })
+  }
+  return { ...fc, features }
 }
 
 // Stops of the relative scale, in ln(density): p5, p50, p90 and p99 of the given
@@ -126,11 +170,19 @@ export const STATIC_COLOR = '#6b7280'
 // id from our own API, so the HTML stays safe.
 const t = (key, values) => i18n.global.t(key, values)
 
+// "35% more than usual" / "60% less than usual" / "as usual" (the calendar's wording).
+const anomalyText = (ratio) => {
+  const p = Math.round((ratio - 1) * 100)
+  if (p === 0) return t('cal.asTypical')
+  return `<b>${t(p > 0 ? 'cal.above' : 'cal.below', { p: num(Math.abs(p)) })}</b>`
+}
+
 // p.h3 is the cell's fixed H3 id: the same id is always the same place.
 // `hint` tells what a click does (zoom in, or open the panel).
 export const hexPopup = (p, hint = '') =>
   `<b>${fmt(p.detections)}</b> ${t('map.popup.detections')}<br>${t('map.popup.frpTotal')}: ${fmt(p.frp_sum)} MW<br>` +
   (p.density !== undefined ? `<span class="popup-muted">${t('map.popup.density', { n: fmt(p.density) })}</span><br>` : '') +
+  (p.ratio !== undefined && p.ratio !== null ? `${anomalyText(p.ratio)}<br><span class="popup-muted">${t('map.popup.typical', { n: fmt(p.typical), years: p.years })}</span><br>` : '') +
   (p.static_detections ? `<span class="popup-static">${t('map.popup.static', { n: fmt(p.static_detections) })}</span><br>` : '') +
   `<span class="popup-muted">${t('map.popup.cell', { id: p.h3 })}</span>` +
   (hint ? `<br><span class="popup-muted">${hint}</span>` : '')
@@ -155,3 +207,10 @@ export const mapLocale = () => ({
   'NavigationControl.ZoomIn': i18n.global.t('map.zoomIn'),
   'NavigationControl.ZoomOut': i18n.global.t('map.zoomOut'),
 })
+
+// Zoom a map to a region's [w, s, e, n] (null = the whole world), animated unless the user asked for less motion.
+export function fitRegion(map, box, reduceMotion) {
+  const duration = reduceMotion ? 0 : 900
+  if (!box) return map.easeTo({ center: [0, 20], zoom: 1.5, duration, essential: true })
+  map.fitBounds([[box[0], box[1]], [box[2], box[3]]], { padding: 32, maxZoom: 7, duration, essential: true })
+}

@@ -37,6 +37,15 @@ export const listDatasets = () => get('/datasets')
 export const getDetections = (dataset, params, signal) =>
   get(`/datasets/${dataset}/detections`, params, signal)
 
+// Link that downloads every detection (hotspot) of a search as CSV: same filters as getDetections.
+export function detectionsCsvUrl(dataset, params) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== '') query.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
+  }
+  return `${BASE}/datasets/${dataset}/detections.csv?${query}`
+}
+
 export const getHexagons = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/hex`, params, signal)
 
@@ -46,9 +55,14 @@ export const getMonthly = (dataset, params, signal) =>
 export const getHarmonizedMonthly = (params, signal) => get('/stats/harmonized/monthly', params, signal)
 // Hexagons of the harmonized series (MODIS before 2012-02, VIIRS S-NPP / k after), same shape as getHexagons.
 export const getHarmonizedHexagons = (params, signal) => get('/stats/harmonized/hex', params, signal)
+// Typical hexagons of a period (anomalies): the same dates in the other years, averaged; plus `years`.
+export const getHexagonsTypical = (dataset, params, signal) => get(`/datasets/${dataset}/stats/hex/typical`, params, signal)
+export const getHarmonizedHexagonsTypical = (params, signal) => get('/stats/harmonized/hex/typical', params, signal)
 
 export const getDaily = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/daily`, params, signal)
+// The harmonized series per day (MODIS units, 2000 onward), same shape as getDaily.
+export const getHarmonizedDaily = (params, signal) => get('/stats/harmonized/daily', params, signal)
 
 // One hexagon (fixed H3 res-6 cell). Identity + whole-history profile and the monthly
 // series only change when the ETL runs: cache them for the session.
