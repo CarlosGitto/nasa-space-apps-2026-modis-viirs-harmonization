@@ -1,85 +1,121 @@
 version: 2
 
-# Tests are shared between NRT and SP through YAML anchors (&name / *name).
+# Tests are shared through YAML anchors (&name / *name). Views in staging/ are not
+# tested directly (it would rescan bronze every run): their output is tested in
+# the intermediate tables.
 
 models:
-  # ---------------- silver: light normalization, invalid rows flagged ----------------
-  - name: silver_modis_nrt
-    description: >
-      MODIS NRT detections from the lake, normalized, latest version per
-      detection. Invalid rows are kept with the reason in dq_issue (null = valid).
-    columns: &silver_columns
+  # ---------------- silver / intermediate: one table per product ----------------
+  - name: int_detections_sp
+    description: Every SP detection (MODIS + 3 VIIRS satellites), latest version per detection_id. Invalid rows kept, flagged in dq_issue.
+    data_tests: &detection_unique
+      - unique_combination:
+          arguments: {columns: [detection_id], recent_only: true}
+    columns: &int_columns
       - name: dq_issue
         data_tests:
           - accepted_values:
-              arguments:
-                values: [missing_key, invalid_coordinates, invalid_brightness, invalid_frp, invalid_confidence, invalid_daynight]
+              arguments: {values: [missing_key, invalid_coordinates, invalid_brightness, invalid_frp, invalid_confidence, invalid_daynight]}
+      - name: product
+        data_tests: [{accepted_values: {arguments: {values: [sp, nrt]}}}]
+      - name: sensor
+        data_tests: [{accepted_values: {arguments: {values: [modis, viirs]}}}]
 
-  - name: silver_viirs_nrt
-    description: VIIRS NRT detections (all VIIRS satellites), same rules as silver_modis_nrt.
-    columns: *silver_columns
+  - name: int_detections_nrt
+    description: Every NRT detection (MODIS + VIIRS satellites), latest version per detection_id. Invalid rows kept, flagged in dq_issue.
+    data_tests: *detection_unique
+    columns: *int_columns
 
-  - name: silver_modis_sp
-    description: MODIS Standard Processing detections, same rules as silver_modis_nrt.
-    columns: *silver_columns
+  - name: int_static_sources
+    description: Mask of static heat sources (res-8 cells + k=1 neighbours) built from SP non-vegetation detections on >= 2 days.
+    columns:
+      - name: h3_r8
+        data_tests: [unique, not_null]
+      - name: fire_type
+        data_tests: [{accepted_values: {arguments: {values: [1, 2, 3], quote: false}}}]
 
-  - name: silver_viirs_sp
-    description: VIIRS Standard Processing detections, same rules as silver_modis_nrt.
-    columns: *silver_columns
+  # ---------------- gold: everything about the hexagon (h3_r6) ----------------
+  - name: dim_hexagon
+    description: The canonical entity. One row per resolution-6 hexagon that ever had a detection.
+    # Contract: the backend and other consumers rely on these columns and types.
+    columns:
+      - {name: h3_r6, data_type: ubigint, description: "H3 resolution-6 cell id. Fixed forever; h3_id is the same id as text.", data_tests: [unique, not_null]}
+      - {name: h3_id, data_type: varchar}
+      - {name: center_lat, data_type: double}
+      - {name: center_lon, data_type: double}
+      - {name: area_km2, data_type: double, description: "Real cell area (varies about ±20% with location); use it for densities.", data_tests: [not_null]}
+      - {name: boundary_wkt, data_type: varchar}
+      - {name: h3_r5, data_type: ubigint}
+      - {name: h3_r4, data_type: ubigint}
+      - {name: h3_r3, data_type: ubigint}
+      - {name: first_date, data_type: date}
+      - {name: last_date, data_type: date}
+      - {name: fire_detections_total, data_type: bigint, description: Preferred rows only (SP + NRT not double counted).}
+      - {name: static_detections_total, data_type: bigint}
+      - {name: has_static_source, data_type: boolean}
 
-  # ---------------- gold: views over silver, only clean rows + lineage ----------------
-  - name: gold_modis_nrt
-    description: Clean MODIS NRT detections (silver rows with no dq_issue).
-    data_tests: &gold_key_test
+  - name: fct_hexagon_detections
+    description: >
+      Detail of the hexagon: one row per valid detection, SP and NRT together.
+      Filter is_preferred for one continuous series; is_static_source marks heat
+      that is not a wildfire.
+    data_tests:
+      - unique_combination:
+          arguments: {columns: [detection_id, product], recent_only: true}
+    columns:
+      - name: h3_r6
+        data_tests: [not_null]
+      - name: is_preferred
+        data_tests: [not_null]
+      - name: is_static_source
+        data_tests: [not_null]
+      - name: acq_datetime_utc
+        data_tests: [not_null]
+      - name: product
+        data_tests: [{accepted_values: {arguments: {values: [sp, nrt]}}}]
+      - name: sensor
+        data_tests: [{accepted_values: {arguments: {values: [modis, viirs]}}}]
+      - name: satellite
+        description: Normalized from FIRMS codes (T/A/N/N20/N21).
+        data_tests: [{accepted_values: {arguments: {values: [Terra, Aqua, S-NPP, NOAA-20, NOAA-21]}}}]
+      - name: confidence_level
+        description: low / nominal / high (MODIS <30 / 30-79 / >=80; VIIRS l / n / h).
+        data_tests: [{accepted_values: {arguments: {values: [low, nominal, high]}}}]
+      - name: fire_type
+        description: SP `type` (0 vegetation, 1 volcano, 2 static land source, 3 offshore); null in NRT.
+        data_tests: [{accepted_values: {arguments: {values: [0, 1, 2, 3], quote: false}}}]
+
+  - name: fct_hexagon_daily
+    description: >
+      Metrics of the hexagon: hexagon x day x product x sensor x satellite x day/night.
+      Fire metrics exclude static sources, which are counted apart. No row means
+      "no detection", not "no fire".
+    data_tests:
       - unique_combination:
           arguments:
-            columns: [latitude, longitude, acq_date, acq_time, satellite]
-            recent_only: true  # months touched by the latest load
-    columns: &gold_modis_columns
+            columns: [h3_r6, acq_date, product, sensor, satellite, daynight]
+            recent_only: true
+            load_col: last_load_id
+    # Contract: the backend and other consumers rely on these columns and types.
+    columns:
       - name: h3_r6
-        description: H3 resolution-6 cell (UBIGINT) of the detection's center; the project's fixed spatial unit.
-        data_tests: [not_null]
-      - name: acq_datetime_utc
-        data_tests: [not_null]
-      - name: confidence
-        description: 0-100.
-        data_tests: [not_null]
-      - name: daynight
-        data_tests: &daynight_test
-          - accepted_values:
-              arguments:
-                values: [D, N]
-      - name: _dlt_load_id
-        description: Load that produced this version (see _dlt_loads in the lake).
-        data_tests: [not_null]
-
-  - name: gold_viirs_nrt
-    description: Clean VIIRS NRT detections (silver rows with no dq_issue).
-    data_tests: *gold_key_test
-    columns: &gold_viirs_columns
-      - name: h3_r6
-        description: H3 resolution-6 cell (UBIGINT) of the detection's center; the project's fixed spatial unit.
-        data_tests: [not_null]
-      - name: acq_datetime_utc
-        data_tests: [not_null]
-      - name: confidence
-        description: l (low) / n (nominal) / h (high).
+        data_type: ubigint
         data_tests:
-          - accepted_values:
-              arguments:
-                values: [l, n, h]
-      - name: daynight
-        data_tests: *daynight_test
-      - name: _dlt_load_id
-        description: Load that produced this version (see _dlt_loads in the lake).
-        data_tests: [not_null]
-
-  - name: gold_modis_sp
-    description: Clean MODIS Standard Processing detections.
-    data_tests: *gold_key_test
-    columns: *gold_modis_columns
-
-  - name: gold_viirs_sp
-    description: Clean VIIRS Standard Processing detections.
-    data_tests: *gold_key_test
-    columns: *gold_viirs_columns
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_hexagon'), field: h3_r6}
+      - {name: acq_date, data_type: date}
+      - {name: acq_month, data_type: date}
+      - {name: product, data_type: varchar}
+      - {name: sensor, data_type: varchar}
+      - {name: satellite, data_type: varchar}
+      - {name: daynight, data_type: varchar, data_tests: [{accepted_values: {arguments: {values: [D, N]}}}]}
+      - {name: is_preferred, data_type: boolean}
+      - {name: fire_detections, data_type: bigint}
+      - {name: fire_frp_sum, data_type: double}
+      - {name: fire_frp_max, data_type: double}
+      - {name: fire_frp_mean, data_type: double}
+      - {name: fire_high_conf, data_type: bigint}
+      - {name: static_detections, data_type: bigint}
+      - {name: static_frp_sum, data_type: double}
+      - {name: last_load_id, data_type: varchar}

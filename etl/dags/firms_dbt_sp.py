@@ -1,9 +1,14 @@
 """
-## FIRMS dbt — Standard Processing
+## FIRMS dbt — SP
 
-Runs the dbt models tagged `sp` (`silver.*_sp` → `gold.*_sp`) whenever
-`firms_ingest_sp` updates the `firms_raw_sp` asset. One Cosmos task per
-model and test; MODIS and VIIRS stay on separate paths.
+Runs the dbt models tagged `sp` and everything downstream (`tag:sp+`) whenever
+`firms_ingest_sp` updates the `firms_raw_sp` asset:
+
+`stg_firms__*_sp` (silver views) → `int_detections_sp` (silver) → gold
+(`fct_hexagon_detections`, `fct_hexagon_daily`, `dim_hexagon`) and the static-source mask (`int_static_sources`).
+
+One Cosmos task per model and test; every task writes through the single-writer
+`ducklake` pool.
 """
 
 # Airflow only parses files that mention both "airflow" and "dag" (DAG discovery
@@ -24,7 +29,7 @@ firms_dbt_sp = DbtDag(
     project_config=project_config,
     profile_config=profile_config,
     execution_config=execution_config,
-    render_config=RenderConfig(select=["tag:sp"]),
+    render_config=RenderConfig(select=["tag:sp+"]),  # its branch + everything downstream (gold)
     operator_args=dict(operator_args),
     default_args={"owner": "etl", "retries": 1},
     doc_md=__doc__,

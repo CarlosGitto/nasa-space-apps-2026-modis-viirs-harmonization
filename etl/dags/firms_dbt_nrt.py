@@ -1,9 +1,14 @@
 """
 ## FIRMS dbt — NRT
 
-Runs the dbt models tagged `nrt` (`silver.*_nrt` → `gold.*_nrt`) whenever
-`firms_ingest_nrt` updates the `firms_raw_nrt` asset. One Cosmos task per
-model and test; MODIS and VIIRS stay on separate paths.
+Runs the dbt models tagged `nrt` and everything downstream (`tag:nrt+`) whenever
+`firms_ingest_nrt` updates the `firms_raw_nrt` asset:
+
+`stg_firms__*_nrt` (silver views) → `int_detections_nrt` (silver) → gold
+(`fct_hexagon_detections`, `fct_hexagon_daily`, `dim_hexagon`).
+
+One Cosmos task per model and test; every task writes through the single-writer
+`ducklake` pool.
 """
 
 # Airflow only parses files that mention both "airflow" and "dag" (DAG discovery
@@ -24,7 +29,7 @@ firms_dbt_nrt = DbtDag(
     project_config=project_config,
     profile_config=profile_config,
     execution_config=execution_config,
-    render_config=RenderConfig(select=["tag:nrt"]),
+    render_config=RenderConfig(select=["tag:nrt+"]),  # its branch + everything downstream (gold)
     operator_args=dict(operator_args),
     default_args={"owner": "etl", "retries": 1},
     doc_md=__doc__,
