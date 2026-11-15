@@ -25,7 +25,7 @@ DEV_START     := 2025-01-01
 DEV_NRT_START := 2026-08-01
 
 .DEFAULT_GOAL := help
-.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev etl-seed-weather-dev etl-reprocess backend-setup backend-dev backend-test frontend-setup frontend-dev frontend-lint
+.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev etl-seed-weather-dev etl-load-local etl-reprocess etl-harmonize etl-lake-perms backend-setup backend-dev backend-test frontend-setup frontend-dev frontend-lint
 
 help: ## List available commands
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -68,12 +68,28 @@ etl-seed-weather-dev: ## Load the weather around the dev dataset's fires (NASA P
 	cd $(ETL_DIR) && astro dev run dags trigger weather_ingest \
 		--conf "{\"area\": \"$(DEV_AREA)\", \"start_date\": \"$(DEV_START)\"}"
 
+etl-load-local: ## Load FIRMS CSVs you already downloaded into the lake: make etl-load-local DIR=path/to/csvs [ARGS="--dry-run"]
+	@test -n "$(DIR)" || { echo 'usage: make etl-load-local DIR=path/to/csvs [ARGS="--dry-run --product MODIS_SP ..."]'; exit 1; }
+	@# umask 000: Airflow runs as another user (uid 50000) and must be able to write next to what we create.
+	@# Stop Airflow's writers first (one writer at a time). Then `make etl-reprocess` builds silver and gold from it.
+	cd $(ETL_DIR) && umask 000 && FIRMS_LAKE_PATH=$(abspath $(DATA_DIR))/lake uv run python -m include.firms.load_local --root "$(abspath $(DIR))" $(ARGS)
+
 etl-reprocess: ## Rebuild silver + gold from the raw data already loaded, no download (Airflow running)
 	@# Full refresh of every dbt model in dependency order: bronze stays, silver and gold are rebuilt.
 	@# Parse the DAGs first (~10 s): a just-added DAG isn't known until the dag-processor's next pass.
 	cd $(ETL_DIR) && astro dev run dags reserialize
 	cd $(ETL_DIR) && astro dev run dags unpause firms_dbt_reprocess
 	cd $(ETL_DIR) && astro dev run dags trigger firms_dbt_reprocess
+
+etl-lake-perms: ## After writing to the lake from a terminal (local dbt, loader): let Airflow write next to it
+	@# DuckDB creates folders with mode 755 whatever the umask: Airflow (uid 50000) could read but not write them.
+	chmod -R a+rwX $(DATA_DIR)/lake/files 2>/dev/null || true
+
+etl-harmonize: ## Build the harmonized MODIS + VIIRS data (k, merged MODIS, MODIS-units layers, reliability) from silver + gold (Airflow running)
+	@# Runs by itself after firms_dbt_sp / firms_dbt_nrt; this is for the first build or after changing a harmonized model.
+	cd $(ETL_DIR) && astro dev run dags reserialize
+	cd $(ETL_DIR) && astro dev run dags unpause firms_dbt_harmonize
+	cd $(ETL_DIR) && astro dev run dags trigger firms_dbt_harmonize
 
 # --- backend (FastAPI) -------------------------------------------------------
 

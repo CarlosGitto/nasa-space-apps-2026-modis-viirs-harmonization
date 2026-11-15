@@ -213,7 +213,8 @@ const summary = computed(() => {
   const { modis, viirs } = counts.value
   const value = (n) => (n === null ? t('common.noData') : fmt(n))
   const ratio = modis && viirs ? t('curtain.ratio', { r: fmt(viirs / modis) }) : ''
-  return t('curtain.summary', { modis: value(modis), viirs: value(viirs) }) + ratio
+  const units = store.compareHarmonized && result.value?.kind === 'hex' ? t('harm.modisUnitsSuffix') : ''
+  return t('curtain.summary', { modis: value(modis), viirs: value(viirs) }) + ratio + units
 })
 const truncated = computed(() => result.value?.kind === 'points' && (result.value.modis?.truncated || result.value.viirs?.truncated))
 
@@ -291,6 +292,12 @@ watch(() => prefs.contrast, () => { if (bothReady()) for (const m of [maps.left,
           <option v-for="o in RIGHT_IMAGERY" :key="o.id" :value="o.id">{{ imageryLabel(o) }}</option>
         </select>
       </label>
+      <label>{{ $t('harm.values') }}
+        <select v-model="store.compareHarmonized">
+          <option :value="false">{{ $t('harm.raw') }}</option>
+          <option :value="true">{{ $t('harm.harmonizedUnits') }}</option>
+        </select>
+      </label>
       <label>{{ $t('curtain.detections') }}
         <select v-model="detMode">
           <option value="side">{{ $t('curtain.modeSide') }}</option>
@@ -298,6 +305,7 @@ watch(() => prefs.contrast, () => { if (bothReady()) for (const m of [maps.left,
           <option value="none">{{ $t('curtain.modeNone') }}</option>
         </select>
       </label>
+      <span v-if="store.compareHarmonized" class="hint">{{ $t('harm.curtainHint') }}</span>
       <span class="hint">{{ $t('curtain.hint') }}</span>
     </div>
 

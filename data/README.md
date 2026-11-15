@@ -164,6 +164,77 @@ affects new loads. To go from South America to **the whole world**:
 (hours of downloads, tens of GB of fire data plus little weather: daily values near
 the fires; the weather follows as the world's fires land).
 
+## Loading files you already downloaded
+
+If you have FIRMS CSVs from somewhere else (the Area API, one file per request), you can put them in the lake
+without downloading anything again. Any folder layout works; the product in the file name (`MODIS_SP`,
+`VIIRS_NOAA20_SP`, `VIIRS_SNPP_NRT`, ...) decides the bronze table, and files that aren't a FIRMS CSV (wrong
+header, no rows, no product in the name) are skipped and reported.
+
+```bash
+make etl-load-local DIR=/path/to/csvs ARGS="--dry-run"     # what it found and what it would load; touches nothing
+make etl-load-local DIR=/path/to/csvs                      # load it
+make etl-reprocess                                         # silver + gold from the raw data (Airflow running)
+```
+
+It stages the files as Parquet (typed, the same detection found in several files kept once) and appends them
+with the same dlt pipeline as the API loads, so the rows are indistinguishable from API loads: dbt keeps the
+latest version of each detection, whatever its origin. Lineage columns say where each row came from:
+`_firms_url` is `local-file://<path relative to DIR>`, `_firms_area` the bbox of the file (see below) or
+`local:<label>`, `_extracted_at` the file's modification time.
+
+- **Load order matters.** Silver keeps, for each detection, the row of the *latest load*, not of the newest data:
+  a file loaded after an API load replaces that API row if both describe the same detection (same place, time and
+  satellite). Load old files first, or load only what the lake doesn't have (`--since`/`--until`, `--product`).
+- **Large backfills: load and build by year.** Tested with 12.6 M detections (9,281 files, 2012–2025, 4 products):
+  the load takes ~3 min, but one `dbt build --full-refresh` over everything runs out of memory (even with 5 GB).
+  Slicing works: for each year run `--since YYYY-01-01 --until YYYY-12-31`, then an incremental `dbt build`
+  (the models are incremental by month). Measured per slice (~3–4 M rows): load 50–65 s, ~2 GB peak;
+  dbt 65–140 s, 4–5.6 GB peak (51/51 models pass). Load years oldest first (see load order).
+- **Record what was downloaded, not only what has fire.** A window with no detections leaves no row, so "no
+  detection" cannot be told from "no data" without a record of the windows. The loader registers every dated file,
+  header-only ones included, in `firms_raw.download_windows`, and dbt (`fct_area_coverage_monthly`) turns it into
+  complete months per area. Files named with only a start date need `--window-days N` (the days that window
+  covers, capped at the end of the year): the downloads in `firms/year/` are 5-day windows, so
+  `--root firms/year --window-days 5`. `--windows-only` records the windows without loading detections (to backfill).
+- Files already loaded (same path, size and modification time) are skipped; the register is the table
+  `firms_raw.local_files_loaded`. `--force` loads them again.
+- `--areas areas.json` fills `_firms_area` from the label in front of the product in the file name
+  (`{"AR_north": "-73.6,-55,-53.6,-21.8"}`); without it the label is kept as `local:AR_north`.
+- Narrow the load with `--product`, `--prefix` (that label), `--since`/`--until` (days written in the file name)
+  and `--exclude` (globs). `make etl-load-local ARGS="--help"` lists everything.
+- Airflow must not be writing to the lake meanwhile (the catalog accepts one writer): pause the ingest and dbt
+  DAGs or stop Airflow first. DuckDB creates folders with mode 755 whatever the umask, so the loader opens the permissions
+  of what it wrote at the end (otherwise Airflow, another user, fails with "Permission denied"); after any other terminal
+  write (local dbt) run `make etl-lake-perms`.
+- The catalog keeps the data path of whoever wrote first (inside Airflow it is `/usr/local/airflow/data/lake/files/`); every
+  connection from outside Docker overrides it (`OVERRIDE_DATA_PATH`), so it does not matter who writes first.
+- The loaded days aren't limited to the dev dataset (South America, 2025 onward): the lake takes any area
+  and period, and the scheduled runs go on as before.
+
+## Harmonized data (MODIS and VIIRS on equal terms)
+
+MODIS and VIIRS do not see the same fire the same way: VIIRS has ~4x the detections per hexagon (smaller pixel) and
+MODIS inflates its FRP at the scan edge (bow-tie). The `firms_dbt_harmonize` DAG builds, on top of silver and gold, the
+layers that put both in the same units (MODIS units). All of it is dbt, tagged `harmonized`
+(`etl/dags/dbt/firms/models/harmonized/`), and runs by itself after `firms_dbt_sp` / `firms_dbt_nrt` (they update the
+`firms_gold` asset). First build or after a change: `make etl-harmonize`.
+
+| Model | What |
+|---|---|
+| seed `k_cell` | VIIRS S-NPP / MODIS factor per H3 cell (FRP and counts), **frozen**: hierarchical shrinkage global -> r2..r6, chosen by year-parity cross-validation. Calibrated on 2013-2025 where both sensors have complete data (4 areas: delta, Iberá, Zambia, AR_north); elsewhere the cell's ancestor or the global k. Scripts and method: `data_exploration/k_cell/` |
+| `hrm_cell_k` | k of every hexagon: own cell > nearest ancestor > global (`k_res` says which) |
+| `hrm_modis_merged` | MODIS with bow-tie duplicates merged (same pass, within half a pixel along track and along scan) and FRP corrected for pixel size |
+| `fct_hexagon_harmonized_daily` | hexagon x day x sensor, both in MODIS units (VIIRS S-NPP divided by k). Feeds the Compare view, the calendar and the hexagon report |
+| `fct_hexagon_harmonized_monthly` | the one series across the 2012 change: MODIS before 2012-02, VIIRS S-NPP / k after |
+| `fct_area_coverage_monthly` | which area-months were really downloaded; tells "no detection" from "no data". Needs `firms_raw.download_windows` (see above) |
+| seed `reliability_model`, `hrm_detection_reliability`, `fct_hexagon_reliability_monthly` | persistence (neighbours of the same sensor within 1.5 km and 1-36 h) and the reliability index: P(an independent sensor confirms the detection), logistic on confidence, persistence and FRP, frozen coefficients (`data_exploration/reliability/`) |
+
+Limits worth knowing: only S-NPP is on the VIIRS side (k was calibrated on it); the k outside the 4 calibrated areas is a
+regional or global guess; the reliability index is a proxy (confirmation by another sensor, out-of-fold AUC 0.66 MODIS /
+0.73 VIIRS, 2019 only), not truth. A huge first build of `hrm_detection_reliability` can run by month:
+`dbt build -s hrm_detection_reliability --vars '{only_months: ["2019-01-01", "2019-02-01"]}'`.
+
 ## Setup (once per machine)
 
 `make etl-setup` does it. Airflow runs as uid 50000 inside the containers and

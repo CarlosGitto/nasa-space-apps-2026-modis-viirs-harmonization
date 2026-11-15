@@ -5,7 +5,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getHexagonPeriod } from '../../api'
-import { date, errorMessage } from '../../format'
+import { date, errorMessage, notBuilt } from '../../format'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import { useFiltersStore } from '../../stores/filters'
 import { useLoadingBar } from '../../stores/loading'
@@ -24,6 +24,8 @@ const loading = ref(false)
 useLoadingBar('panel', loading)
 let controller = null
 
+const h = computed(() => store.hexHarmonized) // MODIS units: counts are fractional, no confidence or satellite there
+const n = (v) => num(v, h.value ? 1 : 0)
 const range = computed(() => ({ start: store.queryParams.start, end: store.queryParams.end }))
 
 async function load() {
@@ -32,7 +34,7 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    period.value = await getHexagonPeriod(props.h3, range.value, controller.signal)
+    period.value = await getHexagonPeriod(props.h3, { ...range.value, harmonized: h.value || null }, controller.signal)
   } catch (e) {
     if (e.name === 'AbortError') return
     error.value = e
@@ -40,17 +42,18 @@ async function load() {
   }
   loading.value = false
 }
-watch(() => [props.h3, range.value.start, range.value.end], load, { immediate: true })
+watch(() => [props.h3, range.value.start, range.value.end, h.value], load, { immediate: true })
 onBeforeUnmount(() => controller?.abort())
 
 const mw = (v, digits = 0) => t('common.mw', { v: num(v, digits) })
 
 const kpis = (s) => [
-  { label: t('ficha.detections'), value: num(s.fire_detections) },
+  { label: t('ficha.detections'), value: n(s.fire_detections) },
   { label: t('ficha.activeDays'), value: num(s.active_days) },
   { label: t('ficha.frpTotal'), value: mw(s.fire_frp_sum) },
   { label: t('ficha.frpMax'), value: mw(s.fire_frp_max, 1) },
-  { label: t('ficha.highConf'), value: pct(s.high_conf_share) },
+  // Confidence has no MODIS-units equivalent: left out when harmonized.
+  ...(h.value ? [] : [{ label: t('ficha.highConf'), value: pct(s.high_conf_share) }]),
   { label: t('ficha.daytime'), value: pct(s.day_share) },
 ]
 
@@ -74,9 +77,12 @@ const dailySeries = computed(() => {
   <article class="ficha">
     <header class="identity">
       <code>{{ h3 }}</code>
-      <span class="muted">{{ $t('ficha.periodRange', { start: date(range.start), end: date(range.end) }) }}</span>
+      <span class="muted">
+        {{ $t('ficha.periodRange', { start: date(range.start), end: date(range.end) }) }}{{ h ? $t('harm.modisUnitsSuffix') : '' }}
+      </span>
     </header>
     <p v-if="loading && !period" class="muted">{{ $t('common.loading') }}</p>
+    <p v-else-if="notBuilt(error)" class="muted">{{ $t('harm.notBuilt') }}</p>
     <p v-else-if="error?.status === 404" class="muted">{{ $t('ficha.noHistory') }}</p>
     <p v-else-if="error" class="error" role="alert">{{ errorMessage(error) }}</p>
     <template v-else-if="period">
@@ -89,14 +95,14 @@ const dailySeries = computed(() => {
             <dd>{{ k.value }}</dd>
           </div>
         </dl>
-        <p v-if="s.fire_detections" class="muted small">{{ $t('ficha.bySatellite', { list: satellites(s) }) }}</p>
-        <p v-if="s.static_detections" class="muted small">{{ $t('ficha.staticPeriod', { n: num(s.static_detections) }) }}</p>
+        <p v-if="s.fire_detections && !h" class="muted small">{{ $t('ficha.bySatellite', { list: satellites(s) }) }}</p>
+        <p v-if="s.static_detections && !h" class="muted small">{{ $t('ficha.staticPeriod', { n: num(s.static_detections) }) }}</p>
       </section>
       <section v-if="dailySeries">
         <h3>{{ $t('ficha.daily') }}</h3>
         <MiniChart
-          :option="sensorBars(dailySeries.categories, dailySeries.bySensor)"
-          :label="chartLabel($t('ficha.daily'), dailySeries.categories, dailySeries.bySensor)"
+          :option="sensorBars(dailySeries.categories, dailySeries.bySensor, { decimals: h ? 1 : 0 })"
+          :label="chartLabel($t('ficha.daily'), dailySeries.categories, dailySeries.bySensor, h ? 1 : 0)"
         />
       </section>
     </template>

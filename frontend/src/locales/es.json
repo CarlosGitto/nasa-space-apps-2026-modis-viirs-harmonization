@@ -321,5 +321,52 @@
       "loadedFor": "Datos cargados para este lugar: {coverage}.",
       "see": "Ver {start} → {end}"
     }
+  },
+  "harm": {
+    "values": "Valores",
+    "raw": "Originales",
+    "harmonized": "Armonizados",
+    "harmonizedUnits": "Armonizados (unidades MODIS)",
+    "modisUnitsSuffix": " · unidades MODIS",
+    "curtainHint": "Armonizados: MODIS con los duplicados de bow-tie fusionados y el FRP corregido por tamaño; VIIRS S-NPP dividido por el factor k de cada hexágono (VIIRS / MODIS, calibrado donde los dos sensores tienen datos completos; si no, el k regional o global). Los dos lados quedan en unidades MODIS, así que deberían parecerse. De cerca, los puntos siguen siendo las detecciones originales.",
+    "fichaValues": "Valores de la ficha",
+    "fichaNote": "MODIS fusionado · VIIRS S-NPP ÷ k · unidades MODIS",
+    "calendarValues": "Valores del calendario",
+    "calendarHint": "Una sola serie de 2000 a hoy en unidades MODIS: MODIS hasta enero de 2012, VIIRS S-NPP ÷ k desde febrero de 2012.",
+    "calendarRawHint": "Datos del dataset elegido, sin ajustar.",
+    "calendarLabel": "Calendario de quema armonizado (unidades MODIS): detecciones por mes y año. Mes con más actividad: {month} {year}, con {n} detecciones.",
+    "detectionsModis": "{n} detecciones (unidades MODIS)",
+    "detectionsUnit": "detecciones",
+    "notBuilt": "Los datos armonizados todavía no se generaron (make etl-harmonize).",
+    "historyNote": "Valores armonizados: unidades MODIS (VIIRS ÷ k de la celda).",
+    "monthlyModis": "Detecciones por mes · unidades MODIS",
+    "monthly": "Mensual",
+    "mean12": "Media 12 meses",
+    "show": "Mostrar",
+    "labelSpan": "de {start} a {end}",
+    "labelPeak": "mes más alto: {month}, {value}",
+    "labelTrend": "media de 12 meses entre {min} y {max}",
+    "k": {
+      "note": "k (VIIRS / MODIS): FRP {frp}, detecciones {count} · {source}",
+      "own": "propio de la celda",
+      "global": "global",
+      "inherited": "heredado de la celda de resolución {res}"
+    },
+    "reliability": {
+      "title": "Fiabilidad de las detecciones",
+      "index": "Índice de fiabilidad",
+      "persistentShare": "% persistentes",
+      "sensorMean": "{sensor} · índice medio",
+      "persistentNote": "{v} persistentes",
+      "meanValue": "{v} · índice medio",
+      "persistentValue": "{v} detecciones persistentes",
+      "explain": "El índice es la probabilidad de que otro sensor confirme la detección (de 0 a 1), según su confianza, su persistencia y su FRP. Mide si la detección vuelve a verse, no si es un incendio real. Capacidad de discriminación moderada (AUC 0,66 MODIS · 0,73 VIIRS). Cada año pesa por sus detecciones. No es comparable entre sensores: cada uno se calibró contra otro objetivo (MODIS confirmado por VIIRS, que lo logra el 93 % de las veces; VIIRS confirmado por NOAA-20, el 66 %), así que un índice más alto en MODIS no lo hace más fiable."
+    },
+    "series": {
+      "title": "Serie continua MODIS + VIIRS",
+      "frp": "FRP (MW)",
+      "detections": "Detecciones",
+      "explain": "Los meses sin datos descargados quedan en blanco (no son cero). Antes de febrero de 2012, MODIS (sin duplicados de bow-tie); después, VIIRS S-NPP ÷ k, en unidades MODIS. {k}. El valor mensual es ruidoso: guiate por la media de 12 meses."
+    }
   }
 }

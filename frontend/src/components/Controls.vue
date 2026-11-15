@@ -13,11 +13,20 @@ const { t } = useI18n()
 // Sensor names are technical (not translated), except "harmonized".
 const sensorLabel = (sensor) => ({ modis: 'MODIS', viirs: 'VIIRS' })[sensor] ?? t(`controls.sensors.${sensor}`)
 
+// modis_harmonized / viirs_harmonized are the harmonized layers of the Compare view and the calendar; they would
+// show up here with the same label as modis_best / viirs_best (same sensor and product, fewer detections).
+const selectable = (d) => !d.id.endsWith('_harmonized')
+
+// The external "Harmonized" group (datasets that a harmonization team drops into the lake) only shows once one of
+// them has data; empty, it is just two "(no data)" entries.
 const groups = computed(() =>
-  ['modis', 'viirs', 'harmonized'].map((sensor) => ({
-    label: sensorLabel(sensor),
-    options: store.datasets.filter((d) => d.sensor === sensor),
-  })),
+  ['modis', 'viirs', 'harmonized']
+    .map((sensor) => ({
+      sensor,
+      label: sensorLabel(sensor),
+      options: store.datasets.filter((d) => d.sensor === sensor && selectable(d)),
+    }))
+    .filter((g) => g.sensor !== 'harmonized' || g.options.some((d) => d.available)),
 )
 </script>
 

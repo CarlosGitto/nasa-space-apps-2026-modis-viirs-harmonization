@@ -3,7 +3,7 @@
 // font sizes follow the accessibility text size.
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import { i18n } from '../../i18n'
-import { date, monthName, num } from '../../format'
+import { date, monthName, num, pct } from '../../format'
 import { usePrefsStore } from '../../stores/prefs'
 
 export { monthName, num, pct } from '../../format'
@@ -17,7 +17,7 @@ const SCALE = { normal: 1, large: 1.25, xlarge: 1.5 }
 export const chartFont = (px) => Math.round(px * (SCALE[usePrefsStore().textSize] ?? 1))
 
 // categories: x labels; bySensor: { modis: [n per category], viirs: [...] }
-export function sensorBars(categories, bySensor, { labelInterval = 'auto' } = {}) {
+export function sensorBars(categories, bySensor, { labelInterval = 'auto', decimals = 0, format = null, max = null } = {}) {
   const sensors = Object.keys(bySensor)
   const t = i18n.global.t
   return {
@@ -30,7 +30,7 @@ export function sensorBars(categories, bySensor, { labelInterval = 'auto' } = {}
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
       textStyle: { fontSize: chartFont(12) },
-      valueFormatter: (v) => t('common.detections', { n: num(v) }),
+      valueFormatter: format ?? ((v) => t('common.detections', { n: num(v, decimals) })),
     },
     xAxis: {
       type: 'category',
@@ -41,8 +41,9 @@ export function sensorBars(categories, bySensor, { labelInterval = 'auto' } = {}
     },
     yAxis: {
       type: 'value',
-      minInterval: 1,
-      axisLabel: { color: MUTED, fontSize: chartFont(10), formatter: (v) => num(v) },
+      minInterval: decimals || max ? 0 : 1,
+      ...(max ? { min: 0, max } : {}),
+      axisLabel: { color: MUTED, fontSize: chartFont(10), formatter: (v) => num(v, Number.isInteger(v) ? 0 : 1) },
       splitLine: { lineStyle: { color: GRID } },
     },
     series: sensors.map((sensor) => ({
@@ -58,15 +59,15 @@ export function sensorBars(categories, bySensor, { labelInterval = 'auto' } = {}
 }
 
 // Text alternative of a sensorBars chart for screen readers: per sensor, its total and
-// its highest bar.
-export function chartLabel(title, categories, bySensor) {
+// its highest bar. decimals: 1 for harmonized (fractional) counts.
+export function chartLabel(title, categories, bySensor, decimals = 0) {
   const t = i18n.global.t
   const parts = Object.entries(bySensor).map(([sensor, values]) => {
     const total = values.reduce((a, b) => a + b, 0)
     if (!total) return `${SENSOR_LABELS[sensor] ?? sensor}: ${t('chart.empty')}`
     const max = Math.max(...values)
     return t('chart.sensorSummary', {
-      sensor: SENSOR_LABELS[sensor] ?? sensor, total: num(total), max: num(max), when: categories[values.indexOf(max)],
+      sensor: SENSOR_LABELS[sensor] ?? sensor, total: num(total, decimals), max: num(max, decimals), when: categories[values.indexOf(max)],
     })
   })
   return t('chart.label', { title, summary: parts.join('; ') })
@@ -183,3 +184,145 @@ export const weatherSeries = (days) => [
   { name: i18n.global.t('weather.vpdMax'), type: 'line', axis: 1, data: days.map((d) => d.vpd_max_kpa), color: WEATHER_COLORS.vpd, unit: 'kPa', digits: 2 },
 ]
 export const weatherChart = (days) => dailyChart(days.map((d) => d.date), weatherSeries(days), { axes: 2 })
+
+// Series spliced across the MODIS -> VIIRS change (fct_hexagon_harmonized_monthly), in MODIS units.
+// data: { months, covered_months } from the API. A month without a row is a zero only where the data was downloaded
+// (covered_months); elsewhere it is a gap (null), never a zero. The monthly value is noisy (a cell has few
+// detections): the 12-month mean is drawn on top, over covered months only.
+export const SPLICE_MONTH = '2012-02-01'
+function harmonizedSeries(data, metric) {
+  const rows = data?.months ?? []
+  if (!rows.length) return null
+  const covered = new Set(data.covered_months)
+  const all = [...rows.map((r) => r.month), ...data.covered_months].sort()
+  const categories = monthRange(all[0], all.at(-1))
+  const key = metric === 'frp' ? 'frp_harmonized' : 'detections_harmonized'
+  const byMonth = new Map(rows.map((r) => [r.month, r[key]]))
+  const monthly = categories.map((m) => (byMonth.has(m) ? byMonth.get(m) : covered.has(m) ? 0 : null))
+  const trend = monthly.map((_, i) => {
+    if (i < 11) return null
+    const w = monthly.slice(i - 11, i + 1)
+    return w.some((v) => v === null) ? null : w.reduce((a, b) => a + b, 0) / 12
+  })
+  const unit = metric === 'frp' ? 'MW' : i18n.global.t('harm.detectionsUnit')
+  return { categories, monthly, trend, unit }
+}
+
+export function harmonizedLine(data, metric) {
+  const s = harmonizedSeries(data, metric)
+  if (!s) return null
+  const t = i18n.global.t
+  const spliceAt = s.categories.indexOf(SPLICE_MONTH)
+  return {
+    animation: false,
+    grid: { left: chartFont(44), right: 8, top: chartFont(28), bottom: chartFont(22) },
+    legend: { top: 0, left: 0, itemWidth: 14, itemHeight: 8, textStyle: { color: TEXT, fontSize: chartFont(11) } },
+    tooltip: {
+      trigger: 'axis',
+      textStyle: { fontSize: chartFont(12) },
+      valueFormatter: (v) => (v === null || v === undefined ? '–' : `${num(v, 1)} ${s.unit}`),
+    },
+    xAxis: {
+      type: 'category',
+      data: s.categories.map(monthLabel),
+      axisLabel: { color: MUTED, fontSize: chartFont(10), hideOverlap: true },
+      axisLine: { lineStyle: { color: GRID } },
+      axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: MUTED, fontSize: chartFont(10), formatter: (v) => num(v, Number.isInteger(v) ? 0 : 1) },
+      splitLine: { lineStyle: { color: GRID } },
+    },
+    series: [
+      {
+        name: t('harm.monthly'), type: 'line', data: s.monthly, showSymbol: false,
+        lineStyle: { width: 1, color: '#9ca3af' }, itemStyle: { color: '#9ca3af' },
+        markLine: spliceAt < 0 ? undefined : {
+          symbol: 'none', silent: true,
+          lineStyle: { color: MUTED, type: 'dashed' },
+          label: { formatter: 'MODIS → VIIRS', color: MUTED, fontSize: chartFont(10) },
+          data: [{ xAxis: spliceAt }],
+        },
+      },
+      {
+        name: t('harm.mean12'), type: 'line', data: s.trend, showSymbol: false, smooth: true,
+        lineStyle: { width: 2, color: '#eb6834' }, itemStyle: { color: '#eb6834' },
+      },
+    ],
+  }
+}
+
+// Text alternative of harmonizedLine for screen readers: the span, the highest month and the
+// range of the 12-month mean.
+export function harmonizedLabel(title, data, metric) {
+  const t = i18n.global.t
+  const s = harmonizedSeries(data, metric)
+  if (!s) return t('chart.label', { title, summary: t('chart.empty') })
+  const values = s.monthly.filter((v) => v !== null)
+  const peak = Math.max(...values)
+  const trend = s.trend.filter((v) => v !== null)
+  const fmt = (v) => `${num(v, 1)} ${s.unit}`
+  const summary = [
+    t('harm.labelSpan', { start: monthLabel(s.categories[0]), end: monthLabel(s.categories.at(-1)) }),
+    t('harm.labelPeak', { value: fmt(peak), month: monthLabel(s.categories[s.monthly.indexOf(peak)]) }),
+    ...(trend.length ? [t('harm.labelTrend', { min: fmt(Math.min(...trend)), max: fmt(Math.max(...trend)) })] : []),
+  ]
+  return t('chart.label', { title, summary: summary.join('; ') })
+}
+
+// Reliability of the detections by year and sensor (fct_hexagon_reliability_monthly): months are weighted by their
+// detections, so a month with two detections does not count as much as one with two hundred.
+// metric: 'reliability' (mean probability that an independent sensor confirms) | 'persistent' (share of persistent detections)
+const reliabilityValue = (v, metric) => (v === null || v === undefined
+  ? i18n.global.t('chart.empty')
+  : metric === 'reliability'
+    ? i18n.global.t('harm.reliability.meanValue', { v: num(v, 2) })
+    : i18n.global.t('harm.reliability.persistentValue', { v: pct(v) }))
+
+export function reliabilityByYear(rows, metric) {
+  if (!rows.length) return null
+  const years = [...new Set(rows.map((r) => Number(r.month.slice(0, 4))))].sort((a, b) => a - b)
+  const span = Array.from({ length: years.at(-1) - years[0] + 1 }, (_, i) => years[0] + i)
+  const acc = {}
+  for (const r of rows) {
+    const a = ((acc[r.sensor] ??= {})[r.month.slice(0, 4)] ??= { det: 0, rel: 0, per: 0 })
+    a.det += r.detections
+    a.rel += r.reliability_sum
+    a.per += r.persistent_detections
+  }
+  const bySensor = {}
+  for (const [sensor, byYear] of Object.entries(acc)) {
+    bySensor[sensor] = span.map((y) => {
+      const a = byYear[y]
+      return a ? (metric === 'reliability' ? a.rel / a.det : a.per / a.det) : null
+    })
+  }
+  return sensorBars(span.map(String), bySensor, {
+    labelInterval: 0, max: 1, format: (v) => reliabilityValue(v, metric),
+  })
+}
+
+// Overall figures of one sensor from the monthly rows, weighted by detections.
+export function reliabilityTotals(rows, sensor) {
+  const mine = rows.filter((r) => r.sensor === sensor)
+  const det = mine.reduce((s, r) => s + r.detections, 0)
+  if (!det) return null
+  return {
+    detections: det,
+    reliability: mine.reduce((s, r) => s + r.reliability_sum, 0) / det,
+    persistent: mine.reduce((s, r) => s + r.persistent_detections, 0) / det,
+  }
+}
+
+// Text alternative of reliabilityByYear for screen readers: each sensor's overall value and its years.
+export function reliabilityLabel(title, rows, metric) {
+  const t = i18n.global.t
+  const years = rows.map((r) => r.month.slice(0, 4)).sort()
+  const parts = [...new Set(rows.map((r) => r.sensor))].map((sensor) => {
+    const tot = reliabilityTotals(rows, sensor)
+    return `${SENSOR_LABELS[sensor] ?? sensor}: ${reliabilityValue(tot && tot[metric], metric)}`
+  })
+  const span = years.length ? ` (${years[0]} – ${years.at(-1)})` : ''
+  return t('chart.label', { title: `${title}${span}`, summary: parts.join('; ') || t('chart.empty') })
+}

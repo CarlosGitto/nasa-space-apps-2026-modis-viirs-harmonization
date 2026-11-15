@@ -45,7 +45,15 @@ export const useFiltersStore = defineStore('filters', () => {
   const currentDataset = computed(() => datasets.value.find((d) => d.id === dataset.value) ?? null)
 
   // Curtain: MODIS on the left, VIIRS on the right, same product (NRT or SP) as the chosen dataset.
+  // Harmonized: both sides in MODIS units (MODIS bow-tie merged and size-corrected; VIIRS S-NPP / k of each hexagon).
+  const compareHarmonized = ref(false)
+  // Hexagon report (fichas): raw values, or harmonized (MODIS units). Separate from the Compare switch on purpose.
+  const hexHarmonized = ref(false)
   const compareSides = computed(() => {
+    if (compareHarmonized.value) {
+      const side = (sensor) => datasets.value.find((d) => d.id === `${sensor}_harmonized`) ?? { id: `${sensor}_harmonized`, available: false }
+      return { product: 'harmonized', left: side('modis'), right: side('viirs') }
+    }
     const product = currentDataset.value?.product ?? 'nrt'
     const side = (sensor) => datasets.value.find((d) => d.id === `${sensor}_${product}`) ?? { id: `${sensor}_${product}`, available: false }
     return { product, left: side('modis'), right: side('viirs') }
@@ -152,7 +160,7 @@ export const useFiltersStore = defineStore('filters', () => {
 
   return {
     datasets, dataset, start, end, zone, zoneCells, error, basemap, day, view, camera, selectedHexes, weatherLayers, weatherScope,
-    currentDataset, queryParams, imagery, compareSides, imageryDate, isBusy, setBusy,
+    currentDataset, queryParams, imagery, compareSides, compareHarmonized, hexHarmonized, imageryDate, isBusy, setBusy,
     loadDatasets, setDataset, setDates, setDay, setMonth, setArea, clearZone, setBasemap, setView, setCamera,
     toggleWeatherLayer, setWeatherScope,
     selectHex, removeHex, clearSelection,

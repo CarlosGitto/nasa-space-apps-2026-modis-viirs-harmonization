@@ -43,6 +43,8 @@ export const getHexagons = (dataset, params, signal) =>
 export const getMonthly = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/monthly`, params, signal)
 
+export const getHarmonizedMonthly = (params, signal) => get('/stats/harmonized/monthly', params, signal)
+
 export const getDaily = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/daily`, params, signal)
 
@@ -54,9 +56,14 @@ const cached = (key, load) => {
   return cache.get(key)
 }
 
-export const getHexagon = (h3) => cached(`hex:${h3}`, () => get(`/hexagons/${h3}`))
+export const getHexagon = (h3, harmonized = false) =>
+  cached(`hex:${h3}:${harmonized}`, () => get(`/hexagons/${h3}`, { harmonized: harmonized || null }))
 
 export const getHexagonMonthly = (h3) => cached(`monthly:${h3}`, () => get(`/hexagons/${h3}/monthly`))
+
+export const getHexagonHarmonized = (h3) => cached(`harmonized:${h3}`, () => get(`/hexagons/${h3}/harmonized`))
+
+export const getHexagonReliability = (h3) => cached(`reliability:${h3}`, () => get(`/hexagons/${h3}/reliability`))
 
 export const getHexagonPeriod = (h3, params, signal) => get(`/hexagons/${h3}/period`, params, signal)
 
