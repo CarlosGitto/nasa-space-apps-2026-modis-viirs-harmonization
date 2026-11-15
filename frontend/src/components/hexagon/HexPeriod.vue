@@ -17,6 +17,8 @@ const error = ref(null)
 const loading = ref(false)
 let controller = null
 
+const h = computed(() => store.hexHarmonized) // MODIS units: counts are fractional, no confidence or satellite there
+const n = (v) => num(v, h.value ? 1 : 0)
 const range = computed(() => ({ start: store.queryParams.start, end: store.queryParams.end }))
 
 async function load() {
@@ -25,7 +27,7 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    period.value = await getHexagonPeriod(props.h3, range.value, controller.signal)
+    period.value = await getHexagonPeriod(props.h3, { ...range.value, harmonized: h.value || null }, controller.signal)
   } catch (e) {
     if (e.name === 'AbortError') return
     error.value = e.message
@@ -33,17 +35,17 @@ async function load() {
   }
   loading.value = false
 }
-watch(() => [props.h3, range.value.start, range.value.end], load, { immediate: true })
+watch(() => [props.h3, range.value.start, range.value.end, h.value], load, { immediate: true })
 onBeforeUnmount(() => controller?.abort())
 
 const kpis = (s) => [
-  { label: 'Detecciones', value: num(s.fire_detections) },
+  { label: 'Detecciones', value: n(s.fire_detections) },
   { label: 'Días con fuego', value: num(s.active_days) },
   { label: 'FRP total', value: `${num(s.fire_frp_sum)} MW` },
   { label: 'FRP máx', value: `${num(s.fire_frp_max, 1)} MW` },
   { label: 'Alta confianza', value: pct(s.high_conf_share) },
   { label: 'Diurnas', value: pct(s.day_share) },
-]
+].filter((k) => !(h.value && k.label === 'Alta confianza'))
 
 const satellites = (s) => Object.entries(s.satellites).map(([name, n]) => `${name} ${num(n)}`).join(' · ')
 
@@ -57,7 +59,7 @@ const dailyChart = computed(() => {
     bySensor[s.sensor] = new Array(days.length).fill(0)
     for (const d of s.daily) bySensor[s.sensor][days.indexOf(d.date)] = d.detections
   }
-  return sensorBars(days.map((d) => d.slice(5)), bySensor)
+  return sensorBars(days.map((d) => d.slice(5)), bySensor, { decimals: h.value ? 1 : 0 })
 })
 </script>
 
@@ -65,7 +67,7 @@ const dailyChart = computed(() => {
   <article class="ficha">
     <header class="identity">
       <code>{{ h3 }}</code>
-      <span class="muted">{{ range.start }} → {{ range.end }} · serie continua (SP + NRT)</span>
+      <span class="muted">{{ range.start }} → {{ range.end }} · serie continua (SP + NRT){{ h ? ' · unidades MODIS (armonizado)' : '' }}</span>
     </header>
     <p v-if="loading && !period" class="muted">Cargando…</p>
     <p v-else-if="error?.startsWith('no detections')" class="muted">Sin detecciones en toda la historia de este hexágono.</p>
@@ -80,8 +82,8 @@ const dailyChart = computed(() => {
             <dd>{{ k.value }}</dd>
           </div>
         </dl>
-        <p v-if="s.fire_detections" class="muted small">Por satélite: {{ satellites(s) }}</p>
-        <p v-if="s.static_detections" class="muted small">
+        <p v-if="s.fire_detections && !h" class="muted small">Por satélite: {{ satellites(s) }}</p>
+        <p v-if="s.static_detections && !h" class="muted small">
           + {{ num(s.static_detections) }} detecciones de fuente fija (no son incendios)
         </p>
       </section>

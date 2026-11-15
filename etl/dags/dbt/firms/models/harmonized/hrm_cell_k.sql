@@ -1,7 +1,7 @@
 -- k (VIIRS S-NPP / MODIS) of every hexagon, from the frozen seed k_cell: the cell's own row when it has one,
 -- otherwise the nearest ancestor (r5 -> r2), otherwise the global k. `k_res` is the resolution it came from
 -- (6 = own, 0 = global). Shared by the monthly series and the daily map layer so both use the same k.
-{{ config(materialized='table', sorted_by=['h3_r6']) }}
+{{ config(materialized='table', sorted_by=['h3_r6'], tags=['harmonized']) }}
 
 with cells as (
     select h3_r6, h3_h3_to_string(h3_r6) as k6, h3_h3_to_string(h3_cell_to_parent(h3_r6, 5)) as k5,

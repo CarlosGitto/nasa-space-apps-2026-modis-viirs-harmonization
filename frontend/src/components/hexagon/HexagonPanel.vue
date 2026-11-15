@@ -60,6 +60,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <button :class="{ on: mode === 'grouped' }" @click="mode = 'grouped'">Agrupado <small>WIP</small></button>
         </div>
 
+        <div v-if="!(store.selectedHexes.length > STACK_MAX) && !(store.selectedHexes.length > 1 && mode === 'grouped')"
+             class="mode values" role="group" aria-label="Valores de la ficha">
+          <button :class="{ on: !store.hexHarmonized }" @click="store.hexHarmonized = false">Raw</button>
+          <button :class="{ on: store.hexHarmonized }" @click="store.hexHarmonized = true">Armonizado</button>
+          <small v-if="store.hexHarmonized">MODIS fusionado · VIIRS S-NPP ÷ k · unidades MODIS</small>
+        </div>
+
         <div v-if="store.selectedHexes.length > 1 && mode === 'grouped'" class="wip">
           <strong>Vista agrupada · en construcción</strong>
           <p>
@@ -113,6 +120,8 @@ h2 { margin: 0; font-size: 15px; }
 }
 .mode button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .mode small { font-size: 10px; opacity: 0.8; }
+.mode.values { align-items: center; gap: 4px; margin-bottom: 8px; }
+.mode.values small { margin-left: 6px; color: var(--muted); opacity: 1; }
 .card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .wip { border: 1px dashed var(--border); border-radius: 8px; padding: 12px; font-size: 13px; background: #fffbeb; }
 .wip p { margin: 6px 0 0; color: var(--text); }

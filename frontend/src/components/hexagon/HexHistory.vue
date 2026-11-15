@@ -6,9 +6,14 @@ import { getHexagon, getHexagonHarmonized, getHexagonMonthly } from '../../api'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import MiniChart from './MiniChart.vue'
 import './ficha.css'
+import { useFiltersStore } from '../../stores/filters'
 import { MONTHS, harmonizedLine, monthLabel, monthRange, num, pct, sensorBars } from './charts'
 
 const props = defineProps({ h3: { type: String, required: true } })
+const store = useFiltersStore()
+// Harmonized: MODIS units (MODIS merged, VIIRS S-NPP / k). Counts are fractional, so show a decimal.
+const h = computed(() => store.hexHarmonized)
+const n = (v) => num(v, h.value ? 1 : 0)
 
 const info = ref(null)
 const monthly = ref([])
@@ -21,9 +26,11 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    ;[info.value, monthly.value] = await Promise.all([getHexagon(props.h3), getHexagonMonthly(props.h3)])
+    ;[info.value, monthly.value] = await Promise.all([getHexagon(props.h3, h.value), getHexagonMonthly(props.h3)])
     // Optional: the spliced series may not be built yet; the rest of the ficha does not depend on it.
-    harmonized.value = await getHexagonHarmonized(props.h3).catch(() => ({ months: [], covered_months: [] }))
+    harmonized.value = h.value
+      ? await getHexagonHarmonized(props.h3).catch(() => ({ months: [], covered_months: [] }))
+      : { months: [], covered_months: [] }
   } catch (e) {
     error.value = e.message
     info.value = null
@@ -31,12 +38,26 @@ async function load() {
     loading.value = false
   }
 }
-watch(() => props.h3, load, { immediate: true })
+watch(() => [props.h3, h.value], load, { immediate: true })
 
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86_400_000)
 
 // Monthly detections per sensor (satellites of the same sensor added up), every month of the history.
 const monthlyChart = computed(() => {
+  if (h.value) {
+    // Harmonized: MODIS as merged, VIIRS S-NPP divided by the cell's k, month by month: in the overlap they should match.
+    const rows = harmonized.value.months
+    if (!rows.length) return null
+    const all = rows.map((r) => r.month).sort()
+    const categories = monthRange(all[0], all.at(-1))
+    const bySensor = { modis: new Array(categories.length).fill(0), viirs: new Array(categories.length).fill(0) }
+    for (const r of rows) {
+      const i = categories.indexOf(r.month)
+      bySensor.modis[i] = r.m_detections ?? 0
+      bySensor.viirs[i] = (r.v_detections ?? 0) / r.k_count
+    }
+    return sensorBars(categories.map(monthLabel), bySensor, { decimals: 1 })
+  }
   if (!monthly.value.length) return null
   const months = monthly.value.map((r) => r.month).sort()
   const categories = monthRange(months[0], months.at(-1))
@@ -48,7 +69,7 @@ const monthlyChart = computed(() => {
   return sensorBars(categories.map(monthLabel), bySensor)
 })
 
-const harmonizedChart = computed(() => harmonizedLine(harmonized.value, harmonizedMetric.value))
+const harmonizedChart = computed(() => (h.value ? harmonizedLine(harmonized.value, harmonizedMetric.value) : null))
 // How far the k of this cell can be trusted: its own (res 6) down to the global one (res 0).
 const kNote = computed(() => {
   const r = harmonized.value.months.at(-1)
@@ -69,18 +90,18 @@ const kpis = (p) => [
     value: p.last_date ?? '–',
     note: p.last_date && p.data_end_date ? `${daysBetween(p.last_date, p.data_end_date)} días antes del último dato` : '',
   },
-  { label: 'Últimos 7 / 30 días', value: `${num(p.last_7d)} / ${num(p.last_30d)}`, note: `al ${p.data_end_date ?? '–'}` },
-  { label: 'Detecciones', value: num(p.fire_detections), note: `desde ${p.first_date ?? '–'}` },
+  { label: 'Últimos 7 / 30 días', value: `${n(p.last_7d)} / ${n(p.last_30d)}`, note: `al ${p.data_end_date ?? '–'}` },
+  { label: 'Detecciones', value: n(p.fire_detections), note: `desde ${p.first_date ?? '–'}` },
   { label: 'Días con fuego', value: num(p.active_days) },
   { label: 'FRP total', value: `${num(p.fire_frp_sum)} MW` },
-  { label: 'FRP máx · p90', value: `${num(p.fire_frp_max, 1)} · ${num(p.fire_frp_p90, 1)} MW` },
+  { label: h.value ? 'FRP máx' : 'FRP máx · p90', value: h.value ? `${num(p.fire_frp_max, 1)} MW` : `${num(p.fire_frp_max, 1)} · ${num(p.fire_frp_p90, 1)} MW` },
   { label: 'FRP medio', value: `${num(p.fire_frp_mean, 1)} MW` },
   { label: 'Alta confianza', value: pct(p.high_conf_share) },
   { label: 'Diurnas', value: pct(p.day_share) },
-  { label: 'Día pico', value: p.peak_date ?? '–', note: p.peak_day_detections ? `${num(p.peak_day_detections)} detecciones` : '' },
+  { label: 'Día pico', value: p.peak_date ?? '–', note: p.peak_day_detections ? `${n(p.peak_day_detections)} detecciones` : '' },
   { label: 'Mes pico', value: p.peak_month ? MONTHS[p.peak_month - 1] : '–', note: 'del año, según la climatología' },
   { label: 'Satélites', value: num(p.satellites) },
-]
+].filter((k) => !(h.value && ['Alta confianza', 'Satélites'].includes(k.label)))
 </script>
 
 <template>
@@ -95,9 +116,10 @@ const kpis = (p) => [
           {{ num(info.area_km2, 1) }} km² · centro {{ num(info.center[1], 4) }}, {{ num(info.center[0], 4) }} ·
           datos {{ info.first_date }} → {{ info.last_date }}
         </span>
+        <span v-if="h" class="muted">Valores armonizados: unidades MODIS (VIIRS ÷ k de la celda).</span>
       </header>
 
-      <p v-if="info.has_static_source" class="static">
+      <p v-if="info.has_static_source && !h" class="static">
         ⚠ Fuente fija de calor (industria, antorcha de gas, volcán…): esas detecciones se cuentan aparte, no como incendio.
       </p>
 
@@ -110,7 +132,7 @@ const kpis = (p) => [
             <dd v-if="k.note" class="note">{{ k.note }}</dd>
           </div>
         </dl>
-        <p v-if="p.static_detections" class="muted small">
+        <p v-if="p.static_detections && !h" class="muted small">
           + {{ num(p.static_detections) }} detecciones de fuente fija ({{ pct(p.static_share) }} del total)
         </p>
       </section>
@@ -130,7 +152,7 @@ const kpis = (p) => [
         </p>
       </section>
       <section v-if="monthlyChart">
-        <h4>Detecciones por mes</h4>
+        <h4>Detecciones por mes{{ h ? ' · unidades MODIS' : '' }}</h4>
         <MiniChart :option="monthlyChart" />
       </section>
       <section v-if="climatologyChart">

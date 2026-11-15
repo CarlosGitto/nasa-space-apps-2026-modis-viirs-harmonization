@@ -129,6 +129,29 @@ latest version of each detection, whatever its origin. Lineage columns say where
 - The loaded days aren't limited to the dev dataset (South America, 2025 onward): the lake takes any area
   and period, and the scheduled runs go on as before.
 
+## Harmonized data (MODIS and VIIRS on equal terms)
+
+MODIS and VIIRS do not see the same fire the same way: VIIRS has ~4x the detections per hexagon (smaller pixel) and
+MODIS inflates its FRP at the scan edge (bow-tie). The `firms_dbt_harmonize` DAG builds, on top of silver and gold, the
+layers that put both in the same units (MODIS units). All of it is dbt, tagged `harmonized`
+(`etl/dags/dbt/firms/models/harmonized/`), and runs by itself after `firms_dbt_sp` / `firms_dbt_nrt` (they update the
+`firms_gold` asset). First build or after a change: `make etl-harmonize`.
+
+| Model | What |
+|---|---|
+| seed `k_cell` | VIIRS S-NPP / MODIS factor per H3 cell (FRP and counts), **frozen**: hierarchical shrinkage global -> r2..r6, chosen by year-parity cross-validation. Calibrated on 2013-2025 where both sensors have complete data (4 areas: delta, Iberá, Zambia, AR_north); elsewhere the cell's ancestor or the global k. Scripts and method: `data_exploration/k_cell/` |
+| `hrm_cell_k` | k of every hexagon: own cell > nearest ancestor > global (`k_res` says which) |
+| `hrm_modis_merged` | MODIS with bow-tie duplicates merged (same pass, within half a pixel along track and along scan) and FRP corrected for pixel size |
+| `fct_hexagon_harmonized_daily` | hexagon x day x sensor, both in MODIS units (VIIRS S-NPP divided by k). Feeds the Compare view, the calendar and the hexagon report |
+| `fct_hexagon_harmonized_monthly` | the one series across the 2012 change: MODIS before 2012-02, VIIRS S-NPP / k after |
+| `fct_area_coverage_monthly` | which area-months were really downloaded; tells "no detection" from "no data". Needs `firms_raw.download_windows` (see above) |
+| seed `reliability_model`, `hrm_detection_reliability`, `fct_hexagon_reliability_monthly` | persistence (neighbours of the same sensor within 1.5 km and 1-36 h) and the reliability index: P(an independent sensor confirms the detection), logistic on confidence, persistence and FRP, frozen coefficients (`data_exploration/reliability/`) |
+
+Limits worth knowing: only S-NPP is on the VIIRS side (k was calibrated on it); the k outside the 4 calibrated areas is a
+regional or global guess; the reliability index is a proxy (confirmation by another sensor, out-of-fold AUC 0.66 MODIS /
+0.73 VIIRS, 2019 only), not truth. A huge first build of `hrm_detection_reliability` can run by month:
+`dbt build -s hrm_detection_reliability --vars '{only_months: ["2019-01-01", "2019-02-01"]}'`.
+
 ## Setup (once per machine)
 
 `make etl-setup` does it. Airflow runs as uid 50000 inside the containers and

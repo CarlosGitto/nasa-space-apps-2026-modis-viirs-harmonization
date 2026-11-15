@@ -13,7 +13,7 @@ const MUTED = '#6b7280'
 const GRID = '#e5e7eb'
 
 // categories: x labels; bySensor: { modis: [n per category], viirs: [...] }
-export function sensorBars(categories, bySensor, { labelInterval = 'auto' } = {}) {
+export function sensorBars(categories, bySensor, { labelInterval = 'auto', decimals = 0 } = {}) {
   const sensors = Object.keys(bySensor)
   return {
     animation: false,
@@ -24,7 +24,7 @@ export function sensorBars(categories, bySensor, { labelInterval = 'auto' } = {}
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      valueFormatter: (v) => `${num(v)} detecciones`,
+      valueFormatter: (v) => `${num(v, decimals)} detecciones`,
     },
     xAxis: {
       type: 'category',
@@ -35,7 +35,7 @@ export function sensorBars(categories, bySensor, { labelInterval = 'auto' } = {}
     },
     yAxis: {
       type: 'value',
-      minInterval: 1,
+      minInterval: decimals ? 0 : 1,
       axisLabel: { color: MUTED, fontSize: 10 },
       splitLine: { lineStyle: { color: GRID } },
     },

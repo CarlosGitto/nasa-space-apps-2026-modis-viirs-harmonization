@@ -13,7 +13,7 @@
 -- Incremental by acquisition month: a pass never crosses a month except at midnight, and the merge key
 -- includes the date, so a month is always recomputed whole.
 {{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month',
-          partitioned_by=['acq_month'], sorted_by=['h3_r6'], tags=['sp']) }}
+          partitioned_by=['acq_month'], sorted_by=['h3_r6'], tags=['harmonized']) }}
 {% set rounds = 8 %}{# label propagation rounds: covers chains of up to 2^rounds pixels, far more than ever occur #}
 {% set source_sql %}
     select detection_id, satellite, daynight, acq_date, acq_month, acq_datetime_utc, h3_r6,

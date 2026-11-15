@@ -546,6 +546,48 @@ def hexagon_profiles(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
     return [dict(zip(cols, row)) for row in rel.fetchall()]
 
 
+def hexagon_profiles_harmonized(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
+    """Profile of one hexagon per sensor from the MODIS-units daily table (same fields as fct_hexagon_profile).
+    No p90 or confidence there: those come back null. Computed on the fly: one hexagon is a few hundred rows."""
+    months = ", ".join(
+        f"coalesce(sum(f) filter (where moy = {m}), 0)::double" for m in range(1, 13)
+    )
+    rel = cur.execute(
+        f"""
+        with d as (select * from {HARMONIZED_DAILY} where h3_r6 = ?),
+        data_end as (select max(acq_date) as e from {HARMONIZED_DAILY}),
+        per_day as (select sensor, acq_date, month(acq_date) as moy, sum(fire_detections) as f from d group by all),
+        totals as (
+            select sensor,
+                   min(acq_date) as first_date, max(acq_date) as last_date,
+                   count(distinct acq_date)::bigint as active_days,
+                   sum(fire_detections)::double as fire_detections, sum(fire_frp_sum)::double as fire_frp_sum,
+                   max(fire_frp_max)::double as fire_frp_max,
+                   (sum(fire_detections) filter (where daynight = 'D') / nullif(sum(fire_detections), 0))::double as day_share,
+                   coalesce(sum(fire_detections) filter (where acq_date > (select e from data_end) - 7), 0)::double as last_7d,
+                   coalesce(sum(fire_detections) filter (where acq_date > (select e from data_end) - 30), 0)::double as last_30d
+            from d group by sensor
+        ),
+        per_moy as (select sensor, moy, sum(f) as f from per_day group by all),
+        peak as (select sensor, arg_max(acq_date, f) as peak_date, max(f)::double as peak_day_detections
+                 from per_day where f > 0 group by sensor),
+        clim as (select sensor, [{months}] as climatology, arg_max(moy, f) filter (where f > 0) as peak_month
+                 from per_moy group by sensor)
+        select t.sensor, t.first_date, t.last_date, t.active_days, t.fire_detections, t.fire_frp_sum, t.fire_frp_max,
+               t.fire_frp_sum / nullif(t.fire_detections, 0) as fire_frp_mean, null::double as fire_frp_p90,
+               null::double as high_conf_share, t.day_share, p.peak_date, p.peak_day_detections,
+               c.peak_month::integer as peak_month, c.climatology, t.last_7d, t.last_30d,
+               (select e from data_end) as data_end_date, 0::bigint as static_detections, null::double as static_share,
+               0::bigint as satellites
+        from totals t left join peak p using (sensor) left join clim c using (sensor)
+        order by t.sensor
+        """,
+        [key],
+    )
+    cols = [x[0] for x in rel.description]
+    return [dict(zip(cols, row)) for row in rel.fetchall()]
+
+
 def hexagon_monthly(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
     rel = cur.execute(
         f"select * exclude (h3_r6, last_load_id) from {MONTHLY} where h3_r6 = ? order by acq_month, sensor, satellite",
@@ -555,9 +597,12 @@ def hexagon_monthly(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
     return [dict(zip(cols, row)) for row in rel.fetchall()]
 
 
-def hexagon_period(cur: duckdb.DuckDBPyConnection, key: int, start: date | None, end: date | None) -> list[tuple]:
+def hexagon_period(
+    cur: duckdb.DuckDBPyConnection, key: int, start: date | None, end: date | None, harmonized: bool = False
+) -> list[tuple]:
     """Preferred daily rows of one hexagon in [start, end]: (sensor, satellite, date, daynight,
-    fire, frp_sum, frp_max, high_conf, static)."""
+    fire, frp_sum, frp_max, high_conf, static). harmonized: the MODIS-units table (no satellite or confidence there:
+    the sensor stands for the satellite and high_conf is 0)."""
     clauses, params = ["h3_r6 = ?", "is_preferred"], [key]
     if start:
         clauses.append("acq_date >= ?")
@@ -565,13 +610,16 @@ def hexagon_period(cur: duckdb.DuckDBPyConnection, key: int, start: date | None,
     if end:
         clauses.append("acq_date <= ?")
         params.append(end)
+    columns = (
+        "sensor, sensor as satellite, acq_date, daynight, fire_detections, fire_frp_sum, fire_frp_max, "
+        "0 as fire_high_conf, static_detections"
+        if harmonized
+        else "sensor, satellite, acq_date, daynight, fire_detections, fire_frp_sum, fire_frp_max, "
+        "fire_high_conf, static_detections"
+    )
     return cur.execute(
-        f"""
-        select sensor, satellite, acq_date, daynight, fire_detections, fire_frp_sum, fire_frp_max,
-               fire_high_conf, static_detections
-        from {DAILY} where {" and ".join(clauses)}
-        order by acq_date
-        """,
+        f"select {columns} from {HARMONIZED_DAILY if harmonized else DAILY} where {' and '.join(clauses)} "
+        "order by acq_date",
         params,
     ).fetchall()
 

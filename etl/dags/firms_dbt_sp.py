@@ -7,6 +7,8 @@ Runs the dbt models tagged `sp` and everything downstream (`tag:sp+`) whenever
 `stg_firms__*_sp` (silver views) → `int_detections_sp` (silver) → gold
 (`fct_hexagon_detections`, `fct_hexagon_daily`, `dim_hexagon`) and the static-source mask (`int_static_sources`).
 
+When it finishes it updates the `firms_gold` asset, which starts `firms_dbt_harmonize`.
+
 One Cosmos task per model and test; every task writes through the single-writer
 `ducklake` pool.
 """
@@ -18,7 +20,9 @@ import pendulum
 from cosmos import DbtDag
 
 from include.firms.config import FIRMS_RAW_SP
-from include.firms.dbt import execution_config, operator_args, profile_config, project_config, render_config
+from include.firms.dbt import (
+    emit_gold_when_done, execution_config, operator_args, profile_config, project_config, render_config,
+)
 
 firms_dbt_sp = DbtDag(
     dag_id="firms_dbt_sp",
@@ -29,9 +33,12 @@ firms_dbt_sp = DbtDag(
     project_config=project_config,
     profile_config=profile_config,
     execution_config=execution_config,
-    render_config=render_config(["tag:sp+"]),  # its branch + everything downstream (gold)
+    # its branch + everything downstream (gold); the harmonized models run in firms_dbt_harmonize
+    render_config=render_config(["tag:sp+"], exclude=["tag:harmonized"]),
     operator_args=dict(operator_args),
     default_args={"owner": "etl", "retries": 1},
     doc_md=__doc__,
     tags=["firms", "sp", "dbt"],
 )
+
+emit_gold_when_done(firms_dbt_sp)  # firms_dbt_harmonize starts from here

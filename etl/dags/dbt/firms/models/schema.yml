@@ -256,6 +256,31 @@ models:
       - name: k_res
         data_tests: [{accepted_values: {arguments: {values: [0, 2, 3, 4, 5, 6], quote: false}}}]
 
+  - name: hrm_detection_reliability
+    description: >
+      Persistence (n_pairs, persistent) and reliability index of every wildfire detection (preferred row). reliability =
+      probability that an independent sensor confirms it (logistic on confidence, persistence, FRP; seed reliability_model).
+    data_tests:
+      - unique_combination:
+          arguments: {columns: [detection_id], recent_only: true, load_col: last_load_id}
+    columns:
+      - {name: h3_r6, data_tests: [not_null]}
+      - {name: n_pairs, data_tests: [not_null]}
+      - name: reliability
+        data_tests: [not_null]
+
+  - name: fct_hexagon_reliability_monthly
+    description: "Per hexagon, month and sensor, the persistent share and the mean reliability index. No row means no detection."
+    data_tests:
+      - unique_combination:
+          arguments: {columns: [h3_r6, acq_month, sensor]}
+    columns:
+      - name: h3_r6
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('dim_hexagon'), field: h3_r6}}
+      - {name: reliability_mean, data_tests: [not_null]}
+
 seeds:
   - name: k_cell
     description: >
@@ -274,3 +299,11 @@ seeds:
     data_tests:
       - unique_combination:
           arguments: {columns: [h3, res]}
+
+  - name: reliability_model
+    description: >
+      Frozen logistic model of the reliability index, one row per sensor (intercept, b_conf, b_pairs, b_lfrp). Fitted on the
+      2019 windows of 25 regions by data_exploration/reliability/reliability_fit.py (out-of-fold AUC by region: MODIS 0.66, VIIRS
+      0.73). The `viirs` row was trained on S-NPP and is applied to every VIIRS satellite; `modis` on Aqua, applied to Terra too.
+    columns:
+      - {name: sensor, data_tests: [unique, not_null, {accepted_values: {arguments: {values: [modis, viirs]}}}]}

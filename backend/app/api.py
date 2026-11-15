@@ -469,7 +469,7 @@ class HexagonSensorProfile(BaseModel):
     first_date: date | None
     last_date: date | None
     active_days: int
-    fire_detections: int
+    fire_detections: float  # fractional when harmonized
     fire_frp_sum: float
     fire_frp_max: float | None
     fire_frp_mean: float | None
@@ -477,11 +477,11 @@ class HexagonSensorProfile(BaseModel):
     high_conf_share: float | None
     day_share: float | None
     peak_date: date | None
-    peak_day_detections: int | None
+    peak_day_detections: float | None
     peak_month: int | None  # 1-12
-    climatology: list[int]  # detections per month of the year, Jan..Dec
-    last_7d: int
-    last_30d: int
+    climatology: list[float]  # detections per month of the year, Jan..Dec
+    last_7d: float
+    last_30d: float
     data_end_date: date | None  # last_7d / last_30d are relative to this day
     static_detections: int
     static_share: float | None
@@ -542,13 +542,13 @@ class HexagonHarmonized(BaseModel):
 
 class HexagonDay(BaseModel):
     date: date
-    detections: int
+    detections: float
     static_detections: int
 
 
 class HexagonPeriodSensor(BaseModel):
     sensor: Sensor
-    fire_detections: int
+    fire_detections: float
     active_days: int
     fire_frp_sum: float
     fire_frp_max: float | None
@@ -614,14 +614,23 @@ def _hexagon(cur: duckdb.DuckDBPyConnection, h3_id: str) -> tuple[int, tuple]:
 
 
 @router.get("/hexagons/{h3_id}")
-def hexagon(h3_id: HexId, cur: Cursor) -> HexagonInfo:
+def hexagon(
+    h3_id: HexId,
+    cur: Cursor,
+    harmonized: Annotated[bool, Query(description="Profile in MODIS units (MODIS merged, VIIRS S-NPP / k)")] = False,
+) -> HexagonInfo:
     """Identity and whole-history profile of a hexagon, one profile per sensor."""
+    if harmonized and not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
     key, (h3, lon, lat, area, boundary, r5, r4, r3, first, last, has_static) = _hexagon(cur, h3_id)
     return HexagonInfo(
         h3=h3, resolution=db.H3_RES, center=(lon, lat), area_km2=area, boundary=json.loads(boundary),
         parents=HexagonParents(r5=r5, r4=r4, r3=r3), first_date=first, last_date=last,
         has_static_source=has_static,
-        profiles=[HexagonSensorProfile(**p) for p in db.hexagon_profiles(cur, key)],
+        profiles=[
+            HexagonSensorProfile(**p)
+            for p in (db.hexagon_profiles_harmonized(cur, key) if harmonized else db.hexagon_profiles(cur, key))
+        ],
     )
 
 
@@ -655,6 +664,7 @@ def hexagon_period(
     cur: Cursor,
     start: Annotated[date | None, Query(description="First acquisition date (inclusive)")] = None,
     end: Annotated[date | None, Query(description="Last acquisition date (inclusive)")] = None,
+    harmonized: Annotated[bool, Query(description="In MODIS units (MODIS merged, VIIRS S-NPP / k)")] = False,
 ) -> HexagonPeriod:
     """Profile of the hexagon for a date range, per sensor (continuous series).
 
@@ -662,9 +672,13 @@ def hexagon_period(
     """
     if start and end and end < start:
         raise HTTPException(422, "end must be on or after start")
+    if harmonized and not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
     key, _ = _hexagon(cur, h3_id)
     by_sensor: dict[str, dict] = {}
-    for sensor, satellite, day, daynight, fire, frp_sum, frp_max, high, static in db.hexagon_period(cur, key, start, end):
+    for sensor, satellite, day, daynight, fire, frp_sum, frp_max, high, static in db.hexagon_period(
+        cur, key, start, end, harmonized
+    ):
         s = by_sensor.setdefault(sensor, {"fire": 0, "frp": 0.0, "frp_max": None, "high": 0, "day": 0,
                                           "static": 0, "sats": {}, "daily": {}})
         s["fire"] += fire
@@ -685,10 +699,10 @@ def hexagon_period(
             active_days=sum(1 for f, _ in s["daily"].values() if f > 0),
             fire_frp_sum=s["frp"],
             fire_frp_max=s["frp_max"],
-            high_conf_share=s["high"] / s["fire"] if s["fire"] else None,
+            high_conf_share=s["high"] / s["fire"] if s["fire"] and not harmonized else None,  # no confidence there
             day_share=s["day"] / s["fire"] if s["fire"] else None,
             static_detections=s["static"],
-            satellites=s["sats"],
+            satellites={} if harmonized else s["sats"],
             daily=[HexagonDay(date=d, detections=f, static_detections=st) for d, (f, st) in sorted(s["daily"].items())],
         )
         for sensor, s in sorted(by_sensor.items())

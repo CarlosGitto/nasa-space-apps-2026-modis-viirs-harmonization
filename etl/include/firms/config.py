@@ -47,9 +47,11 @@ FIRMS_AREA = os.getenv("FIRMS_AREA", "world")
 # HTTP connection whose password is the FIRMS MAP_KEY.
 FIRMS_CONN_ID = "firms_default"
 
-# Updated by the ingest DAGs, consumed by the dbt DAGs.
+# FIRMS_RAW_*: updated by the ingest DAGs, consumed by the dbt DAGs.
 FIRMS_RAW_NRT = Asset("firms_raw_nrt")
 FIRMS_RAW_SP = Asset("firms_raw_sp")
+# Updated when firms_dbt_sp / firms_dbt_nrt finish (silver and gold are fresh): the harmonization runs after it.
+FIRMS_GOLD = Asset("firms_gold")
 
 DBT_PROJECT_PATH = AIRFLOW_HOME / "dags" / "dbt" / "firms"
 DBT_EXECUTABLE = AIRFLOW_HOME / "dbt_venv" / "bin" / "dbt"  # created in the Dockerfile

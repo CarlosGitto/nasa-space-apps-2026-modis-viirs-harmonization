@@ -53,7 +53,8 @@ const cached = (key, load) => {
   return cache.get(key)
 }
 
-export const getHexagon = (h3) => cached(`hex:${h3}`, () => get(`/hexagons/${h3}`))
+export const getHexagon = (h3, harmonized = false) =>
+  cached(`hex:${h3}:${harmonized}`, () => get(`/hexagons/${h3}`, { harmonized: harmonized || null }))
 
 export const getHexagonMonthly = (h3) => cached(`monthly:${h3}`, () => get(`/hexagons/${h3}/monthly`))
 

@@ -5,7 +5,7 @@
 -- the data was downloaded. Outside a covered area-month it means "we have no data". The harmonized series and the
 -- k calibration use this to tell the two apart. A hexagon is covered in a month when its centre lies in an area
 -- whose coverage of the sensor that defines that month (MODIS before 2012-02, VIIRS after) is complete.
-{{ config(materialized='table') }}
+{{ config(materialized='table', tags=['harmonized']) }}
 
 with windows as (
     -- windows downloaded by the API ingest (Airflow): the lineage columns say exactly what was requested

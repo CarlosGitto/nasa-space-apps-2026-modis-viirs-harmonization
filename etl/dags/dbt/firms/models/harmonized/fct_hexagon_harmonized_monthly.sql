@@ -12,7 +12,7 @@
 -- NOAA-20 / NOAA-21 would add passes the splice has no matching MODIS for. They stay in fct_hexagon_monthly.
 -- No row means "no detection in that month", not "no fire" (same as the other facts). Months before
 -- 2002-07 have Terra only (m_satellites = 1): count and FRP are lower for that reason.
-{{ config(materialized='table', sorted_by=['h3_r6']) }}
+{{ config(materialized='table', sorted_by=['h3_r6'], tags=['harmonized']) }}
 {% set splice_month = "date '2012-02-01'" %}
 
 with modis as (
