@@ -127,6 +127,8 @@ function showAll() {
 watch(() => [store.dataset, store.start, store.end, store.zone], loadCounts, { immediate: true })
 // A new range or dataset: stop playing (the day was reset by the store).
 watch(() => [store.dataset, store.start, store.end], stop)
+// The split view has no time slider (each side is a whole period): stop, keep the day for when the map comes back.
+watch(() => store.view, (view) => { if (view !== 'map') stop() })
 onBeforeUnmount(() => {
   stop()
   controller?.abort()

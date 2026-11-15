@@ -353,25 +353,13 @@ def grid_stats(
     )
 
 
-@router.get("/datasets/{dataset}/stats/hex")
-def hex_stats(
-    dataset: DatasetId,
-    cur: Cursor,
-    filters: FiltersDep,
-    res: Annotated[
-        int, Query(ge=0, le=db.H3_RES, description="H3 resolution: 6 is the base cell, 0-5 roll up to its parents")
-    ] = 3,
-) -> HexCollection:
-    """Detections aggregated on H3 hexagons, as GeoJSON polygons.
+ResParam = Annotated[
+    int, Query(ge=0, le=db.H3_RES, description="H3 resolution: 6 is the base cell, 0-5 roll up to its parents")
+]
 
-    Every detection belongs to one fixed resolution-6 cell (h3_r6); coarser
-    resolutions group those cells by their parent, so all levels share the same grid.
-    bbox/zone select hexagons by their center.
 
-    Cells crossing the antimeridian are dropped: as plain lon/lat polygons they
-    would be drawn spanning the whole map.
-    """
-    base = _cells(cur, dataset, filters)
+def _hex_collection(cur: duckdb.DuckDBPyConnection, base: str, filters: Filters, res: int) -> HexCollection:
+    """Rows of `base` (h3_r6, detections, frp_sum, static_detections) summed per hexagon at `res`, as GeoJSON."""
     where, params = filters.where()
     rows = cur.execute(
         f"""
@@ -405,6 +393,31 @@ def hex_stats(
             for h, g, n, fs, st in rows
         ],
     )
+
+
+@router.get("/datasets/{dataset}/stats/hex")
+def hex_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep, res: ResParam = 3) -> HexCollection:
+    """Detections aggregated on H3 hexagons, as GeoJSON polygons.
+
+    Every detection belongs to one fixed resolution-6 cell (h3_r6); coarser
+    resolutions group those cells by their parent, so all levels share the same grid.
+    bbox/zone select hexagons by their center.
+
+    Cells crossing the antimeridian are dropped: as plain lon/lat polygons they
+    would be drawn spanning the whole map.
+    """
+    return _hex_collection(cur, _cells(cur, dataset, filters), filters, res)
+
+
+@router.get("/stats/harmonized/hex")
+def harmonized_hex_stats(cur: Cursor, filters: FiltersDep, res: ResParam = 3) -> HexCollection:
+    """Hexagons of the harmonized series: ONE series across the MODIS -> VIIRS change, in MODIS units (MODIS before
+    2012-02, VIIRS S-NPP / k after), so a period that spans the change (say, the year 2012) comes in one request.
+    Detections are fractional. Same shape as /datasets/{dataset}/stats/hex."""
+    if not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    base = db.harmonized_series_relation(with_center=filters.bbox is not None or filters.zone is not None)
+    return _hex_collection(cur, base, filters, res)
 
 
 @router.get("/datasets/{dataset}/stats/monthly")

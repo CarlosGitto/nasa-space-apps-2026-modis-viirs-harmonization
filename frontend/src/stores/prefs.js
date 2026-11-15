@@ -19,6 +19,7 @@ export const usePrefsStore = defineStore('prefs', () => {
   const reduceMotion = ref(typeof saved.reduceMotion === 'boolean' ? saved.reduceMotion : systemReducedMotion())
   const easyReading = ref(saved.easyReading === true)
   const contours = ref(saved.contours === true) // contour lines on the main map
+  const sidebarCollapsed = ref(saved.sidebarCollapsed === true) // the left panel folded to a thin rail
 
   function apply() {
     const html = document.documentElement
@@ -36,9 +37,10 @@ export const usePrefsStore = defineStore('prefs', () => {
     savePrefs({
       locale: locale.value, textSize: textSize.value, contrast: contrast.value,
       reduceMotion: reduceMotion.value, easyReading: easyReading.value, contours: contours.value,
+      sidebarCollapsed: sidebarCollapsed.value,
     })
   }
-  watch([locale, textSize, contrast, reduceMotion, easyReading, contours], apply, { immediate: true })
+  watch([locale, textSize, contrast, reduceMotion, easyReading, contours, sidebarCollapsed], apply, { immediate: true })
 
   const setLocale = (l) => { if (LOCALES.includes(l)) locale.value = l }
   function reset() {
@@ -48,5 +50,5 @@ export const usePrefsStore = defineStore('prefs', () => {
     easyReading.value = false
   }
 
-  return { locale, textSize, contrast, reduceMotion, easyReading, contours, TEXT_SIZES, setLocale, reset }
+  return { locale, textSize, contrast, reduceMotion, easyReading, contours, sidebarCollapsed, TEXT_SIZES, setLocale, reset }
 })

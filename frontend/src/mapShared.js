@@ -58,32 +58,66 @@ export const whenIdle = (map, maxMs = 8000) =>
 // First label layer of the basemap: data goes below it so place names stay readable.
 export const labelLayerId = (map) => map.getStyle().layers.find((l) => l.type === 'symbol')?.id
 
-// Hexagon fill: fixed log scale (not relative to what's on screen), so the same
-// color means the same number of detections everywhere, on both sides of the curtain.
-// max(1, …) avoids ln(0) and missing values.
-// Hexagons are colored by fire DENSITY, not count: detections per 1,000 km² per day of
-// the range. Zoomed out, one coarse hexagon (res 2, ~87,000 km²) adds up thousands of
-// detections; colored by count, whole continents saturated to red ("the world on
-// fire"). By density, a big hexagon with scattered fires stays pale and only real hot
-// spots go dark, the same at every zoom and for any date range. Log scale (ln density).
-const DENSITY = ['ln', ['max', 0.01, ['coalesce', ['get', 'density'], 0.01]]]
-export const HEX_FILL_COLOR = [
-  'interpolate', ['linear'], DENSITY,
-  -2, '#fef3c7', 0, '#fde68a', 2, '#fbbf24', 4, '#f97316', 6, '#dc2626', 8, '#7f1d1d',
-]
-// Opacity by density too: little activity reads as a faint tint, hot spots as solid.
-export const hexOpacity = (max) => ['interpolate', ['linear'], DENSITY, -2, max * 0.3, 1, max * 0.65, 4, max]
+// Hexagon color: fire DENSITY (detections per 1,000 km², per day of the period), not a
+// count: zoomed out one coarse hexagon (res 2, ~87,000 km²) adds up thousands of
+// detections, and by count whole continents would saturate to red.
+// The scale is RELATIVE to what was asked for: its stops are percentiles (log) of the
+// densities of the query, so a long range (months, years) or a far zoom, where the
+// average per day is small, still goes from pale to dark instead of all pale. Each
+// feature gets `level` (0..1) from densityScale(); the paint only reads `level`.
+// The curtain's two sides share one scale (computed from both), so they compare.
+const LEVEL = ['coalesce', ['get', 'level'], 0]
+export const FIRE_RAMP = ['#fef3c7', '#fde68a', '#fbbf24', '#f97316', '#dc2626', '#7f1d1d']
+export const HEX_FILL_COLOR = ['interpolate', ['linear'], LEVEL, ...FIRE_RAMP.flatMap((c, i) => [i / (FIRE_RAMP.length - 1), c])]
+// Opacity by level too: little activity reads as a faint tint, hot spots as solid.
+export const hexOpacity = (max) => ['interpolate', ['linear'], LEVEL, 0, max * 0.35, 0.5, max * 0.7, 1, max]
 
 const DAY_MS = 86_400_000
-// Adds `density` (detections per 1,000 km² per day) to GET /stats/hex features.
+const perArea = (f) => (f.properties.detections / cellArea(f.properties.h3, 'km2')) * 1000
+// Adds `density` (detections per 1,000 km² per day of start..end) to GET /stats/hex features.
 export function withDensity(fc, start, end) {
   if (!fc?.features) return fc
   const days = start && end ? Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / DAY_MS) + 1) : 1
-  for (const f of fc.features) {
-    f.properties.density = (f.properties.detections / cellArea(f.properties.h3, 'km2')) * 1000 / days
-  }
+  for (const f of fc.features) f.properties.density = perArea(f) / days
   return fc
 }
+
+// Stops of the relative scale, in ln(density): p5, p50, p90 and p99 of the given
+// densities -> levels 0, 0.45, 0.8 and 1. With few or very even values the low end is
+// pulled down (at least a factor e³ ≈ 20 between ends), so a lone hexagon reads dark.
+const LEVELS = [0, 0.45, 0.8, 1]
+export function densityScale(densities) {
+  const v = densities.filter((x) => x > 0).sort((a, b) => a - b)
+  if (!v.length) return null
+  const q = (p) => Math.log(v[Math.round(p * (v.length - 1))])
+  const top = q(0.99)
+  const stops = [Math.min(q(0.05), top - 3), q(0.5), q(0.9), top]
+  for (let i = stops.length - 2; i >= 0; i--) stops[i] = Math.min(stops[i], stops[i + 1] - 0.05)
+  return stops
+}
+const levelOf = (density, stops) => {
+  if (!stops || !(density > 0)) return 0
+  const x = Math.log(density)
+  if (x <= stops[0]) return 0
+  for (let i = 1; i < stops.length; i++) {
+    if (x <= stops[i]) return LEVELS[i - 1] + ((x - stops[i - 1]) / (stops[i] - stops[i - 1])) * (LEVELS[i] - LEVELS[i - 1])
+  }
+  return 1
+}
+// Puts `level` on every feature. `factor` rescales densities before comparing (the main
+// map's time slider: a day's density against the scale of the whole range, see FireMap).
+export function applyScale(fc, stops, factor = 1) {
+  for (const f of fc?.features ?? []) f.properties.level = levelOf(f.properties.density * factor, stops)
+  return fc
+}
+// Three legend values (low, middle, high) of a scale, in density units.
+export const scaleTicks = (stops, factor = 1) => (stops ? [stops[0], stops[1], stops[3]].map((s) => Math.exp(s) / factor) : null)
+
+// Hexagon borders: 1 CSS pixel, light. Thinner than a pixel (they were 0.3 px), a line is
+// anti-aliased differently by every screen scale (100 %, 125 %, 200 %), browser zoom and
+// GPU: dark on one computer, almost invisible on another. A whole pixel (1 device pixel at
+// 1x, 2 at 2x) keeps the same weight everywhere; the opacity keeps it light.
+export const HEX_BORDER_WIDTH = 1
 
 // Heat that is not a wildfire (refineries, gas flares, industry, volcanoes) is drawn gray.
 export const STATIC_COLOR = '#6b7280'

@@ -6,7 +6,10 @@
     "sidebar": "Filtros y calendario",
     "mapArea": "Mapa y línea de tiempo",
     "language": "Idioma",
-    "backendDown": "No se pudieron cargar los datos: {error}"
+    "backendDown": "No se pudieron cargar los datos: {error}",
+    "hidePanel": "Ocultar el panel",
+    "showPanel": "Mostrar el panel",
+    "railSummary": "{dataset} · {start} – {end}"
   },
   "common": {
     "loading": "Cargando…",
@@ -80,7 +83,17 @@
     },
     "zoomIn": "Acercar",
     "zoomOut": "Alejar",
-    "contours": "Curvas de nivel"
+    "contours": "Curvas de nivel",
+    "scale": {
+      "label": "Escala de color, relativa a lo consultado: de {low} (claro) a {high} (oscuro) detecciones por 1.000 km² por día; mitad de la escala: {mid}.",
+      "unit": "por 1.000 km²/día"
+    },
+    "hemi": {
+      "n": "N",
+      "s": "S",
+      "e": "E",
+      "w": "O"
+    }
   },
   "curtain": {
     "title": "MODIS {'|'} VIIRS · {product}",
@@ -101,8 +114,28 @@
     "ratio": " · VIIRS/MODIS ×{r}",
     "truncated": "· hasta {n} por sensor: acercá para ver todas",
     "bothHint": "· acercá para ver los dos sensores en cada lado",
-    "mapLeft": "Mapa MODIS (izquierda)",
-    "mapRight": "Mapa VIIRS (derecha)"
+    "mapLeft": "Mapa de la izquierda",
+    "mapRight": "Mapa de la derecha",
+    "imagery": "Imagen",
+    "compare": "Qué comparar",
+    "sensorsMode": "MODIS {'|'} VIIRS",
+    "rangeHint": "Rango del panel: {start} – {end}.",
+    "epochs": {
+      "mode": "Épocas",
+      "title": "Comparar épocas",
+      "grain": "Períodos de",
+      "month": "Mes",
+      "year": "Año",
+      "partial": "{period} (parcial)",
+      "summary": "{left}: {leftN} · {right}: {rightN} detecciones a la vista",
+      "change": " · {pct}",
+      "changePerDay": " · {pct} por día",
+      "hint": "El mismo lugar en dos períodos: cada lado suma su mes o año entero. Solo períodos con datos de {dataset}.",
+      "harmonizedHint": "Armonizados: una sola serie en unidades MODIS (MODIS hasta enero de 2012, VIIRS S-NPP ÷ k después), comparable entre épocas.",
+      "useRaw": "Ver originales",
+      "noCoverage": "El dataset elegido no tiene datos para comparar.",
+      "imageryOf": "{days} · imagen del {image}"
+    }
   },
   "slider": {
     "region": "Línea de tiempo",

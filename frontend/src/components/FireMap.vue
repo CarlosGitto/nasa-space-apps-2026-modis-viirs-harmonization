@@ -13,7 +13,7 @@
 //
 // Keyboard: with the map focused, arrows move it and +/− zoom (MapLibre); Enter does what a
 // click at the center (the crosshair) does, Shift+Enter adds or removes that hexagon.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getDetections, getHexagons, getSelectionWeather, getWeatherMap } from '../api'
 import { date, errorMessage } from '../format'
@@ -24,9 +24,11 @@ import {
 import { getHexagonEdgeLengthAvg } from 'h3-js'
 import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
-  fmt, hexOpacity, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup, viewportBbox, whenIdle,
-  withDensity,
+  applyScale, densityScale, fmt, HEX_BORDER_WIDTH, hexOpacity, hexPopup, hexRes, labelLayerId, localizeBasemap, mapLocale, maplibregl, pointPopup,
+  scaleTicks, viewportBbox, whenIdle, withDensity,
 } from '../mapShared'
+import FireScale from './FireScale.vue'
+import MouseCoords from './MouseCoords.vue'
 import { contourContrast, setContours } from '../relief'
 import { cellToLatLng, gridDiskDistances, latLngToCell } from 'h3-js'
 import {
@@ -55,6 +57,12 @@ useLoadingBar('weather', weatherLoading) // the weather layers and the selection
 let untrackSources = null
 const error = ref(null) // the API error (with .status), shown in the user's language
 const info = ref(null) // what's on screen: { total, hexagons, res, truncated }
+const fireTicks = ref(null) // legend of the color scale: [low, middle, high] densities
+const mapRef = shallowRef(null) // the MapLibre map, for the mouse coordinates (never made deeply reactive)
+// Color scale per range (dataset, dates, area, resolution): computed from the whole range's hexagons and kept, so
+// while the time slider plays a day is colored against its range and the colors don't jump from day to day.
+const scales = new Map()
+const daysOf = (start, end) => Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1)
 const noImagery = ref(false) // the chosen imagery has no picture for that date
 const weatherNotes = ref({}) // layer id -> { first, last } when that day has no data for it
 
@@ -110,6 +118,21 @@ async function refresh() {
     ])
     currentRes = res
     withDensity(fc, store.queryParams.start, store.queryParams.end)
+    // The scale comes from the whole range. Without a day on the slider, that's this answer;
+    // with one, the range's scale kept for this view (or asked once if there is none yet).
+    const key = JSON.stringify([store.dataset, store.start, store.end, store.zone, res])
+    if (!store.day) scales.set(key, densityScale(fc.features.map((f) => f.properties.density)))
+    else if (!scales.has(key)) {
+      const range = await getHexagons(store.dataset, { start: store.start, end: store.end, zone: store.zone, bbox: hexBbox, res }, signal)
+      withDensity(range, store.start, store.end)
+      scales.set(key, densityScale(range.features.map((f) => f.properties.density)))
+    }
+    if (scales.size > 50) scales.delete(scales.keys().next().value)
+    // A day against its range: the range's densities are per day of the whole range, a day's are per that one day,
+    // so compare the day's against the range's totals (density x days of the range).
+    const factor = store.day ? 1 / daysOf(store.start, store.end) : 1
+    applyScale(fc, scales.get(key), factor)
+    fireTicks.value = scaleTicks(scales.get(key), factor)
     hexById = new Map(fc.features.map((f) => [f.properties.h3, f]))
     map.getSource('hex').setData(fc)
     renderWeather() // the halo follows the fire hexagons on screen
@@ -333,7 +356,7 @@ function addLayers() {
     type: 'fill',
     source: 'hex',
     paint: {
-      // Log scale: a few cells have thousands of detections, most have a handful.
+      // Relative scale (mapShared.js): pale to dark over what the query brought.
       'fill-color': HEX_FILL_COLOR,
       // Lighter when zoomed in, so streets and the detections on top stay readable.
       'fill-opacity': HEX_OPACITY,
@@ -351,7 +374,7 @@ function addLayers() {
     type: 'line',
     source: 'grid',
     maxzoom: DETAIL_ZOOM,
-    paint: { 'line-color': '#7c2d12', 'line-width': 0.3, 'line-opacity': 0.4 },
+    paint: { 'line-color': '#7c2d12', 'line-width': HEX_BORDER_WIDTH, 'line-opacity': 0.2 }, // applyContrast() sets them
   }, labels)
   // Zoomed in: the hexagon's limit as a dashed line, so it's never lost.
   map.addLayer({
@@ -614,8 +637,9 @@ function applyContrast() {
   const border = prefs.contours ? '#6b7280' : '#7c2d12'
   map.setPaintProperty('hex-line', 'line-color', border)
   map.setPaintProperty('hex-line-dashed', 'line-color', border)
-  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : weatherOn ? 0.15 : prefs.contours ? 0.3 : 0.4)
-  map.setPaintProperty('hex-line', 'line-width', on ? 0.8 : 0.3)
+  // A whole pixel, light (mapShared.js HEX_BORDER_WIDTH), so they look alike on every screen.
+  map.setPaintProperty('hex-line', 'line-opacity', on ? 0.9 : weatherOn ? 0.08 : prefs.contours ? 0.15 : 0.2)
+  map.setPaintProperty('hex-line', 'line-width', on ? 1.2 : HEX_BORDER_WIDTH)
   map.setPaintProperty('hex-line-dashed', 'line-width', on ? 2.5 : 1.5)
   map.setPaintProperty('hex-fill', 'fill-opacity', weatherOn || on ? HEX_OPACITY_OVER_WEATHER : HEX_OPACITY)
   map.setLayoutProperty('hex-fire-line', 'visibility', weatherOn ? 'visible' : 'none')
@@ -653,6 +677,7 @@ onMounted(() => {
     addLayers()
     registerEvents()
     mapReady = true
+    mapRef.value = map
     localizeBasemap(map, prefs.locale)
     applyContrast()
     syncContours()
@@ -781,7 +806,9 @@ watch(() => prefs.locale, (locale) => {
         }) }}{{ info.truncated ? $t('map.pointsTruncated', { n: fmt(POINTS_LIMIT) }) : '' }}
       </span>
       <span v-if="noImagery" class="warn">{{ $t('controls.noImagery') }}</span>
+      <FireScale v-if="info && fireTicks && !error" :ticks="fireTicks" />
     </div>
+    <MouseCoords :maps="mapRef ? [mapRef] : []" />
   </div>
 </template>
 
