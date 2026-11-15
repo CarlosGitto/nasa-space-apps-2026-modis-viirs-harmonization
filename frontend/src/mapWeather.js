@@ -21,7 +21,8 @@ import { cellToLatLng, gridDiskDistances } from 'h3-js'
 export const WEATHER_LAYERS = {
   temperature: {
     label: 'Temperature',
-    title: 'Max temperature (°C) · NASA MERRA-2',
+    title: 'Max temp.',
+    unit: '°',
     icon: mdiThermometer,
     // The usual temperature-map palette (blue -> cyan -> green -> yellow -> orange -> red):
     // only the thermometer is colored, never the ground, so it doesn't compete with fire.
@@ -31,14 +32,16 @@ export const WEATHER_LAYERS = {
   },
   precipitation: {
     label: 'Rain',
-    title: 'Rain (mm/day) · NASA GPM IMERG · size = mm',
+    title: 'Rain',
+    unit: ' mm',
     icon: mdiWater,
     color: '#2563eb',
     legend: [1, 5, 20],
   },
   wind: {
     label: 'Wind',
-    title: 'Wind (daily mean) · NASA MERRA-2 · points where it blows',
+    title: 'Wind',
+    unit: ' m/s',
     icon: mdiArrowUp,
     stops: [[0, '#94a3b8'], [3, '#7dd3fc'], [7, '#38bdf8'], [12, '#2563eb'], [18, '#1e3a8a']],
     legend: [2, 7, 14],

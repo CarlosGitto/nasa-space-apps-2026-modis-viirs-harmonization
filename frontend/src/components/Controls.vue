@@ -85,10 +85,6 @@ const fmt = (n) => n.toLocaleString('en-US')
       <button :class="{ on: store.weatherScope === 'fires' }" @click="store.setWeatherScope('fires')">Around fires</button>
       <button :class="{ on: store.weatherScope === 'all' }" @click="store.setWeatherScope('all')">Everywhere</button>
     </div>
-    <p v-if="store.view === 'map' && store.weatherLayers.length" class="meta">
-      NASA MERRA-2 + GPM IMERG · {{ store.imageryDate }} (UTC, {{ store.day ? 'slider day' : 'end of range' }})
-      <template v-if="store.weatherScope === 'fires'"> · fire hexagons and their neighbors</template>
-    </p>
 
     <div class="zone">
       <span>Zone: <b>{{ store.zone ? 'drawn' : 'whole world' }}</b></span>
