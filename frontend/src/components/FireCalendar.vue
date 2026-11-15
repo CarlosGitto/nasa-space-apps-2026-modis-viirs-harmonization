@@ -53,6 +53,7 @@ const scale = ref('linear') // 'linear' | 'log'
 const hovered = ref(null) // key of the cell under the mouse (or with the keyboard focus)
 const cursor = ref(null) // key of the cell that takes the Tab focus (roving tabindex)
 const grid = ref(null)
+const yearsBox = ref(null) // the scrolling box of the years view
 
 // Follow the period picked elsewhere (date inputs, a dataset change): the calendar shows where it is.
 watch(() => store.day ?? store.start, (iso) => {
@@ -70,6 +71,7 @@ const years = computed(() => {
   const a = yearOf(span.value.start)
   return Array.from({ length: yearOf(span.value.end) - a + 1 }, (_, i) => a + i)
 })
+const yearsDesc = computed(() => [...years.value].reverse()) // the years view lists the newest first
 const minYear = computed(() => years.value[0])
 const maxYear = computed(() => years.value[years.value.length - 1])
 
@@ -278,6 +280,7 @@ const MEASURES = ['detections', 'frp', 'anomaly']
 const keyAt = (e) => document.elementFromPoint(e.clientX, e.clientY)?.closest?.('[data-k]')?.dataset.k
 function onDown(e, k) {
   if (e.button !== 0 || !pickable(k)) return
+  pickedInGrid = Date.now()
   if (e.shiftKey && store.start) {
     extendTo(k)
     return
@@ -298,6 +301,7 @@ function onMove(e) {
 }
 function onUp() {
   if (!drag.value) return
+  pickedInGrid = Date.now()
   const { anchor, current } = drag.value
   drag.value = null
   if (isMonth(anchor)) {
@@ -310,6 +314,7 @@ function onUp() {
 const onDayKey = (e, iso) => { if (e.detail === 0) pickDay(iso) }
 const onMonthKey = (e, y, m) => {
   if (e.detail !== 0) return
+  pickedInGrid = Date.now()
   if (e.shiftKey && store.start) extendTo(mKey(y, m))
   else pickMonth(y, m)
 }
@@ -323,7 +328,7 @@ function move(e) {
   let next
   if (k.length === 7) { // a month of the years view: left/right a month, up/down a year
     let [y, m] = [+k.slice(0, 4), +k.slice(5, 7)]
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') y += steps[e.key]
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') y -= steps[e.key] // newest year on top: up is the next year
     else { m += steps[e.key]; if (m < 1) { m = 12; y-- } else if (m > 12) { m = 1; y++ } }
     if (y < minYear.value || y > maxYear.value) return
     next = mKey(y, m)
@@ -344,6 +349,28 @@ const defaultCursor = computed(() => {
   return level.value === 'years' ? iso.slice(0, 7) : iso
 })
 watch(level, () => { cursor.value = null })
+
+// The years view scrolls: a new period (typed, a shortcut, the trail, the map) comes to its center. A pick made in
+// the grid itself doesn't move it, so the cells don't jump from under the mouse.
+let pickedInGrid = 0
+function centerPeriod(smooth = true) {
+  const box = yearsBox.value
+  if (level.value !== 'years' || !box || !store.start || !store.end) return
+  const rowOf = (iso) => box.querySelector(`[data-k="${iso.slice(0, 7)}"]`)?.parentElement
+  const [a, b] = [rowOf(store.end), rowOf(store.start)] // newest first: the end's row is the upper one
+  if (!a || !b) return
+  const top = a.offsetTop
+  const bottom = b.offsetTop + b.offsetHeight
+  const target = Math.max(0, Math.min(box.scrollHeight - box.clientHeight, (top + bottom) / 2 - box.clientHeight / 2))
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  box.scrollTo({ top: target, behavior: smooth && !reduce ? 'smooth' : 'auto' })
+}
+watch(() => [store.start, store.end], () => {
+  if (Date.now() - pickedInGrid < 400) return
+  nextTick(() => centerPeriod())
+})
+// Back to the years view (the trail) or new years loaded: straight to the period, no animation.
+watch(() => [level.value, years.value.length], () => nextTick(() => centerPeriod(false)))
 
 // ------------------------------------------------------------- navigation ---
 function open(lvl, y = focusYear.value, m = focusMonth.value) {
@@ -599,13 +626,15 @@ const legendStyle = computed(() => ({
     <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
     <div ref="grid" class="grids" :class="{ dragging: drag }" @keydown="move" @pointermove="onMove" @pointerleave="hovered = null">
       <!-- Years x months -->
-      <div v-if="level === 'years'" class="years" :class="{ few: years.length <= 8 }" role="group" :aria-label="$t('cal.yearsLabel')">
+      <!-- Newest year on top. Many years scroll inside the box (header and Typical row stay put), so the panel
+           never grows into an endless rectangle. -->
+      <div v-if="level === 'years'" ref="yearsBox" class="years" :class="{ few: years.length <= 8 }" role="group" :aria-label="$t('cal.yearsLabel')">
         <div class="yrow head" aria-hidden="true">
           <span></span>
           <span v-for="n in monthNames" :key="n">{{ n.slice(0, 1) }}</span>
           <span class="tot">{{ $t('cal.total') }}</span>
         </div>
-        <div v-for="y in years" :key="y" class="yrow">
+        <div v-for="y in yearsDesc" :key="y" class="yrow">
           <button type="button" class="ylabel" :aria-label="$t('cal.openYear', { year: y })" @click="pickYear(y); open('year', y)">{{ y }}</button>
           <button
             v-for="m in 12" :key="m" type="button" class="cell"
@@ -794,7 +823,13 @@ button.crumb:focus-visible { outline: 2px solid var(--focus); outline-offset: 2p
 .cell:not(.off):hover, .day:not(.off):hover, .big:not(.off):hover { outline: 2px solid var(--text); outline-offset: -1px; z-index: 2; }
 
 /* Years x months */
-.years { display: flex; flex-direction: column; gap: 2px; }
+.years {
+  position: relative; /* rows' offsetTop is measured from here (centerPeriod) */
+  display: flex; flex-direction: column; gap: 2px; max-height: 17rem; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; padding-right: 2px;
+}
+.yrow.head, .yrow.typical { position: sticky; z-index: 3; background: var(--panel); }
+.yrow.head { top: 0; padding-bottom: 2px; }
 .yrow { display: grid; grid-template-columns: 3.6rem repeat(12, 1fr) 3.2rem; gap: 2px; align-items: stretch; }
 .yrow.head span { font-size: 0.625rem; color: var(--muted); text-align: center; }
 .yrow .cell { height: 1.05rem; }
@@ -808,7 +843,7 @@ button.crumb:focus-visible { outline: 2px solid var(--focus); outline-offset: 2p
 .bar { display: flex; align-items: center; padding-left: 3px; }
 .bar span { display: block; height: 0.55rem; border-radius: 0 3px 3px 0; background: #ea580c; min-width: 1px; }
 .tot { text-align: left !important; padding-left: 3px; }
-.typical { margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--border); }
+.typical { bottom: 0; margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--border); }
 .cell.static { cursor: default; height: 1.05rem; border-radius: 3px; background: var(--surface-3); }
 
 /* Twelve months */

@@ -40,7 +40,9 @@ export const useFiltersStore = defineStore('filters', () => {
   const view = ref('map') // 'map' | 'compare' (MODIS | VIIRS curtain)
   // What the fire calendar and the main map show: 'harmonized' (one series 2000 -> today in MODIS units, MODIS
   // before 2012-02, VIIRS S-NPP / k after) or 'raw' (the dataset chosen in the controls, as published).
-  const values = ref('raw')
+  // Harmonized from the start: nothing raw is asked for while the series is checked (ready stays false); if the ETL
+  // hasn't built it, loadDatasets falls back to 'raw'.
+  const values = ref('harmonized')
   // How the calendar and the main map color: 'detections' (hotspots), 'frp' (fire power) or 'anomaly' (against the
   // same dates of the other years). Picked in the calendar; the map follows.
   const measure = ref('detections')
@@ -79,9 +81,9 @@ export const useFiltersStore = defineStore('filters', () => {
 
   // Curtain: MODIS on the left, VIIRS on the right, same product (NRT or SP) as the chosen dataset.
   // Harmonized: both sides in MODIS units (MODIS bow-tie merged and size-corrected; VIIRS S-NPP / k of each hexagon).
-  const compareHarmonized = ref(false)
+  const compareHarmonized = ref(true) // harmonized by default too (back to raw if the series isn't built)
   // Hexagon report (fichas): raw values, or harmonized (MODIS units). Separate from the Compare switch on purpose.
-  const hexHarmonized = ref(false)
+  const hexHarmonized = ref(true)
   const compareSides = computed(() => {
     if (compareHarmonized.value) {
       const side = (sensor) => datasets.value.find((d) => d.id === `${sensor}_harmonized`) ?? { id: `${sensor}_harmonized`, available: false }
@@ -149,7 +151,11 @@ export const useFiltersStore = defineStore('filters', () => {
       const endMonth = lastOfIt === last ? last : addDays(`${last.slice(0, 7)}-01`, -1)
       setRange(`${endMonth.slice(0, 7)}-01`, endMonth)
     } catch {
+      // Not built (or empty): the chosen dataset as published, everywhere.
       harmonizedReady.value = false
+      values.value = 'raw'
+      hexHarmonized.value = false
+      compareHarmonized.value = false
     }
   }
 
