@@ -40,6 +40,7 @@ starts, with every dataset `available: false`.
 | `GET /hexagons/{h3}/monthly` | Its monthly series per sensor and satellite |
 | `GET /hexagons/{h3}/period` | Its profile for `start`..`end` per sensor: totals, per satellite, daily series |
 | `GET /hexagons/{h3}/detections` | Its detections as a table for a `dataset` and `start`/`end` (MODIS/VIIRS datasets only). `limit` (default 2000) |
+| `GET /hexagons/{h3}/weather` | Its daily weather for `start`..`end` (default: the last 90 days with weather, at most 731): temperature, dew point, relative humidity, VPD and wind (MERRA-2); precipitation, its 7 / 30-day totals and days since rain (IMERG). Any hexagon in the loaded area, with or without detections |
 | `POST /hexagons/selection/summary` | Many hexagons at once (`{"h3": [...], "start", "end"}`, up to 5000): per hexagon with any history, its totals and its detections in the dates, per sensor, busiest first |
 | `POST /hexagons/selection/detections` | Detections of many hexagons as one table (`{"h3": [...], "dataset", "start", "end", "limit"}`) |
 
@@ -61,6 +62,13 @@ The `/hexagons/{h3}` endpoints are lookups by key on precomputed gold tables
 hexagon: tens of milliseconds on the dev lake. They use the continuous series
 (SP + NRT), one profile per sensor. An id that is not a valid res-6 cell gives
 422; a hexagon without data, 404.
+
+Weather is stored per grid cell, not per hexagon (see [data/README.md](../data/README.md#weather-nasa-earthdata)):
+`/hexagons/{h3}/weather` takes, for each grid, the cell nearest to the hexagon's
+center and says which (`cells`: product, center, distance). Days are UTC, like
+`acq_date`. The most recent weeks have precipitation but no MERRA-2 yet: those
+fields are `null`. A rain day is >= `rain_day_mm` (1 mm). 404 until the first
+weather load; an empty `days` list outside the loaded area.
 
 The OpenAPI schema (`/openapi.json`) is typed, so the frontend can generate its client from it.
 

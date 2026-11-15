@@ -12,6 +12,7 @@ import duckdb
 import pytest
 from fastapi.testclient import TestClient
 
+from app import db
 from app.main import app
 
 
@@ -99,6 +100,27 @@ PROFILE = """
 """
 
 
+# Weather gold (etl/dags/dbt/firms/models/gold/fct_weather_daily.sql, fct_precipitation_daily.sql):
+# one MERRA-2 cell (0.5° x 0.625°) and two IMERG cells (0.1°) near Buenos Aires.
+# MERRA-2 ends Nov 11 (it lags); IMERG goes on to Nov 12, with rain on Oct 20 and Nov 10.
+WEATHER = """
+    select -34.5 as cell_lat, -58.125 as cell_lon, d::date as obs_date, date_trunc('month', d)::date as obs_month,
+           30.0 as t2m_max_c, 15.0 as t2m_min_c, 22.0 as t2m_mean_c, 8.0 as dewpoint_mean_c,
+           25.0 as rh_min_pct, 50.0 as rh_mean_pct, 3.1 as vpd_max_kpa, 1.4 as vpd_mean_kpa,
+           9.0 as wind_speed_max_ms, 5.0 as wind_speed_mean_ms, 270.0 as wind_dir_mean_deg, 24 as hours,
+           '1' as last_load_id
+    from range(date '2026-10-01', date '2026-11-12', interval 1 day) t(d)
+"""
+
+PRECIPITATION = """
+    select cell_lat, -58.45 as cell_lon, d::date as obs_date, date_trunc('month', d)::date as obs_month,
+           case when d::date in (date '2026-10-20', date '2026-11-10') then 12.0
+                when d::date = date '2026-11-11' then 0.5 else 0.0 end as precipitation_mm,
+           case when d::date < date '2026-11-01' then 'final' else 'late' end as imerg_run, '1' as last_load_id
+    from range(date '2026-10-01', date '2026-11-13', interval 1 day) t(d), (values (-34.55), (-34.75)) c(cell_lat)
+"""
+
+
 def _build_lake(root: Path) -> None:
     root.mkdir(parents=True)
     sqlite = sqlite3.connect(root / "catalog.sqlite")
@@ -111,6 +133,8 @@ def _build_lake(root: Path) -> None:
     con.execute(f"CREATE TABLE lake.gold.dim_hexagon AS {HEXAGONS}")
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_monthly AS {MONTHLY}")
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_profile AS {PROFILE}")
+    con.execute(f"CREATE TABLE lake.gold.fct_weather_daily AS {WEATHER}")
+    con.execute(f"CREATE TABLE lake.gold.fct_precipitation_daily AS {PRECIPITATION}")
     # Harmonized gold with only the minimum contract: no satellite/confidence/brightness, no dlt columns.
     con.execute(
         """
@@ -437,6 +461,52 @@ def test_invalid_hexagon_is_422(client, h3_id):
 def test_hexagon_without_data_is_404(client):
     assert client.get(f"/hexagons/{_cell(0.0, 0.0)}").status_code == 404
 
+
+
+# ------------------------------------------------------ weather of a hexagon ---
+
+def test_hexagon_weather_takes_the_nearest_cell_of_each_grid(client):
+    body = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather").json()
+    cells = {c["product"]: c for c in body["cells"]}
+    assert cells["merra2"]["center"] == [-58.125, -34.5]
+    assert cells["imerg"]["center"] == [-58.45, -34.55]  # not the one at -34.75
+    assert cells["imerg"]["distance_km"] < 10
+    # Default range: 90 days up to the last day with any weather (IMERG, Nov 12).
+    assert (body["start"], body["end"]) == ("2026-08-15", "2026-11-12")
+    assert body["days"][0]["date"] == "2026-10-01" and body["days"][-1]["date"] == "2026-11-12"
+
+
+def test_hexagon_weather_merges_both_products_by_day(client):
+    days = {d["date"]: d for d in client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather").json()["days"]}
+    nov11, nov12 = days["2026-11-11"], days["2026-11-12"]
+    assert (nov11["vpd_max_kpa"], nov11["wind_dir_mean_deg"], nov11["imerg_run"]) == (3.1, 270.0, "late")
+    assert nov12["t2m_max_c"] is None and nov12["precipitation_mm"] == 0.0  # MERRA-2 lags, IMERG doesn't
+
+
+def test_hexagon_weather_accumulations_see_rain_before_the_range(client):
+    url = f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?start=2026-11-08&end=2026-11-12"
+    days = {d["date"]: d for d in client.get(url).json()["days"]}
+    assert list(days) == ["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]
+    assert days["2026-11-09"]["days_since_rain"] == 20  # rain on Oct 20, before the range
+    assert days["2026-11-10"]["days_since_rain"] == 0
+    assert days["2026-11-12"]["days_since_rain"] == 2  # 0.5 mm on Nov 11 is not a rain day
+    assert days["2026-11-12"]["precipitation_7d_mm"] == 12.5
+    assert days["2026-11-12"]["precipitation_30d_mm"] == 24.5
+
+
+def test_hexagon_weather_outside_the_loaded_area_is_empty(client):
+    body = client.get(f"/hexagons/{_cell(0.0, 0.0)}/weather").json()
+    assert (body["cells"], body["days"], body["start"]) == ([], [], None)
+
+
+def test_hexagon_weather_before_any_weather_load_is_404(client, monkeypatch):
+    monkeypatch.setattr(db, "weather_tables", lambda cur: set())
+    assert client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather").status_code == 404
+
+
+@pytest.mark.parametrize("query", ["start=2026-11-12&end=2026-11-11", "start=2020-01-01&end=2026-11-11"])
+def test_hexagon_weather_rejects_bad_ranges(client, query):
+    assert client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/weather?{query}").status_code == 422
 
 
 # ---------------------------------------------------------- a selection ---
