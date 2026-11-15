@@ -10,8 +10,8 @@
 // Optional NASA GIBS satellite imagery under the data, for the end day of the selected range.
 // Optional weather layers (temperature, rain, wind arrows) for the same day, under the
 // hexagons; see mapWeather.js.
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getDetections, getHexagons, getWeatherMap } from '../api'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { getDetections, getHexagons, getSelectionWeather, getWeatherMap } from '../api'
 import { gibsUrl } from '../gibs'
 import {
   MAX_SELECTION, areaPolygon, cellPolygon, cellsInArea, cellsOutline, covers, gridArea, gridCells,
@@ -21,9 +21,9 @@ import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
   fmt, hexOpacity, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle, withDensity,
 } from '../mapShared'
-import { latLngToCell } from 'h3-js'
+import { cellToLatLng, latLngToCell } from 'h3-js'
 import {
-  RAIN_SIZE, TEMPERATURE_SIZE, WEATHER_LAYERS, WIND_SIZE, colorAt, colorRamp, fireCandidates, fireNeighborhood, gridCandidates,
+  RAIN_SIZE, TEMPERATURE_SIZE, WEATHER_IDS, WEATHER_LAYERS, WIND_SIZE, colorAt, mergedGrids, selectionDay, selectionGrids, colorRamp, fireCandidates, fireNeighborhood, gridCandidates,
   iconImage, rainSize, responseCache, weatherGrid, weatherPoints, weatherRequest, weatherTooltip, windSize,
 } from '../mapWeather'
 import { useFiltersStore } from '../stores/filters'
@@ -54,6 +54,18 @@ let draftFrame = null // pending preview redraw (one per animation frame)
 const weatherCache = responseCache() // GET /weather/map responses, by layer, day and bbox
 let weatherGrids = {} // layer id -> grid of the day shown (see weatherGrid)
 let neighborhood = new Map() // h3 -> ring distance to a fire hexagon on screen: where weather is drawn
+// Weather of the selected hexagons, asked on demand (NASA POWER) for the whole date range,
+// so the slider animates it without more requests. Shown even with no weather layer on.
+const selectionWeather = ref(null)
+const selectionNote = ref('')
+let selectionToken = 0
+let selectionTimer = null
+const SELECTION_MAX_DAYS = 366
+// The layers drawn: the ones turned on, or all three when only a selection has weather.
+const shownLayers = computed(() =>
+  store.weatherLayers.length ? store.weatherLayers : selectionWeather.value ? WEATHER_IDS : [])
+// The selection's day drawn: the map's day, or the latest before it POWER has published.
+const selectionShownDay = computed(() => selectionDay(selectionWeather.value, store.imageryDate))
 
 // Smallest zoom showing a finer grid than `res`: clicking a coarse hexagon always goes down a level.
 const NEXT_LEVEL_ZOOM = { 0: 3, 1: 3, 2: 3, 3: 4.5, 4: 6, 5: 7.5 }
@@ -164,7 +176,10 @@ const HEX_OPACITY_OVER_WEATHER = ['interpolate', ['linear'], ['zoom'], DETAIL_ZO
 // one group of icons per place, thinned to the zoom, fading away from the fires.
 function renderWeather() {
   if (!mapReady) return
-  const grids = Object.fromEntries(store.weatherLayers.filter((id) => weatherGrids[id]).map((id) => [id, weatherGrids[id]]))
+  const lake = Object.fromEntries(store.weatherLayers.filter((id) => weatherGrids[id]).map((id) => [id, weatherGrids[id]]))
+  const selected = Object.fromEntries(Object.entries(selectionGrids(selectionWeather.value, selectionShownDay.value))
+    .filter(([id, g]) => g && shownLayers.value.includes(id)))
+  const grids = mergedGrids(selected, lake)
   const active = store.weatherLayers.length > 0
   map.setPaintProperty('hex-fill', 'fill-opacity', active ? HEX_OPACITY_OVER_WEATHER : HEX_OPACITY)
   map.setLayoutProperty('hex-fire-line', 'visibility', active ? 'visible' : 'none')
@@ -173,11 +188,47 @@ function renderWeather() {
   const any = Object.keys(grids).length > 0
   const fireCells = [...hexById.values()].filter((f) => f.properties.detections > 0).map((f) => f.properties.h3)
   neighborhood = any && store.weatherScope === 'fires' ? fireNeighborhood(fireCells) : new Map()
-  const candidates = !any ? [] : store.weatherScope === 'fires' ? fireCandidates(neighborhood) : gridCandidates(grids)
+  const lakeCandidates = !Object.keys(lake).length ? []
+    : store.weatherScope === 'fires' ? fireCandidates(neighborhood) : gridCandidates(lake)
+  // Selected hexagons first (ring 1: preferred and fully opaque), then the lake's places.
+  const selectedCandidates = Object.keys(selected).length
+    ? store.selectedHexes.map((h) => { const [lat, lon] = cellToLatLng(h); return { lon, lat, ring: 1 } })
+    : []
+  const candidates = [...selectedCandidates, ...lakeCandidates]
   map.getSource('wx-points').setData(any ? weatherPoints(candidates, grids, map.getZoom()) : EMPTY)
   for (const id of ['temperature', 'precipitation', 'wind']) {
     map.setLayoutProperty(`wx-${id}`, 'visibility', grids[id] ? 'visible' : 'none')
   }
+}
+
+// The selected hexagons' weather for the whole range (debounced: Shift+click adds many).
+function refreshSelectionWeather() {
+  clearTimeout(selectionTimer)
+  const token = ++selectionToken
+  if (!store.selectedHexes.length || !store.end) {
+    selectionWeather.value = null
+    selectionNote.value = ''
+    renderWeather()
+    return
+  }
+  selectionTimer = setTimeout(async () => {
+    const end = store.end
+    const earliest = new Date(`${end}T00:00:00Z`)
+    earliest.setUTCDate(earliest.getUTCDate() - (SELECTION_MAX_DAYS - 1))
+    const start = store.start && store.start > earliest.toISOString().slice(0, 10) ? store.start : earliest.toISOString().slice(0, 10)
+    selectionNote.value = 'Loading the weather of the selection (NASA POWER)…'
+    try {
+      const data = await getSelectionWeather({ h3: store.selectedHexes, start, end })
+      if (token !== selectionToken) return
+      selectionWeather.value = data
+      selectionNote.value = ''
+    } catch (e) {
+      if (token !== selectionToken) return
+      selectionWeather.value = null
+      selectionNote.value = `Selection weather: ${e.message}`
+    }
+    renderWeather()
+  }, 300)
 }
 
 // Jump to the last week with data for a layer (from its "no data" note).
@@ -470,7 +521,12 @@ function onHover(e) {
   // Weather under the cursor: anywhere ("Everywhere"), or inside the fires' neighborhood.
   const { lng, lat } = e.lngLat
   const shown = store.weatherScope === 'all' || (currentRes !== null && neighborhood.has(latLngToCell(lat, lng, currentRes)))
-  const weather = store.weatherLayers.length && shown ? weatherTooltip(weatherGrids, lng, lat) : ''
+  const lakeWeather = store.weatherLayers.length && shown ? weatherTooltip(weatherGrids, lng, lat) : ''
+  // Over a selected hexagon: its own (on-demand) weather.
+  const overSelected = currentRes !== null && store.selectedHexes.includes(latLngToCell(lat, lng, BASE_RES))
+  const weather = overSelected && selectionWeather.value
+    ? weatherTooltip(selectionGrids(selectionWeather.value, selectionShownDay.value), lng, lat) || lakeWeather
+    : lakeWeather
   if (!hit && !weather) return hideTooltip()
   map.getCanvas().style.cursor = hit ? 'pointer' : ''
   const html = !hit ? '' : hit.layer.id === 'points'
@@ -559,6 +615,7 @@ watch(() => store.view, (view) => {
 })
 // Layers turned on/off, or another day: reload the weather.
 watch(() => [store.weatherLayers, store.imageryDate], refreshWeather)
+watch(() => [store.selectedHexes, store.start, store.end], refreshSelectionWeather)
 watch(() => store.weatherScope, renderWeather)
 // Image type, satellite or day changed: update the imagery.
 // Watch id and date separately: pickLayer() returns a new object every time.
@@ -583,8 +640,12 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
       <span v-else-if="areaNote" class="hint">{{ areaNote }}</span>
     </div>
 
-    <div v-if="store.weatherLayers.length" class="legend" aria-label="Weather legend">
-      <div v-for="id in store.weatherLayers" :key="id" class="legend-item">
+    <div v-if="shownLayers.length || selectionNote" class="legend" aria-label="Weather legend">
+      <span v-if="selectionNote" class="legend-note">{{ selectionNote }}</span>
+      <span v-else-if="selectionWeather && selectionShownDay && selectionShownDay !== store.imageryDate" class="legend-note">
+        Selected hexagons: {{ selectionShownDay }}, the latest NASA POWER has (~2 days behind)
+      </span>
+      <div v-for="id in shownLayers" :key="id" class="legend-item">
         <span class="legend-icons">
           <span class="legend-title">{{ WEATHER_LAYERS[id].title }}</span>
           <span v-for="v in WEATHER_LAYERS[id].legend" :key="v">

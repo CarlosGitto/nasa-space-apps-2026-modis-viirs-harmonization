@@ -622,6 +622,15 @@ def weather_ready(cur: duckdb.DuckDBPyConnection) -> bool:
     return _attached and "fct_weather_daily" in _tables(cur)
 
 
+def hexagon_centers(cur: duckdb.DuckDBPyConnection, keys: list[int]) -> list[tuple[float, float]]:
+    """(lat, lon) of many hexagons' centers, in the order of `keys` (one query)."""
+    return cur.execute(
+        "select h3_cell_to_latlng(k)[1], h3_cell_to_latlng(k)[2] "
+        "from unnest(?::ubigint[]) with ordinality t(k, n) order by n",
+        [keys],
+    ).fetchall()
+
+
 def hexagon_center(cur: duckdb.DuckDBPyConnection, key: int) -> tuple[float, float]:
     """(lat, lon) of a hexagon's center: computed by H3, the hexagon needn't have detections."""
     lat, lon = cur.execute("select h3_cell_to_latlng(?)[1], h3_cell_to_latlng(?)[2]", [key, key]).fetchone()

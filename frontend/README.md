@@ -61,6 +61,13 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
     itself stays uncovered. Computed in the browser from the hexagons already loaded.
   - **Everywhere**: the same icons over the whole loaded area.
 
+  **Selected hexagons get their weather on demand**, with no layer turned on and no
+  need to open the Clima tab: selecting (or Shift+clicking, or drawing an area) asks
+  the backend (`POST /hexagons/selection/weather`, NASA POWER, cached) for the POWER
+  cells under them over the whole date range, and the map draws their icons for the
+  map's day (or the latest day POWER has, ~2 days behind, as the legend says); the
+  slider animates them without more requests.
+
   Responses are cached per layer and day (each layer comes for the whole loaded area),
   requests in flight are shared, and the
   next day is prefetched while the slider plays: panning and replaying days don't hit

@@ -156,3 +156,131 @@ def daily(lat: float, lon: float, start: date, end: date) -> dict[date, dict]:
         finally:
             con.close()
     return {d: v for d, (v, _) in sorted(cached.items()) if start <= d <= end}
+
+
+# ------------------------------------------------------- many places at once ---
+# A selection of hexagons (or a drawn area) on the map: the four values the map draws
+# (max temperature, rain, mean wind speed and direction) for every POWER cell under it.
+# Whichever needs fewer requests: one point request per cell (they also fill the
+# panel's cache), or POWER's regional endpoint, one request per parameter and box of
+# <= 10° a side (the API's limits). A few scattered hexagons go by point; a drawn area
+# (tens of cells close together) by region.
+
+MAP_PARAMETERS = {"T2M_MAX": "t2m_max_c", "PRECTOTCORR": "precipitation_mm", "WS10M": "wind_speed_mean_ms",
+                  "WD10M": "wind_dir_mean_deg"}
+POWER_REGIONAL_URL = "https://power.larc.nasa.gov/api/temporal/daily/regional"
+POINT_CELLS = 3
+MAX_BOX_DEG = 10
+
+
+def _get_json(url: str, params: dict) -> dict:
+    """GET with the module's pacing: one request at a time, MIN_INTERVAL_S apart, one
+    retry on 429/5xx, then PowerUnavailable. Call with _lock held."""
+    global _last_request
+    query = urllib.parse.urlencode(params)
+    for attempt in range(2):
+        wait = _last_request + MIN_INTERVAL_S - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_request = time.monotonic()
+        try:
+            with urllib.request.urlopen(f"{url}?{query}", timeout=TIMEOUT_S) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt == 0:
+                logger.warning("POWER %s, retrying once in 5 s", e.code)
+                time.sleep(5)
+                continue
+            raise PowerUnavailable(f"NASA POWER answered {e.code}") from None
+        except (urllib.error.URLError, TimeoutError) as e:
+            raise PowerUnavailable(f"NASA POWER unreachable: {e}") from None
+    raise PowerUnavailable("NASA POWER: no answer")
+
+
+def _fetch_regional(box: tuple[float, float, float, float], start: date, end: date) -> dict[tuple[float, float], dict[date, dict]]:
+    """{cell: {day: map values}} for every cell of one box (<= 10°), one request per parameter."""
+    west, south, east, north = box
+    out: dict[tuple[float, float], dict[date, dict]] = {}
+    for param, name in MAP_PARAMETERS.items():
+        payload = _get_json(POWER_REGIONAL_URL, {
+            "parameters": param, "community": COMMUNITY, "format": "JSON", "time-standard": "UTC",
+            "latitude-min": south, "latitude-max": north, "longitude-min": west, "longitude-max": east,
+            "start": start.strftime("%Y%m%d"), "end": end.strftime("%Y%m%d"),
+        })
+        for feature in payload.get("features", []):
+            lon, lat = feature["geometry"]["coordinates"][:2]
+            days = out.setdefault((round(lat, 4), round(lon, 4)), {})
+            for day, value in feature["properties"]["parameter"][param].items():
+                d = datetime.strptime(day, "%Y%m%d").date()
+                days.setdefault(d, {})[name] = None if value is None or value == FILL_VALUE else value
+    return out
+
+
+def _boxes(cells: list[tuple[float, float]]) -> list[tuple[float, float, float, float]]:
+    """Boxes of <= MAX_BOX_DEG covering the cells (centers +- half a cell)."""
+    lats, lons = [c[0] for c in cells], [c[1] for c in cells]
+    west, east = min(lons) - GRID[1] / 2, max(lons) + GRID[1] / 2
+    south, north = max(-90, min(lats) - GRID[0] / 2), min(90, max(lats) + GRID[0] / 2)
+    out, lat = [], south
+    while lat < north:
+        lon = west
+        while lon < east:
+            out.append((lon, lat, min(east, lon + MAX_BOX_DEG), min(north, lat + MAX_BOX_DEG)))
+            lon += MAX_BOX_DEG
+        lat += MAX_BOX_DEG
+    return out
+
+
+def map_values(points: list[tuple[float, float]], start: date, end: date) -> dict[tuple[float, float], dict[date, dict]]:
+    """{cell: {day: map values}} for the POWER cells under `points`, [start, end].
+
+    Cached like `daily` (same file, its own table): a cell-day is asked once (recent days
+    again after RECENT_TTL).
+    """
+    cells = sorted({cell_of(lat, lon) for lat, lon in points})
+    if not cells or end < start:
+        return {}
+    by_point = len(cells)
+    by_region = len(MAP_PARAMETERS) * len(_boxes(cells))
+    if len(cells) <= POINT_CELLS or by_point <= by_region:  # also what the panel will ask for
+        return {c: {d: {k: v.get(k) for k in MAP_PARAMETERS.values()} for d, v in daily(*c, start, end).items()}
+                for c in cells}
+    now = datetime.now(timezone.utc)
+    recent = now.date() - timedelta(days=RECENT_DAYS)
+    n_days = (end - start).days + 1
+    with _lock:
+        con = _db()
+        try:
+            con.execute(
+                "create table if not exists power_map_daily ("
+                " cell_lat real, cell_lon real, day text, values_json text, fetched_at text,"
+                " primary key (cell_lat, cell_lon, day))"
+            )
+            con.execute("create temp table want (cell_lat real, cell_lon real)")
+            con.executemany("insert into want values (?, ?)", cells)
+            rows = con.execute(
+                "select m.cell_lat, m.cell_lon, m.day, m.values_json, m.fetched_at from power_map_daily m "
+                "join want w using (cell_lat, cell_lon) where m.day between ? and ?",
+                [start.isoformat(), end.isoformat()],
+            ).fetchall()
+            out: dict[tuple[float, float], dict[date, dict]] = {}
+            fresh: dict[tuple[float, float], int] = {}
+            for lat, lon, day, values, fetched in rows:
+                d = date.fromisoformat(day)
+                out.setdefault((lat, lon), {})[d] = json.loads(values)
+                if d < recent or now - datetime.fromisoformat(fetched) <= RECENT_TTL:
+                    fresh[(lat, lon)] = fresh.get((lat, lon), 0) + 1
+            missing = [c for c in cells if fresh.get(c, 0) < n_days]
+            if missing:
+                for box in _boxes(missing):
+                    got = _fetch_regional(box, start, end)
+                    con.executemany(
+                        "insert or replace into power_map_daily values (?, ?, ?, ?, ?)",
+                        [(*c, d.isoformat(), json.dumps(v), now.isoformat()) for c, days in got.items() for d, v in days.items()],
+                    )
+                    for c, days in got.items():  # every cell of the box is cached; only `cells` returned
+                        out.setdefault(c, {}).update(days)
+                con.commit()
+        finally:
+            con.close()
+    return {c: dict(sorted(out.get(c, {}).items())) for c in cells}

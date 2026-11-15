@@ -193,6 +193,44 @@ export function weatherPoints(candidates, grids, zoom) {
   return { type: 'FeatureCollection', features }
 }
 
+// ------------------------------------------------------- selected hexagons ---
+
+// The day of a selection's weather to show for the map's day: that day, or the latest
+// before it with any value (POWER is ~2 days behind: the end of the range, often today,
+// has none yet). Null if there is none.
+export function selectionDay(selection, day) {
+  const rows = (selection?.days ?? []).filter(([d, values]) => d <= day && values.some((v) => v.some((x) => x !== null)))
+  return rows.length ? rows[rows.length - 1][0] : null
+}
+
+// POST /hexagons/selection/weather -> one grid per layer for one day (same shape as the
+// lake's grids, so weatherPoints and the tooltip use them alike).
+export function selectionGrids(selection, day) {
+  const row = selection?.days.find(([d]) => d === day)
+  if (!row) return {}
+  const [, values] = row
+  const cells = (pick) => values
+    .map((v, i) => (pick(v) ? [...selection.cells[i], ...pick(v)] : null))
+    .filter(Boolean)
+  const grid = (cs) => (cs.length ? weatherGrid({ cell: selection.cell, cells: cs }) : null)
+  return {
+    temperature: grid(cells(([t]) => (t === null ? null : [t]))),
+    precipitation: grid(cells(([, r]) => (r === null ? null : [r]))),
+    wind: grid(cells(([, , s, d]) => (s === null || d === null ? null : [s, d]))),
+  }
+}
+
+// One lookup per layer: the selection's value where it has one, else the lake's.
+export function mergedGrids(first, second) {
+  const out = {}
+  for (const id of WEATHER_IDS) {
+    const a = first[id]
+    const b = second[id]
+    if (a || b) out[id] = { response: (a ?? b).response, at: (lon, lat) => a?.at(lon, lat) ?? b?.at(lon, lat) ?? null }
+  }
+  return out
+}
+
 // ---------------------------------------------------------------- tooltip ---
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
