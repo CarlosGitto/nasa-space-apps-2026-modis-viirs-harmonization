@@ -10,7 +10,7 @@ change the other (see "Changing the region or the dates" in data/README.md):
 
 - area:  WEATHER_AREA in etl/.env, which defaults to FIRMS_AREA.
 - dates: WEATHER_DEFAULT_START here (same as SP_DEFAULT_START in
-         dags/firms_ingest_sp.py) and DEV_WEATHER_RANGES in the Makefile.
+         dags/firms_ingest_sp.py) and DEV_START in the Makefile.
 """
 
 import os

@@ -73,17 +73,17 @@ PRODUCTS = (MERRA2_SLV, IMERG_FINAL, IMERG_LATE)
 def plan_range(
     last_loaded: date | None,
     default_start: date,
-    yesterday: date,
-    max_days: int,
+    until: date,
     forced_start: date | None = None,
     forced_end: date | None = None,
 ) -> tuple[date, date] | None:
     """Days a run loads for one product, or None if there is nothing to do.
 
-    Forced dates (a manual backfill) win. Otherwise resume the day after the
-    last day loaded (or default_start for an empty table), at most max_days,
-    never past yesterday. Days not published yet are dropped later: CMR only
-    lists published granules.
+    Forced dates (a manual backfill) win. Otherwise everything from the day after
+    the last day loaded (or default_start for an empty table) up to `until`
+    (yesterday, or the last day something it depends on has). The DAGs split it
+    into chunks (chunk_range), one task each. Days not published yet are dropped
+    later: CMR only lists published granules.
     """
     if forced_start:
         start = forced_start
@@ -91,8 +91,18 @@ def plan_range(
         start = last_loaded + timedelta(days=1)
     else:
         start = default_start
-    end = forced_end or min(yesterday, start + timedelta(days=max_days - 1))
+    end = forced_end or until
     return (start, end) if start <= end else None
+
+
+def chunk_range(start: date, end: date, days: int) -> list[tuple[date, date]]:
+    """[start, end] split into consecutive pieces of at most `days` days."""
+    out = []
+    while start <= end:
+        last = min(end, start + timedelta(days=days - 1))
+        out.append((start, last))
+        start = last + timedelta(days=1)
+    return out
 
 
 def to_arrow(ds, product: Product, granule: Granule, area: str):
@@ -116,23 +126,29 @@ def to_arrow(ds, product: Product, granule: Granule, area: str):
     return pa.Table.from_pandas(df[columns], preserve_index=False)
 
 
-def _granule_resource(product: Product, reader: OpendapReader, granules: list[Granule], area: str):
+def _granule_resource(product: Product, reader: OpendapReader, granules: list[Granule], area: str, keep=None):
     @dlt.resource(name=product.table, write_disposition="append")
     def cells() -> Iterator:
         for granule in granules:
             table = to_arrow(reader.read(granule), product, granule, area)
-            logger.info("%s %s: %s rows", product.table, granule.day, table.num_rows)
-            yield table
+            total = table.num_rows
+            if keep is not None:
+                table = keep(table)
+            logger.info("%s %s: %s of %s cells kept", product.table, granule.day, table.num_rows, total)
+            if table.num_rows:
+                yield table
 
     return cells
 
 
 @dlt.source(name="weather")
-def weather_source(session, plan: dict[Product, list[Granule]], area: str = "world"):
+def weather_source(session, plan: dict[Product, list[Granule]], area: str = "world", keep=None):
     """One resource per product with granules to load.
 
     session: authenticated Earthdata session. plan: product -> granules (from
-    CMR). area: "world" or "west,south,east,north", like FIRMS.
+    CMR). area: "world" or "west,south,east,north", like FIRMS. keep: optional
+    Arrow table -> Arrow table filter applied to every granule before it's
+    written (the cells near fires, see fires.py).
     """
     parsed = Area.parse(area)
     return [
@@ -141,6 +157,7 @@ def weather_source(session, plan: dict[Product, list[Granule]], area: str = "wor
             OpendapReader(session, product.file_variables, parsed, decode_times=not product.daily),
             granules,
             area,
+            keep,
         )
         for product, granules in plan.items()
         if granules

@@ -117,6 +117,29 @@ How to read it:
 Loading the dev weather: `make etl-seed-weather-dev` (Airflow running, after
 adding the `earthdata_default` connection to `etl/.env`, see `etl/.env.example`).
 
+**Weather follows the fires** (`WEATHER_KEEP=fires`, the default). A global grid
+every day would be billions of rows, and the map only shows weather around fires,
+so each month of weather keeps only the grid cells within ~100–150 km of that
+month's fire hexagons (their H3 res-3 parents plus one ring;
+`etl/include/weather/fires.py`). That decides *what* to download; *when*:
+
+- Fire first. The weather DAG only plans days whose fires, loaded with the same
+  area (`_firms_area` in gold), are already in gold, walking forward from where
+  each weather product stopped and halting at the first gap of more than 7 days.
+- Each product keeps its own range: MERRA-2 up to its last published day
+  (~3–6 weeks behind), IMERG Final up to its own (months behind), IMERG Late
+  after Final. A month never runs with only part of its fires; it's picked up by
+  the next daily run once FIRMS has them.
+- Fires that land later for a month whose weather is already loaded (e.g. late
+  NRT detections in a new place) don't get their weather automatically: re-run
+  `weather_ingest` with `start_date`/`end_date` for that month.
+
+**Ingest runs load everything missing**, in chunks: `firms_ingest_sp` and
+`weather_ingest` plan every day from where they stopped (or 2025-01-01) to what
+NASA has published and load it one month per task (dynamic task mapping), so a
+long backfill lands month by month and a failure retries only its month.
+`firms_ingest_nrt` also catches up the days it missed if Airflow was off.
+
 ## Changing the region or the dates
 
 Fire and weather cover **the same area and dates on purpose**: weather is only
@@ -127,11 +150,15 @@ change the other:
 |---|---|
 | Area of the scheduled runs | `FIRMS_AREA` in `etl/.env` (weather follows it; `WEATHER_AREA` only to override) |
 | Area of the dev seeds | `DEV_AREA` in the Makefile (used by `etl-seed-dev` and `etl-seed-weather-dev`) |
-| Dates of the dev seeds | `DEV_SP_RANGES` / `DEV_NRT_START` and `DEV_WEATHER_RANGES` in the Makefile |
+| Dates of the dev seeds | `DEV_START` / `DEV_NRT_START` in the Makefile |
 | First day for an empty lake | `SP_DEFAULT_START` (`etl/dags/firms_ingest_sp.py`) and `WEATHER_DEFAULT_START` (`etl/include/weather/config.py`) |
 
 Data already in the lake for the old area stays there: changing the area only
-affects new loads.
+affects new loads. To go from South America to **the whole world**:
+`FIRMS_AREA=world` in `etl/.env`, `make etl-restart`, then
+`make etl-seed-dev DEV_AREA=world` and `make etl-seed-weather-dev DEV_AREA=world`
+(hours of downloads, ~25–35 GB of fire data plus a few GB of weather near the
+fires; the weather follows as the world's fires land).
 
 ## Setup (once per machine)
 

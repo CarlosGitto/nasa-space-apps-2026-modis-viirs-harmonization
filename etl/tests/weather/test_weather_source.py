@@ -21,7 +21,7 @@ from include.weather.earthdata import (
     parse_dmr,
     parse_granule,
 )
-from include.weather.source import IMERG_LATE, MERRA2_SLV, plan_range, to_arrow
+from include.weather.source import IMERG_LATE, MERRA2_SLV, chunk_range, plan_range, to_arrow
 
 # Trimmed DMR with the shape GES DISC serves for a MERRA-2 hourly granule.
 MERRA2_DMR = """<?xml version="1.0" encoding="ISO-8859-1"?>
@@ -109,14 +109,21 @@ def test_parse_granule_takes_the_opendap_link():
 @pytest.mark.parametrize(
     ("last", "forced", "expected"),
     [
-        (None, (None, None), (date(2025, 1, 1), date(2025, 1, 31))),  # empty table: default start
-        (date(2026, 11, 10), (None, None), (date(2026, 11, 11), date(2026, 11, 14))),  # capped at yesterday
+        (None, (None, None), (date(2025, 1, 1), date(2026, 11, 14))),  # empty table: everything from the default start
+        (date(2026, 11, 10), (None, None), (date(2026, 11, 11), date(2026, 11, 14))),  # resume, up to `until`
         (date(2026, 11, 14), (None, None), None),  # up to date
         (date(2026, 11, 10), (date(2025, 3, 1), date(2025, 3, 31)), (date(2025, 3, 1), date(2025, 3, 31))),
     ],
 )
 def test_plan_range(last, forced, expected):
-    assert plan_range(last, date(2025, 1, 1), date(2026, 11, 14), 31, *forced) == expected
+    assert plan_range(last, date(2025, 1, 1), date(2026, 11, 14), *forced) == expected
+
+
+def test_chunk_range_covers_every_day_once():
+    chunks = chunk_range(date(2025, 1, 1), date(2025, 3, 5), 31)
+    assert chunks == [(date(2025, 1, 1), date(2025, 1, 31)), (date(2025, 2, 1), date(2025, 3, 3)),
+                      (date(2025, 3, 4), date(2025, 3, 5))]
+    assert chunk_range(date(2025, 1, 1), date(2025, 1, 1), 31) == [(date(2025, 1, 1), date(2025, 1, 1))]
 
 
 def _granule(day: date) -> Granule:
@@ -170,3 +177,32 @@ def test_session_keeps_credentials_only_for_earthdata_login():
     assert "Authorization" in _redirect(session, opendap, "https://urs.earthdata.nasa.gov/oauth/authorize")
     assert "Authorization" in _redirect(session, "https://urs.earthdata.nasa.gov/oauth/authorize", opendap)
     assert "Authorization" not in _redirect(session, opendap, "https://some-bucket.s3.amazonaws.com/x.nc4")
+
+
+def test_near_fire_filter_keeps_only_cells_in_the_fire_zone():
+    import duckdb
+
+    from include.weather.fires import FIRE_ZONE_RES, near_fire_filter
+
+    con = duckdb.connect()
+    con.execute("INSTALL h3 FROM community; LOAD h3;")
+    fire = con.execute(f"select h3_latlng_to_cell(-41.5, -71.8, {FIRE_ZONE_RES})").fetchone()[0]
+    grid = pa.table({"lat": [-41.5, -41.4, 10.0], "lon": [-71.8, -71.9, 20.0], "t2m": [300.0, 301.0, 290.0]})
+    kept = near_fire_filter([fire])(grid)
+    assert kept.column_names == ["lat", "lon", "t2m"]
+    assert sorted(kept.column("t2m").to_pylist()) == [300.0, 301.0]  # the cell far away is dropped
+    assert near_fire_filter([])(grid).num_rows == 0
+
+
+def test_covered_until_stops_at_the_first_long_gap():
+    from datetime import timedelta
+
+    from include.weather.fires import covered_until
+
+    d0 = date(2025, 1, 1)
+    days = {d0 + timedelta(days=i) for i in range(10)} | {d0 + timedelta(days=i) for i in range(14, 20)}
+    days |= {date(2026, 11, 1)}  # NRT far ahead while SP is still loading: not covered
+    assert covered_until(days, d0) == d0 + timedelta(days=19)  # the 4-day gap is tolerated
+    assert covered_until(days, d0, max_gap=3) == d0 + timedelta(days=9)
+    assert covered_until(days, date(2025, 6, 1)) is None  # nothing near that start
+    assert covered_until(set(), d0) is None
