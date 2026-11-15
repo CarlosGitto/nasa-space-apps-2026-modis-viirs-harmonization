@@ -67,21 +67,27 @@ function timeOf(r) {
   return t.toISOString().slice(0, 16).replace('T', ' ')
 }
 
+const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
+
+// main: shown by default. The rest (position, brightness, pixel size, version) behind
+// "Todas las columnas": 13 columns never fit the panel, 6 do without scrolling sideways.
 const COLUMNS = [
-  { key: 'time', label: 'Fecha y hora', value: (r) => r.acq_datetime_utc },
-  { key: 'satellite', label: 'Satélite', value: (r) => r.satellite ?? '' },
-  { key: 'product', label: 'Prod.', value: (r) => r.product },
-  { key: 'latitude', label: 'Lat', value: (r) => r.latitude },
-  { key: 'longitude', label: 'Lon', value: (r) => r.longitude },
-  { key: 'frp', label: 'FRP (MW)', value: (r) => r.frp ?? -1 },
-  { key: 'confidence', label: 'Conf.', value: (r) => r.confidence_raw ?? '' },
-  { key: 'daynight', label: 'D/N', value: (r) => r.daynight ?? '' },
-  { key: 'brightness', label: 'Brillo (K)', value: (r) => r.brightness ?? -1 },
-  { key: 'brightness_aux', label: 'Brillo aux (K)', value: (r) => r.brightness_aux ?? -1 },
-  { key: 'scan', label: 'Scan', value: (r) => r.scan ?? -1 },
-  { key: 'track', label: 'Track', value: (r) => r.track ?? -1 },
-  { key: 'version', label: 'Versión', value: (r) => r.version ?? '' },
+  { key: 'time', label: 'Fecha y hora', main: true, value: (r) => r.acq_datetime_utc, cell: (r) => timeOf(r) },
+  { key: 'satellite', label: 'Satélite', main: true, value: (r) => r.satellite ?? '', cell: (r) => r.satellite ?? '–' },
+  { key: 'product', label: 'Prod.', main: true, value: (r) => r.product, cell: (r) => r.product.toUpperCase() + (r.is_preferred ? '' : '*') },
+  { key: 'frp', label: 'FRP (MW)', main: true, value: (r) => r.frp ?? -1, cell: (r) => fixed(r.frp, 1) },
+  { key: 'confidence', label: 'Conf.', main: true, value: (r) => r.confidence_raw ?? '', cell: (r) => r.confidence_raw ?? '–' },
+  { key: 'daynight', label: 'D/N', main: true, value: (r) => r.daynight ?? '', cell: (r) => r.daynight ?? '–' },
+  { key: 'latitude', label: 'Lat', value: (r) => r.latitude, cell: (r) => fixed(r.latitude, 4) },
+  { key: 'longitude', label: 'Lon', value: (r) => r.longitude, cell: (r) => fixed(r.longitude, 4) },
+  { key: 'brightness', label: 'Brillo (K)', value: (r) => r.brightness ?? -1, cell: (r) => fixed(r.brightness, 1) },
+  { key: 'brightness_aux', label: 'Brillo aux (K)', value: (r) => r.brightness_aux ?? -1, cell: (r) => fixed(r.brightness_aux, 1) },
+  { key: 'scan', label: 'Scan', value: (r) => r.scan ?? -1, cell: (r) => fixed(r.scan, 2) },
+  { key: 'track', label: 'Track', value: (r) => r.track ?? -1, cell: (r) => fixed(r.track, 2) },
+  { key: 'version', label: 'Versión', value: (r) => r.version ?? '', cell: (r) => r.version ?? '–' },
 ]
+const allColumns = ref(false)
+const columns = computed(() => (allColumns.value ? COLUMNS : COLUMNS.filter((c) => c.main)))
 
 const visible = computed(() => {
   const q = filter.value.trim().toLowerCase()
@@ -98,7 +104,6 @@ function sortBy(key) {
   sort.value = sort.value.key === key ? { key, desc: !sort.value.desc } : { key, desc: key === 'time' || key === 'frp' }
 }
 
-const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
 </script>
 
 <template>
@@ -118,8 +123,11 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
         <input v-model="filter" type="search" placeholder="Filtrar…" aria-label="Filtrar observaciones" />
         <div class="toggle" role="group" aria-label="Hora">
           <button :class="{ on: !localTime }" @click="localTime = false">UTC</button>
-          <button :class="{ on: localTime }" @click="localTime = true">Hora solar local</button>
+          <button :class="{ on: localTime }" @click="localTime = true">Hora solar</button>
         </div>
+        <button class="columns" :aria-pressed="allColumns" @click="allColumns = !allColumns">
+          {{ allColumns ? 'Menos columnas' : 'Todas las columnas' }}
+        </button>
       </div>
 
       <p class="muted">
@@ -131,14 +139,14 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
         Se muestran las {{ num(LIMIT) }} más recientes: acortá las fechas para ver todas.
       </p>
 
-      <div class="table-wrap">
+      <div class="table-wrap" :class="{ wide: allColumns }">
         <table>
           <thead>
             <tr>
               <th v-if="hexes.length > 1">Hexágono</th>
-              <th v-for="c in COLUMNS" :key="c.key" :aria-sort="sort.key === c.key ? (sort.desc ? 'descending' : 'ascending') : 'none'">
+              <th v-for="c in columns" :key="c.key" :aria-sort="sort.key === c.key ? (sort.desc ? 'descending' : 'ascending') : 'none'">
                 <button @click="sortBy(c.key)">
-                  {{ c.key === 'time' ? (localTime ? 'Fecha y hora (solar)' : 'Fecha y hora (UTC)') : c.label }}
+                  {{ c.key === 'time' ? (localTime ? 'Fecha (solar)' : 'Fecha (UTC)') : c.label }}
                   <span v-if="sort.key === c.key">{{ sort.desc ? '▼' : '▲' }}</span>
                 </button>
               </th>
@@ -148,22 +156,10 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
             <tr v-for="(r, i) in visible" :key="i" :class="{ static: r.is_static_source }"
                 :title="r.is_static_source ? 'Fuente fija de calor: no es un incendio' : ''">
               <td v-if="hexes.length > 1"><code>{{ r.h3 }}</code></td>
-              <td class="nowrap">{{ timeOf(r) }}</td>
-              <td>{{ r.satellite ?? '–' }}</td>
-              <td>{{ r.product.toUpperCase() }}{{ r.is_preferred ? '' : '*' }}</td>
-              <td>{{ fixed(r.latitude, 4) }}</td>
-              <td>{{ fixed(r.longitude, 4) }}</td>
-              <td>{{ fixed(r.frp, 1) }}</td>
-              <td>{{ r.confidence_raw ?? '–' }}</td>
-              <td>{{ r.daynight ?? '–' }}</td>
-              <td>{{ fixed(r.brightness, 1) }}</td>
-              <td>{{ fixed(r.brightness_aux, 1) }}</td>
-              <td>{{ fixed(r.scan, 2) }}</td>
-              <td>{{ fixed(r.track, 2) }}</td>
-              <td>{{ r.version ?? '–' }}</td>
+              <td v-for="c in columns" :key="c.key">{{ c.cell(r) }}</td>
             </tr>
             <tr v-if="!visible.length && !loading">
-              <td :colspan="COLUMNS.length + 1" class="empty">Sin observaciones.</td>
+              <td :colspan="columns.length + 1" class="empty">Sin observaciones.</td>
             </tr>
           </tbody>
         </table>
@@ -189,8 +185,21 @@ const fixed = (v, d) => (v === null || v === undefined ? '–' : v.toFixed(d))
 .tools { display: flex; gap: 8px; align-items: center; }
 .tools input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 12px; }
 .toggle { display: flex; gap: 2px; }
-.table-wrap { overflow: auto; max-height: calc(100vh - 330px); border: 1px solid var(--border); border-radius: 6px; }
-table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; width: max-content; min-width: 100%; }
+.table-wrap { overflow-y: auto; overflow-x: hidden; max-height: calc(100vh - 330px); border: 1px solid var(--border); border-radius: 6px; }
+/* Default columns fit the panel; "Todas las columnas" scrolls sideways on purpose, with the
+   date column pinned so a row stays readable. */
+.table-wrap.wide { overflow-x: auto; }
+.table-wrap.wide th:first-child, .table-wrap.wide td:first-child {
+  position: sticky; left: 0; background: var(--panel); box-shadow: 1px 0 0 var(--border);
+}
+.table-wrap.wide thead th:first-child { z-index: 2; }
+table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; width: 100%; }
+.table-wrap.wide table { width: max-content; min-width: 100%; }
+.columns {
+  border: 1px solid var(--border); background: var(--panel); border-radius: 6px;
+  padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.columns[aria-pressed="true"] { background: var(--bg); }
 th { position: sticky; top: 0; background: #f9fafb; border-bottom: 1px solid var(--border); text-align: left; z-index: 1; }
 th button { all: unset; cursor: pointer; display: block; padding: 6px 8px; font-weight: 600; white-space: nowrap; }
 td { padding: 4px 8px; border-bottom: 1px solid #f3f4f6; white-space: nowrap; }

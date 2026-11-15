@@ -583,8 +583,8 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
 
     <div v-if="store.weatherLayers.length" class="legend" aria-label="Weather legend">
       <div v-for="id in store.weatherLayers" :key="id" class="legend-item">
-        <span class="legend-title">{{ WEATHER_LAYERS[id].title }}</span>
         <span class="legend-icons">
+          <span class="legend-title">{{ WEATHER_LAYERS[id].title }}</span>
           <span v-for="v in WEATHER_LAYERS[id].legend" :key="v">
             <svg
               viewBox="0 0 24 24" aria-hidden="true"
@@ -594,7 +594,7 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
             >
               <path :d="WEATHER_LAYERS[id].icon" :fill="id === 'precipitation' ? WEATHER_LAYERS[id].color : colorAt(id, v)" />
             </svg>
-            {{ v }}{{ id === 'temperature' ? '°' : id === 'precipitation' ? ' mm' : ' m/s' }}
+            {{ v }}{{ WEATHER_LAYERS[id].unit }}
           </span>
         </span>
         <span v-if="weatherNotes[id]" class="legend-note">
@@ -606,8 +606,9 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
           <template v-else>No data loaded yet (weather_ingest DAG)</template>
         </span>
       </div>
-      <span v-if="store.weatherScope === 'fires'" class="legend-fade">
-        Around the fires on screen, fading out over 3 rings of neighbors. Hover for values.
+      <span class="legend-fade">
+        {{ store.imageryDate }} UTC ({{ store.day ? 'slider day' : 'end of range' }}) · NASA MERRA-2, GPM IMERG
+        <template v-if="store.weatherScope === 'fires'"> · fading away from fires</template>
       </span>
     </div>
 
@@ -640,23 +641,25 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
   align-items: center; flex-wrap: wrap; background: var(--panel); padding: 6px 10px; border-radius: 6px;
   font-size: 13px; box-shadow: var(--shadow);
 }
+/* Top right, under the zoom buttons: the bottom is taken by the status line and attribution. */
 .legend {
-  position: absolute; bottom: 28px; right: 12px; width: 250px; display: flex; flex-direction: column; gap: 8px;
-  background: var(--panel); padding: 8px 10px; border-radius: 6px; box-shadow: var(--shadow); font-size: 11px;
+  position: absolute; top: 84px; right: 10px; max-width: min(340px, calc(100% - 24px)); display: flex;
+  flex-direction: column; gap: 4px; background: var(--panel); padding: 6px 10px; border-radius: 6px;
+  box-shadow: var(--shadow); font-size: 11px;
 }
-.legend-item { display: flex; flex-direction: column; gap: 3px; }
-.legend-title { color: var(--text); font-weight: 600; }
+.legend-item { display: flex; flex-direction: column; gap: 2px; }
+.legend-title { color: var(--text); font-weight: 600; min-width: 58px; }
 .legend-bar { height: 8px; border-radius: 4px; }
 .legend-ticks { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
 .legend-note { color: var(--muted); }
-.legend-icons { display: flex; gap: 10px; align-items: center; color: var(--muted); flex-wrap: wrap; }
+.legend-icons { display: flex; gap: 8px; align-items: center; color: var(--muted); flex-wrap: wrap; }
 .legend-icons span { display: inline-flex; align-items: center; gap: 2px; }
-.legend-fade { color: var(--muted); }
+.legend-fade { color: var(--muted); font-size: 10px; }
 .legend-note button {
   margin-top: 3px; display: block; font: inherit; font-size: 11px; background: none; color: var(--accent);
   border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; cursor: pointer;
 }
-@media (max-width: 760px) { .legend { width: auto; left: 12px; bottom: 64px; } }
+@media (max-width: 760px) { .legend { left: 12px; top: 56px; } }
 .error { color: var(--danger); }
 .warn { color: var(--muted); }
 .spinner {
