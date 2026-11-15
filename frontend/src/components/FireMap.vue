@@ -19,7 +19,7 @@ import {
 import { getHexagonEdgeLengthAvg } from 'h3-js'
 import {
   BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
-  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle,
+  fmt, hexOpacity, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle, withDensity,
 } from '../mapShared'
 import { latLngToCell } from 'h3-js'
 import {
@@ -76,6 +76,7 @@ async function refresh() {
       zoom >= DETAIL_ZOOM ? getDetections(store.dataset, { ...params, limit: POINTS_LIMIT }, signal) : null,
     ])
     currentRes = res
+    withDensity(fc, store.queryParams.start, store.queryParams.end)
     hexById = new Map(fc.features.map((f) => [f.properties.h3, f]))
     map.getSource('hex').setData(fc)
     renderWeather() // the halo follows the fire hexagons on screen
@@ -155,8 +156,9 @@ function prefetchNextDay(on, date) {
 }
 
 // Fire hexagons a bit stronger while weather is on, so they stay the protagonists.
-const HEX_OPACITY = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.65, DETAIL_ZOOM + 1, 0.3]
-const HEX_OPACITY_OVER_WEATHER = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.9, DETAIL_ZOOM + 1, 0.55]
+// By density (see mapShared.js), lighter once zoomed in to the detections.
+const HEX_OPACITY = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, hexOpacity(0.75), DETAIL_ZOOM + 1, hexOpacity(0.35)]
+const HEX_OPACITY_OVER_WEATHER = ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, hexOpacity(0.92), DETAIL_ZOOM + 1, hexOpacity(0.55)]
 
 // Draw the loaded grids in the chosen scope (no request: grids and hexagons are in memory):
 // one group of icons per place, thinned to the zoom, fading away from the fires.
@@ -245,7 +247,7 @@ function addLayers() {
       // Log scale: a few cells have thousands of detections, most have a handful.
       'fill-color': HEX_FILL_COLOR,
       // Lighter when zoomed in, so streets and the detections on top stay readable.
-      'fill-opacity': ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.65, DETAIL_ZOOM + 1, 0.3],
+      'fill-opacity': HEX_OPACITY,
     },
   }, labels)
   // While weather is on: a dark outline around the fire hexagons so they stand out.
