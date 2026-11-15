@@ -126,11 +126,28 @@ def to_arrow(ds, product: Product, granule: Granule, area: str):
     return pa.Table.from_pandas(df[columns], preserve_index=False)
 
 
+def _unique_cells(table):
+    """One row per (time_utc, lat, lon): boxes that share an edge both include its cells."""
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute("SET TimeZone = 'UTC'")  # keep timestamps in UTC (see fires.near_fire_filter)
+    con.register("t", table)
+    return con.execute("select * from t qualify row_number() over (partition by time_utc, lat, lon) = 1").fetch_arrow_table()
+
+
 def _granule_resource(product: Product, reader: OpendapReader, granules: list[Granule], area: str, keep=None):
     @dlt.resource(name=product.table, write_disposition="append")
     def cells() -> Iterator:
+        import pyarrow as pa
+
         for granule in granules:
-            table = to_arrow(reader.read(granule), product, granule, area)
+            parts = [to_arrow(ds, product, granule, area) for ds in reader.read(granule)]
+            if not parts:
+                continue
+            table = pa.concat_tables(parts)
+            if len(parts) > 1:
+                table = _unique_cells(table)  # a cell on the edge of two boxes comes in both
             total = table.num_rows
             if keep is not None:
                 table = keep(table)
@@ -142,19 +159,21 @@ def _granule_resource(product: Product, reader: OpendapReader, granules: list[Gr
 
 
 @dlt.source(name="weather")
-def weather_source(session, plan: dict[Product, list[Granule]], area: str = "world", keep=None):
+def weather_source(session, plan: dict[Product, list[Granule]], area: str = "world", keep=None, boxes=None):
     """One resource per product with granules to load.
 
     session: authenticated Earthdata session. plan: product -> granules (from
-    CMR). area: "world" or "west,south,east,north", like FIRMS. keep: optional
-    Arrow table -> Arrow table filter applied to every granule before it's
-    written (the cells near fires, see fires.py).
+    CMR). area: "world" or "west,south,east,north", like FIRMS. boxes: optional
+    (west, south, east, north) boxes, the only parts of the area requested from
+    OPeNDAP (around fires, see fires.zone_boxes). keep: optional Arrow table ->
+    Arrow table filter applied to every granule before it's written (the exact
+    cells near fires).
     """
     parsed = Area.parse(area)
     return [
         _granule_resource(
             product,
-            OpendapReader(session, product.file_variables, parsed, decode_times=not product.daily),
+            OpendapReader(session, product.file_variables, parsed, decode_times=not product.daily, boxes=boxes),
             granules,
             area,
             keep,
