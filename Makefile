@@ -13,9 +13,19 @@ DEV_SP_RANGES := 2025-01-01:2025-03-31 2025-04-01:2025-06-30 2025-07-01:2025-09-
                  2026-01-01:2026-03-31 2026-04-01:2026-06-30 2026-07-01:2026-09-30
 # Day after the last published VIIRS SP month (MODIS NRT starts later on its own).
 DEV_NRT_START := 2026-08-01
+# Weather (NASA Earthdata) for the same area and dates as the fire data, from 2025-01-01:
+# quarterly runs; days NASA hasn't published yet are skipped by the DAG.
+#
+# KEEP FIRE AND WEATHER IN SYNC. If you change the region or the dates of the dev
+# dataset, change both: DEV_AREA (used by both seeds), FIRMS_AREA in etl/.env (the
+# weather DAG follows it unless WEATHER_AREA is set), DEV_SP_RANGES / DEV_WEATHER_RANGES
+# here, and SP_DEFAULT_START / WEATHER_DEFAULT_START in the DAGs. See data/README.md,
+# "Changing the region or the dates".
+DEV_WEATHER_RANGES := 2025-01-01:2025-03-31 2025-04-01:2025-06-30 2025-07-01:2025-09-30 2025-10-01:2025-12-31 \
+                      2026-01-01:2026-03-31 2026-04-01:2026-06-30 2026-07-01:2026-09-30 2026-10-01:2026-12-31
 
 .DEFAULT_GOAL := help
-.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev etl-reprocess backend-setup backend-dev backend-test frontend-setup frontend-dev
+.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev etl-seed-weather-dev etl-reprocess backend-setup backend-dev backend-test frontend-setup frontend-dev
 
 help: ## List available commands
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -52,6 +62,13 @@ etl-seed-dev: ## Load the dev dataset: South America, SP 2025 -> latest + NRT af
 	@# NRT: from the day after the last SP month up to yesterday.
 	cd $(ETL_DIR) && astro dev run dags trigger firms_ingest_nrt \
 		--conf "{\"area\": \"$(DEV_AREA)\", \"start_date\": \"$(DEV_NRT_START)\"}"
+
+etl-seed-weather-dev: ## Load weather for the dev dataset: MERRA-2 + IMERG, same area and dates (Airflow running)
+	@# One run per quarter; they queue and run one at a time (max_active_runs=1).
+	cd $(ETL_DIR) && for r in $(DEV_WEATHER_RANGES); do \
+		astro dev run dags trigger weather_ingest \
+			--conf "{\"area\": \"$(DEV_AREA)\", \"start_date\": \"$${r%%:*}\", \"end_date\": \"$${r##*:}\"}"; \
+	done
 
 etl-reprocess: ## Rebuild silver + gold from the raw data already loaded, no download (Airflow running)
 	@# Full refresh of every dbt model in dependency order: bronze stays, silver and gold are rebuilt.

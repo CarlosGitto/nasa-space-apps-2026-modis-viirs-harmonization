@@ -95,8 +95,8 @@ def attach_sql(read_only: bool = False) -> str:
     return f"ATTACH 'ducklake:sqlite:{CATALOG_PATH}' AS {LAKE_ALIAS} ({options})"
 
 
-def raw_pipeline(name: str):
-    """dlt pipeline that appends to the bronze tables of the lake."""
+def raw_pipeline(name: str, dataset: str = RAW_DATASET):
+    """dlt pipeline that appends to the bronze tables of the lake (schema `dataset`)."""
     import dlt
     from dlt.destinations.impl.ducklake.configuration import DuckLakeCredentials
 
@@ -105,7 +105,7 @@ def raw_pipeline(name: str):
     return dlt.pipeline(
         pipeline_name=name,
         destination=dlt.destinations.ducklake(credentials=credentials),
-        dataset_name=RAW_DATASET,
+        dataset_name=dataset,
     )
 
 
@@ -130,8 +130,10 @@ def catalog_initialized() -> bool:
     return row is not None
 
 
-def last_loaded_dates(tables: list[str]) -> dict[str, "date"]:  # noqa: F821
-    """table -> max(acq_date) in the bronze tables that exist and have rows."""
+def last_loaded_dates(
+    tables: list[str], dataset: str = RAW_DATASET, date_column: str = "acq_date"
+) -> dict[str, "date"]:  # noqa: F821
+    """table -> max(date_column) in the bronze tables of `dataset` that exist and have rows."""
     import duckdb
 
     if not catalog_initialized():  # nothing loaded yet
@@ -143,13 +145,13 @@ def last_loaded_dates(tables: list[str]) -> dict[str, "date"]:  # noqa: F821
             row[0]
             for row in con.execute(
                 "select table_name from information_schema.tables where table_catalog = ? and table_schema = ?",
-                [LAKE_ALIAS, RAW_DATASET],
+                [LAKE_ALIAS, dataset],
             ).fetchall()
         }
         for table in tables:
             if table not in existing:
                 continue
-            last = con.execute(f'select max(acq_date) from {LAKE_ALIAS}.{RAW_DATASET}."{table}"').fetchone()[0]
+            last = con.execute(f'select max("{date_column}") from {LAKE_ALIAS}.{dataset}."{table}"').fetchone()[0]
             if last is not None:
                 out[table] = last
     return out

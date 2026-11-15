@@ -1,7 +1,7 @@
 [project]
 name = "etl"
 version = "0.1.0"
-description = "FIRMS ingestion (dlt) and transformation (dbt + Cosmos) on Astro/Airflow"
+description = "FIRMS and weather ingestion (dlt) and transformation (dbt + Cosmos) on Astro/Airflow"
 readme = "README.md"
 # Same Python as the Astro Runtime image (runtime:3.3-12).
 requires-python = ">=3.14,<3.15"
@@ -9,6 +9,10 @@ requires-python = ">=3.14,<3.15"
 dependencies = [
     "dlt[ducklake,parquet]==1.32.0",
     "astronomer-cosmos==1.15.1",
+    # Weather ingest (NASA Earthdata): read the OPeNDAP NetCDF-4 subsets.
+    "xarray==2026.9.0",
+    "h5netcdf==1.8.3",
+    "h5py==3.16.0",
 ]
 
 [dependency-groups]

@@ -30,7 +30,8 @@ from airflow.sdk import Param, dag, task
 
 from include.firms.config import FIRMS_AREA, FIRMS_RAW_SP, LAKE_WRITER_POOL
 
-# First day loaded when a product has nothing in the lake yet.
+# First day loaded when a product has nothing in the lake yet. Keep it equal to
+# WEATHER_DEFAULT_START (include/weather/config.py): weather covers the same dates.
 SP_DEFAULT_START = date(2025, 1, 1)
 
 
