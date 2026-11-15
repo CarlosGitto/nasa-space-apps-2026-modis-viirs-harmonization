@@ -13,7 +13,7 @@ const MUTED = '#6b7280'
 const GRID = '#e5e7eb'
 
 // categories: x labels; bySensor: { modis: [n per category], viirs: [...] }
-export function sensorBars(categories, bySensor, { labelInterval = 'auto', decimals = 0 } = {}) {
+export function sensorBars(categories, bySensor, { labelInterval = 'auto', decimals = 0, format = null, max = null } = {}) {
   const sensors = Object.keys(bySensor)
   return {
     animation: false,
@@ -24,7 +24,7 @@ export function sensorBars(categories, bySensor, { labelInterval = 'auto', decim
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      valueFormatter: (v) => `${num(v, decimals)} detecciones`,
+      valueFormatter: format ?? ((v) => `${num(v, decimals)} detecciones`),
     },
     xAxis: {
       type: 'category',
@@ -35,7 +35,8 @@ export function sensorBars(categories, bySensor, { labelInterval = 'auto', decim
     },
     yAxis: {
       type: 'value',
-      minInterval: decimals ? 0 : 1,
+      minInterval: decimals || max ? 0 : 1,
+      ...(max ? { min: 0, max } : {}),
       axisLabel: { color: MUTED, fontSize: 10 },
       splitLine: { lineStyle: { color: GRID } },
     },
@@ -128,5 +129,45 @@ export function harmonizedLine(data, metric) {
         lineStyle: { width: 2, color: '#eb6834' }, itemStyle: { color: '#eb6834' },
       },
     ],
+  }
+}
+
+// Reliability of the detections by year and sensor (fct_hexagon_reliability_monthly): months are weighted by their
+// detections, so a month with two detections does not count as much as one with two hundred.
+// metric: 'reliability' (mean probability that an independent sensor confirms) | 'persistent' (share of persistent detections)
+export function reliabilityByYear(rows, metric) {
+  if (!rows.length) return null
+  const years = [...new Set(rows.map((r) => Number(r.month.slice(0, 4))))].sort((a, b) => a - b)
+  const span = Array.from({ length: years.at(-1) - years[0] + 1 }, (_, i) => years[0] + i)
+  const acc = {}
+  for (const r of rows) {
+    const a = ((acc[r.sensor] ??= {})[r.month.slice(0, 4)] ??= { det: 0, rel: 0, per: 0 })
+    a.det += r.detections
+    a.rel += r.reliability_sum
+    a.per += r.persistent_detections
+  }
+  const bySensor = {}
+  for (const [sensor, byYear] of Object.entries(acc)) {
+    bySensor[sensor] = span.map((y) => {
+      const a = byYear[y]
+      return a ? (metric === 'reliability' ? a.rel / a.det : a.per / a.det) : null
+    })
+  }
+  const label = metric === 'reliability' ? 'índice medio' : 'detecciones persistentes'
+  return sensorBars(span.map(String), bySensor, {
+    labelInterval: 0, max: 1,
+    format: (v) => (v === null || v === undefined ? 'sin detecciones' : metric === 'reliability' ? `${num(v, 2)} · ${label}` : `${pct(v)} ${label}`),
+  })
+}
+
+// Overall figures of one sensor from the monthly rows, weighted by detections.
+export function reliabilityTotals(rows, sensor) {
+  const mine = rows.filter((r) => r.sensor === sensor)
+  const det = mine.reduce((s, r) => s + r.detections, 0)
+  if (!det) return null
+  return {
+    detections: det,
+    reliability: mine.reduce((s, r) => s + r.reliability_sum, 0) / det,
+    persistent: mine.reduce((s, r) => s + r.persistent_detections, 0) / det,
   }
 }

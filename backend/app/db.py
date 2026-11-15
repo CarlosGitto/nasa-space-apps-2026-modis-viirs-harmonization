@@ -81,6 +81,7 @@ MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_monthly"
 PROFILE = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_profile"
 HARMONIZED_MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_harmonized_monthly"
 HARMONIZED_DAILY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_harmonized_daily"
+RELIABILITY_MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_reliability_monthly"
 AREA_COVERAGE = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_area_coverage_monthly"
 HEXAGON_TABLES = ("fct_hexagon_detections", "fct_hexagon_daily", "dim_hexagon")
 
@@ -500,6 +501,19 @@ def hexagon_harmonized(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
     """Monthly series of the hexagon spliced across the MODIS -> VIIRS change (fct_hexagon_harmonized_monthly)."""
     rel = cur.execute(
         f"select * exclude (h3_r6) from {HARMONIZED_MONTHLY} where h3_r6 = ? order by acq_month", [key]
+    )
+    cols = [d[0] for d in rel.description]
+    return [dict(zip(cols, row)) for row in rel.fetchall()]
+
+
+def reliability_ready(cur: duckdb.DuckDBPyConnection) -> bool:
+    return _attached and "fct_hexagon_reliability_monthly" in _tables(cur)
+
+
+def hexagon_reliability(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
+    """Monthly persistence and reliability of one hexagon, per sensor (fct_hexagon_reliability_monthly)."""
+    rel = cur.execute(
+        f"select * exclude (h3_r6) from {RELIABILITY_MONTHLY} where h3_r6 = ? order by acq_month, sensor", [key]
     )
     cols = [d[0] for d in rel.description]
     return [dict(zip(cols, row)) for row in rel.fetchall()]

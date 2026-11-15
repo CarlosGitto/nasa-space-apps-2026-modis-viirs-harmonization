@@ -2,12 +2,12 @@
 // Ficha · historial: the whole history of one hexagon, precomputed in gold
 // (fct_hexagon_profile + fct_hexagon_monthly). One card per sensor.
 import { computed, ref, watch } from 'vue'
-import { getHexagon, getHexagonHarmonized, getHexagonMonthly } from '../../api'
+import { getHexagon, getHexagonHarmonized, getHexagonMonthly, getHexagonReliability } from '../../api'
 import { SENSOR_COLORS, SENSOR_LABELS } from '../../mapShared'
 import MiniChart from './MiniChart.vue'
 import './ficha.css'
 import { useFiltersStore } from '../../stores/filters'
-import { MONTHS, harmonizedLine, monthLabel, monthRange, num, pct, sensorBars } from './charts'
+import { MONTHS, harmonizedLine, monthLabel, monthRange, num, pct, reliabilityByYear, reliabilityTotals, sensorBars } from './charts'
 
 const props = defineProps({ h3: { type: String, required: true } })
 const store = useFiltersStore()
@@ -19,6 +19,8 @@ const info = ref(null)
 const monthly = ref([])
 const harmonized = ref({ months: [], covered_months: [] })
 const harmonizedMetric = ref('frp')
+const reliability = ref([])
+const reliabilityMetric = ref('reliability')
 const error = ref(null)
 const loading = ref(false)
 
@@ -28,6 +30,8 @@ async function load() {
   try {
     ;[info.value, monthly.value] = await Promise.all([getHexagon(props.h3, h.value), getHexagonMonthly(props.h3)])
     // Optional: the spliced series may not be built yet; the rest of the ficha does not depend on it.
+    // Optional too: the reliability index may not be built yet.
+    reliability.value = await getHexagonReliability(props.h3).catch(() => [])
     harmonized.value = h.value
       ? await getHexagonHarmonized(props.h3).catch(() => ({ months: [], covered_months: [] }))
       : { months: [], covered_months: [] }
@@ -77,6 +81,9 @@ const kNote = computed(() => {
   const own = r.k_res === 6 ? 'propio de la celda' : r.k_res === 0 ? 'global' : `heredado de la celda de resolución ${r.k_res}`
   return `k (VIIRS / MODIS): FRP ${num(r.k_frp, 2)}, detecciones ${num(r.k_count, 2)} · ${own}`
 })
+
+const reliabilityChart = computed(() => reliabilityByYear(reliability.value, reliabilityMetric.value))
+const reliabilityTotal = (sensor) => reliabilityTotals(reliability.value, sensor)
 
 const climatologyChart = computed(() => {
   const profiles = info.value?.profiles ?? []
@@ -137,6 +144,30 @@ const kpis = (p) => [
         </p>
       </section>
 
+      <section v-if="reliabilityChart" class="reliability">
+        <h4>
+          Fiabilidad de las detecciones
+          <select v-model="reliabilityMetric" class="metric">
+            <option value="reliability">Índice de fiabilidad</option>
+            <option value="persistent">% persistentes</option>
+          </select>
+        </h4>
+        <dl class="kpis">
+          <template v-for="s in info.profiles" :key="s.sensor">
+            <div v-if="reliabilityTotal(s.sensor)">
+              <dt>{{ SENSOR_LABELS[s.sensor] }} · índice medio</dt>
+              <dd>{{ num(reliabilityTotal(s.sensor).reliability, 2) }}</dd>
+              <dd class="note">{{ pct(reliabilityTotal(s.sensor).persistent) }} persistentes</dd>
+            </div>
+          </template>
+        </dl>
+        <MiniChart :option="reliabilityChart" height="150px" />
+        <p class="muted small">
+          El índice es la probabilidad de que otro sensor confirme la detección (de 0 a 1), según su confianza, su
+          persistencia y su FRP. Mide si la detección vuelve a verse, no si es un incendio real. Capacidad de
+          discriminación moderada (AUC 0,66 MODIS · 0,73 VIIRS). Cada año pesa por sus detecciones.
+        </p>
+      </section>
       <section v-if="harmonizedChart">
         <h4>
           Serie continua MODIS + VIIRS

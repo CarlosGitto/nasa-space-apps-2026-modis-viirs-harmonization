@@ -533,6 +533,18 @@ class HexagonHarmonizedMonth(BaseModel):
     k_res: int  # H3 resolution the k comes from: 6 = the cell's own, 0 = global
 
 
+class HexagonReliabilityMonth(BaseModel):
+    """Persistence and reliability of the wildfire detections of one hexagon in one month, per sensor."""
+
+    month: date = Field(validation_alias="acq_month")
+    sensor: Sensor
+    detections: int
+    persistent_detections: int  # another pass of the same sensor within 1.5 km, 1-36 h away
+    persistent_share: float
+    reliability_mean: float  # mean probability that an independent sensor confirms the detection (0-1)
+    reliability_sum: float  # expected number of confirmed detections (to average over several months)
+
+
 class HexagonHarmonized(BaseModel):
     months: list[HexagonHarmonizedMonth]
     # Months whose data was fully downloaded for the sensor that defines the series. A month without a row in
@@ -656,6 +668,20 @@ def hexagon_harmonized(h3_id: HexId, cur: Cursor) -> HexagonHarmonized:
         months=[HexagonHarmonizedMonth.model_validate(r) for r in db.hexagon_harmonized(cur, key)],
         covered_months=db.hexagon_covered_months(cur, key),
     )
+
+
+@router.get("/hexagons/{h3_id}/reliability")
+def hexagon_reliability(h3_id: HexId, cur: Cursor) -> list[HexagonReliabilityMonth]:
+    """Persistence and reliability index of the hexagon's detections, per month and sensor.
+
+    The index is the probability that an independent sensor confirms a detection (logistic on confidence, persistence
+    and FRP; out-of-fold AUC 0.66 MODIS / 0.73 VIIRS): a measure of how likely it is to be seen again, not of how
+    likely it is to be a real fire. To average over several months weight by `detections`.
+    """
+    key, _ = _hexagon(cur, h3_id)
+    if not db.reliability_ready(cur):
+        raise HTTPException(404, "the reliability index has not been built yet")
+    return [HexagonReliabilityMonth.model_validate(r) for r in db.hexagon_reliability(cur, key)]
 
 
 @router.get("/hexagons/{h3_id}/period")

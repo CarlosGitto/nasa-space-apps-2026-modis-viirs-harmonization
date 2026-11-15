@@ -93,7 +93,11 @@ def ensure_catalog() -> None:
 
 def attach_sql(read_only: bool = False) -> str:
     """ATTACH statement for the lake (needs the ducklake and sqlite extensions)."""
-    options = f"DATA_PATH '{LAKE_DATA_PATH}'" + (", READ_ONLY" if read_only else "")
+    # OVERRIDE_DATA_PATH: the catalog keeps the data path of whoever wrote first (inside Airflow:
+    # /usr/local/airflow/data/lake/files/); the same files are seen under another path from a terminal on the host
+    # (make etl-load-local, local dbt, the backend). Data files are stored relative to it, so overriding is safe and a
+    # no-op when the paths already match.
+    options = f"DATA_PATH '{LAKE_DATA_PATH}', OVERRIDE_DATA_PATH true" + (", READ_ONLY" if read_only else "")
     return f"ATTACH 'ducklake:sqlite:{CATALOG_PATH}' AS {LAKE_ALIAS} ({options})"
 
 
@@ -106,7 +110,7 @@ def raw_pipeline(name: str):
     credentials = DuckLakeCredentials(LAKE_ALIAS, catalog=f"sqlite:///{CATALOG_PATH}", storage=LAKE_DATA_PATH)
     return dlt.pipeline(
         pipeline_name=name,
-        destination=dlt.destinations.ducklake(credentials=credentials),
+        destination=dlt.destinations.ducklake(credentials=credentials, override_data_path=True),
         dataset_name=RAW_DATASET,
     )
 
