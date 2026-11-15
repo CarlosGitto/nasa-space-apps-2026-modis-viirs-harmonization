@@ -1,21 +1,32 @@
 <script setup>
-// Map: H3 hexagons when zoomed out, individual detections when zoomed in.
-// Always the whole world unless the user draws a zone (Terra Draw).
+// Map of H3 hexagons: coarse parents when zoomed out, the fixed res-6 grid from
+// BASE_ZOOM on. Hexagons never go away: from DETAIL_ZOOM their border turns dashed
+// and individual detections are drawn on top. Click a coarse hexagon to zoom into
+// it; click a res-6 hexagon to open it in the panel (Shift/Ctrl/Cmd adds more).
+// The whole grid is always drawn (borders only, built in the browser, see hexGrid.js);
+// only hexagons with detections are filled and clickable.
+// Always the whole world unless the user draws an area: 4 clicks, then every res-6
+// hexagon whose center is inside it is selected (empty ones too) and the map is filtered.
 // Optional NASA GIBS satellite imagery under the data, for the end day of the selected range.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { TerraDraw, TerraDrawPolygonMode, TerraDrawRectangleMode } from 'terra-draw'
-import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
 import { getDetections, getHexagons } from '../api'
 import { gibsUrl } from '../gibs'
 import {
-  EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE,
-  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox,
+  MAX_SELECTION, areaPolygon, cellPolygon, cellsInArea, cellsOutline, covers, gridArea, gridCells,
+} from '../hexGrid'
+import { getHexagonEdgeLengthAvg } from 'h3-js'
+import {
+  BASE_RES, DETAIL_ZOOM, EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, STATIC_COLOR, STYLE,
+  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
 
 const store = useFiltersStore()
 const container = ref(null)
-const tool = ref(null) // 'polygon' | 'rectangle' | null
+const AREA_POINTS = 4
+const tool = ref(null) // 'area' while drawing an area, else null
+const draft = ref([]) // [lng, lat] of the points clicked so far
+const areaNote = ref('') // e.g. area too big to select its hexagons
 const loading = ref(false)
 const error = ref(null)
 const info = ref('')
@@ -23,9 +34,17 @@ const imageryNote = ref('') // warning when the chosen imagery has no picture fo
 
 let map = null
 let mapReady = false // set on 'load'; isStyleLoaded() flips to false while sources update
-let draw = null
 let controller = null
 let debounce = null
+let resizer = null
+let tooltip = null
+let currentRes = null // resolution of the hexagons on screen
+let hexById = new Map() // h3 -> feature on screen (whole polygon, not the tiled one MapLibre returns)
+let gridShown = null // area (and resolution) of the grid on screen
+let draftFrame = null // pending preview redraw (one per animation frame)
+
+// Smallest zoom showing a finer grid than `res`: clicking a coarse hexagon always goes down a level.
+const NEXT_LEVEL_ZOOM = { 0: 3, 1: 3, 2: 3, 3: 4.5, 4: 6, 5: 7.5 }
 
 async function refresh() {
   // Hidden while the MODIS | VIIRS curtain is shown: don't fetch for nothing.
@@ -35,35 +54,54 @@ async function refresh() {
   const { signal } = controller
   const zoom = map.getZoom()
   const params = { ...store.queryParams, bbox: viewportBbox(map) }
+  const res = hexRes(zoom)
+  const hexBbox = viewportBbox(map, 2 * getHexagonEdgeLengthAvg(res, 'km')) // cells partly on screen too
   loading.value = true
+  store.setBusy('map', true)
   try {
-    if (zoom < POINTS_ZOOM) {
-      const res = hexRes(zoom)
-      const fc = await getHexagons(store.dataset, { ...params, res }, signal)
-      map.getSource('hex').setData(fc)
-      map.getSource('points').setData(EMPTY)
-      const total = fc.features.reduce((s, f) => s + f.properties.detections, 0)
-      info.value = `${fmt(total)} detections in ${fmt(fc.features.length)} hexagons (H3 res ${res})`
-    } else {
-      const fc = await getDetections(store.dataset, { ...params, limit: POINTS_LIMIT }, signal)
-      map.getSource('points').setData(fc)
-      map.getSource('hex').setData(EMPTY)
-      info.value = fc.truncated
-        ? `Showing the ${fmt(POINTS_LIMIT)} most recent detections: zoom in or shorten the dates to see all`
-        : `${fmt(fc.features.length)} detections`
-    }
+    const [fc, points] = await Promise.all([
+      getHexagons(store.dataset, { ...params, bbox: hexBbox, res }, signal),
+      zoom >= DETAIL_ZOOM ? getDetections(store.dataset, { ...params, limit: POINTS_LIMIT }, signal) : null,
+    ])
+    currentRes = res
+    hexById = new Map(fc.features.map((f) => [f.properties.h3, f]))
+    map.getSource('hex').setData(fc)
+    map.getSource('points').setData(points ?? EMPTY)
+    const total = fc.features.reduce((s, f) => s + f.properties.detections, 0)
+    const grid = res === BASE_RES ? 'base grid, H3 res 6' : `H3 res ${res}`
+    info.value = `${fmt(total)} detections in ${fmt(fc.features.length)} hexagons (${grid})`
+    if (points?.truncated) info.value += ` · showing the ${fmt(POINTS_LIMIT)} most recent points`
     error.value = null
+    await whenIdle(map) // drawn (data and imagery) before the time slider moves on
+    if (!signal.aborted) store.setBusy('map', false)
   } catch (e) {
-    if (e.name === 'AbortError') return
+    if (e.name === 'AbortError') return // a newer refresh owns the busy flag
     error.value = e.message
+    store.setBusy('map', false)
   } finally {
     if (!signal.aborted) loading.value = false
   }
 }
 
+// The whole grid of the visible area, with or without detections: just borders,
+// not clickable. Built in the browser with a margin, so panning reuses it.
+function updateGrid() {
+  if (!mapReady) return
+  const bounds = map.getBounds()
+  const res = hexRes(map.getZoom())
+  if (covers(gridShown, bounds, res)) return
+  const area = gridArea(bounds, res)
+  const fc = gridCells(area)
+  map.getSource('grid').setData(fc ?? EMPTY)
+  gridShown = fc ? area : null
+}
+
 function scheduleRefresh() {
   clearTimeout(debounce)
-  debounce = setTimeout(refresh, 250)
+  debounce = setTimeout(() => {
+    updateGrid()
+    refresh()
+  }, 250)
 }
 
 function addLayers() {
@@ -87,6 +125,7 @@ function addLayers() {
     paint: { 'raster-brightness-max': 0.65, 'raster-saturation': -0.3 },
   }, labels)
 
+  map.addSource('grid', { type: 'geojson', data: EMPTY })
   map.addSource('hex', { type: 'geojson', data: EMPTY })
   map.addSource('points', { type: 'geojson', data: EMPTY })
   map.addLayer({
@@ -96,14 +135,25 @@ function addLayers() {
     paint: {
       // Log scale: a few cells have thousands of detections, most have a handful.
       'fill-color': HEX_FILL_COLOR,
-      'fill-opacity': 0.65,
+      // Lighter when zoomed in, so streets and the detections on top stay readable.
+      'fill-opacity': ['interpolate', ['linear'], ['zoom'], DETAIL_ZOOM - 1, 0.65, DETAIL_ZOOM + 1, 0.3],
     },
   }, labels)
+  // Borders come from the full grid, so empty cells show them too.
   map.addLayer({
     id: 'hex-line',
     type: 'line',
-    source: 'hex',
+    source: 'grid',
+    maxzoom: DETAIL_ZOOM,
     paint: { 'line-color': '#7c2d12', 'line-width': 0.3, 'line-opacity': 0.4 },
+  }, labels)
+  // Zoomed in: the hexagon's limit as a dashed line, so it's never lost.
+  map.addLayer({
+    id: 'hex-line-dashed',
+    type: 'line',
+    source: 'grid',
+    minzoom: DETAIL_ZOOM,
+    paint: { 'line-color': '#7c2d12', 'line-width': 1.5, 'line-opacity': 0.8, 'line-dasharray': [3, 2] },
   }, labels)
   map.addLayer({
     id: 'points',
@@ -121,21 +171,179 @@ function addLayers() {
       'circle-opacity': 0.9,
     },
   }, labels)
+
+  // Drawn area: outline of the hexagons it selects (it snaps to the grid).
+  map.addSource('zone', { type: 'geojson', data: EMPTY })
+  map.addLayer({
+    id: 'zone-fill', type: 'fill', source: 'zone',
+    paint: { 'fill-color': '#2563eb', 'fill-opacity': 0.06 },
+  }, labels)
+
+  // Hexagons open in the panel: outlined on top of everything, at any zoom.
+  map.addSource('selected', { type: 'geojson', data: EMPTY })
+  map.addLayer({
+    id: 'selected-casing', type: 'line', source: 'selected',
+    paint: { 'line-color': '#ffffff', 'line-width': 5, 'line-opacity': 0.9 },
+  })
+  map.addLayer({
+    id: 'selected-line', type: 'line', source: 'selected',
+    paint: { 'line-color': '#1d4ed8', 'line-width': 2.5 },
+  })
+  map.addLayer({
+    id: 'zone-line', type: 'line', source: 'zone',
+    paint: { 'line-color': '#1d4ed8', 'line-width': 2.5 },
+  })
+
+  // Area being drawn: clicked points, the shape so far and the hexagons it would take.
+  map.addSource('draft', { type: 'geojson', data: EMPTY })
+  map.addLayer({
+    id: 'draft-cells', type: 'line', source: 'draft', filter: ['==', ['get', 'kind'], 'cells'],
+    paint: { 'line-color': '#1d4ed8', 'line-width': 2, 'line-dasharray': [2, 2] },
+  })
+  map.addLayer({
+    id: 'draft-line', type: 'line', source: 'draft', filter: ['==', ['get', 'kind'], 'shape'],
+    paint: { 'line-color': '#1d4ed8', 'line-width': 1.5, 'line-opacity': 0.7 },
+  })
+  map.addLayer({
+    id: 'draft-points', type: 'circle', source: 'draft', filter: ['==', ['get', 'kind'], 'point'],
+    paint: { 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-color': '#1d4ed8', 'circle-stroke-width': 2 },
+  })
 }
 
-// Registered once: map.on('click', layerId, …) keeps working if the layer is re-created.
-function registerEvents() {
-  const popup = (layer, html) => {
-    map.on('click', layer, (e) => {
-      if (tool.value) return // drawing: clicks belong to Terra Draw
-      new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html(e.features[0].properties)).addTo(map)
-    })
-    map.on('mouseenter', layer, () => { if (!tool.value) map.getCanvas().style.cursor = 'pointer' })
-    map.on('mouseleave', layer, () => { if (!tool.value) map.getCanvas().style.cursor = '' })
+// Outline the selected hexagons (polygons from h3-js, no request needed). Many of
+// them (an area): thin lines, the area's own outline marks the edge.
+function syncSelection() {
+  if (!mapReady) return
+  const ids = store.selectedHexes
+  const features = ids.map((h3) => ({ type: 'Feature', geometry: cellPolygon(h3), properties: { h3 } }))
+  map.getSource('selected').setData({ type: 'FeatureCollection', features })
+  const many = ids.length > 20
+  map.setPaintProperty('selected-line', 'line-width', many ? 0.8 : 2.5)
+  map.setPaintProperty('selected-casing', 'line-opacity', many ? 0 : 0.9)
+}
+
+function syncZone() {
+  if (!mapReady) return
+  const geometry = store.zoneCells.length ? cellsOutline(store.zoneCells) : store.zone
+  map.getSource('zone').setData(geometry ? { type: 'Feature', geometry, properties: {} } : EMPTY)
+}
+
+// ---------------------------------------------------------- drawing an area ---
+
+function startArea() {
+  tool.value = 'area'
+  draft.value = []
+  areaNote.value = ''
+  map.doubleClickZoom.disable() // quick clicks are points, not zoom
+  map.getCanvas().style.cursor = 'crosshair'
+  hideTooltip()
+}
+
+function stopArea() {
+  tool.value = null
+  draft.value = []
+  drawDraft(null)
+  map.doubleClickZoom.enable()
+  map.getCanvas().style.cursor = ''
+}
+
+// Preview: the points, the shape (with the cursor as the next point) and, from 3 points
+// on, the hexagons it would select.
+function drawDraft(cursor) {
+  if (!mapReady) return
+  const pts = cursor ? [...draft.value, cursor] : [...draft.value]
+  const features = pts.slice(0, draft.value.length).map((p) => ({
+    type: 'Feature', geometry: { type: 'Point', coordinates: p }, properties: { kind: 'point' },
+  }))
+  if (pts.length >= 2) {
+    const ring = pts.length >= 3 ? areaPolygon(pts).coordinates[0] : pts
+    features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: ring }, properties: { kind: 'shape' } })
   }
-  popup('hex-fill', hexPopup)
-  popup('points', pointPopup)
-  map.on('moveend', () => store.setCamera(map.getCenter().toArray(), map.getZoom()))
+  if (pts.length >= 3) {
+    const cells = cellsInArea(areaPolygon(pts))
+    if (cells?.length) features.push({ type: 'Feature', geometry: cellsOutline(cells), properties: { kind: 'cells' } })
+  }
+  map.getSource('draft').setData({ type: 'FeatureCollection', features })
+}
+
+function addAreaPoint(lngLat) {
+  draft.value = [...draft.value, lngLat.toArray()]
+  if (draft.value.length < AREA_POINTS) return drawDraft(null)
+  const polygon = areaPolygon(draft.value)
+  const cells = cellsInArea(polygon)
+  areaNote.value = cells
+    ? `${fmt(cells.length)} hexagons selected`
+    : `Area too big to select its hexagons (max ${fmt(MAX_SELECTION)}): used as a filter only`
+  stopArea()
+  store.setArea(polygon, cells)
+}
+
+function onKey(e) {
+  if (e.key !== 'Escape' || !tool.value) return
+  e.stopImmediatePropagation() // Esc cancels the drawing, it doesn't also close the panel
+  stopArea()
+}
+
+function clearZone() {
+  areaNote.value = ''
+  store.clearZone()
+}
+
+function polygonBounds(geometry) {
+  const bounds = new maplibregl.LngLatBounds()
+  for (const [lon, lat] of geometry.coordinates[0]) bounds.extend([lon, lat])
+  return bounds
+}
+
+function onClick(e) {
+  if (tool.value === 'area') return addAreaPoint(e.lngLat)
+  const hit = map.queryRenderedFeatures(e.point, { layers: ['hex-fill'] })[0]
+  const feature = hit && hexById.get(hit.properties.h3)
+  if (!feature) return
+  const { h3 } = feature.properties
+  if (currentRes < BASE_RES) {
+    // Coarse hexagon: zoom into it, at least one level down.
+    const camera = map.cameraForBounds(polygonBounds(feature.geometry), { padding: 40 })
+    if (!camera) return
+    camera.zoom = Math.max(camera.zoom, NEXT_LEVEL_ZOOM[currentRes] ?? camera.zoom)
+    map.easeTo({ ...camera, duration: 800 })
+    return
+  }
+  const additive = e.originalEvent.shiftKey || e.originalEvent.ctrlKey || e.originalEvent.metaKey
+  store.selectHex(h3, additive)
+}
+
+// Hover: what's under the cursor (a detection first, else its hexagon) and what a click does.
+function onHover(e) {
+  if (tool.value === 'area') {
+    if (draft.value.length && !draftFrame) {
+      const cursor = e.lngLat.toArray()
+      draftFrame = requestAnimationFrame(() => { draftFrame = null; if (tool.value) drawDraft(cursor) })
+    }
+    return
+  }
+  const [hit] = map.queryRenderedFeatures(e.point, { layers: ['points', 'hex-fill'] })
+  if (!hit) return hideTooltip()
+  map.getCanvas().style.cursor = 'pointer'
+  const html = hit.layer.id === 'points'
+    ? pointPopup(hit.properties)
+    : hexPopup(hit.properties, currentRes < BASE_RES ? 'Click to zoom in' : 'Click to open · Shift+click to add')
+  tooltip.setLngLat(e.lngLat).setHTML(html).addTo(map)
+}
+
+function hideTooltip() {
+  tooltip.remove()
+  if (!tool.value) map.getCanvas().style.cursor = ''
+}
+
+function registerEvents() {
+  tooltip = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12, maxWidth: '280px' })
+  map.on('click', onClick)
+  map.on('mousemove', onHover)
+  map.on('mouseout', hideTooltip)
+  map.on('movestart', hideTooltip)
+  // Only while shown: hidden behind the curtain view, the curtain owns the camera.
+  map.on('moveend', () => { if (store.view === 'map') store.setCamera(map.getCenter().toArray(), map.getZoom()) })
   map.on('moveend', scheduleRefresh)
 }
 
@@ -148,42 +356,6 @@ function syncImagery() {
   imageryNote.value = store.basemap !== 'vector' && !img ? 'No satellite imagery for that date' : ''
 }
 
-function setupDraw() {
-  const styles = {
-    fillColor: '#2563eb', fillOpacity: 0.08,
-    outlineColor: '#1d4ed8', outlineWidth: 2,
-  }
-  draw = new TerraDraw({
-    adapter: new TerraDrawMapLibreGLAdapter({ map }),
-    modes: [new TerraDrawPolygonMode({ styles }), new TerraDrawRectangleMode({ styles })],
-  })
-  draw.start()
-  draw.on('finish', (id) => {
-    const feature = draw.getSnapshotFeature(id)
-    if (!feature) return
-    // One zone at a time: drop the previous one.
-    const others = draw.getSnapshot().filter((f) => f.id !== id).map((f) => f.id)
-    if (others.length) draw.removeFeatures(others)
-    stopDrawing()
-    store.setZone(feature.geometry)
-  })
-}
-
-function startDrawing(mode) {
-  tool.value = mode
-  draw.setMode(mode)
-}
-
-function stopDrawing() {
-  tool.value = null
-  draw.setMode('static')
-}
-
-function clearZone() {
-  draw.clear()
-  store.clearZone()
-}
-
 onMounted(() => {
   map = new maplibregl.Map({
     container: container.value,
@@ -191,22 +363,32 @@ onMounted(() => {
     center: store.camera.center, // kept in the store so the curtain view opens at the same place
     zoom: store.camera.zoom,
     renderWorldCopies: false,
+    boxZoom: false, // Shift + click selects hexagons; box zoom would swallow it
   })
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
   map.on('load', () => {
     addLayers()
     registerEvents()
-    setupDraw()
     mapReady = true
     syncImagery()
+    syncSelection()
+    syncZone()
+    updateGrid()
     refresh()
   })
+  // The panel opening/closing changes the map's width.
+  resizer = new ResizeObserver(() => { if (container.value.clientWidth) map.resize() })
+  resizer.observe(container.value)
+  window.addEventListener('keydown', onKey, { capture: true })
 })
 
 onBeforeUnmount(() => {
   controller?.abort()
+  store.setBusy('map', false)
   clearTimeout(debounce)
-  draw?.stop()
+  resizer?.disconnect()
+  window.removeEventListener('keydown', onKey, { capture: true })
+  cancelAnimationFrame(draftFrame)
   map?.remove()
 })
 
@@ -215,17 +397,19 @@ watch(() => [store.dataset, store.queryParams], refresh)
 // where the curtain was left, and load what changed meanwhile.
 watch(() => store.view, (view) => {
   if (view !== 'map' || !map) return
+  const camera = store.camera // read first: resize() fires moveend, which saves this map's old camera
   requestAnimationFrame(() => {
     map.resize()
-    map.jumpTo(store.camera)
+    map.jumpTo(camera)
     refresh()
   })
 })
 // Image type, satellite or day changed: update the imagery.
 // Watch id and date separately: pickLayer() returns a new object every time.
 watch(() => [store.basemap, store.imagery?.layer.id, store.imagery?.date], syncImagery)
-// Zone cleared from elsewhere (e.g. the side panel): remove the drawing too.
-watch(() => store.zone, (zone) => { if (!zone && draw?.getSnapshot().length) draw.clear() })
+watch(() => store.selectedHexes, syncSelection)
+watch(() => [store.zone, store.zoneCells], syncZone)
+watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
 </script>
 
 <template>
@@ -233,16 +417,14 @@ watch(() => store.zone, (zone) => { if (!zone && draw?.getSnapshot().length) dra
     <div ref="container" class="map"></div>
 
     <div class="toolbar">
-      <button :class="{ active: tool === 'polygon' }" @click="tool === 'polygon' ? stopDrawing() : startDrawing('polygon')">
-        ✏️ Polygon
+      <button :class="{ active: tool === 'area' }" @click="tool === 'area' ? stopArea() : startArea()">
+        ▱ Area (4 points)
       </button>
-      <button :class="{ active: tool === 'rectangle' }" @click="tool === 'rectangle' ? stopDrawing() : startDrawing('rectangle')">
-        ▭ Rectangle
-      </button>
-      <button v-if="store.zone" @click="clearZone">✕ Clear zone</button>
+      <button v-if="store.zone" @click="clearZone">✕ Clear area</button>
       <span v-if="tool" class="hint">
-        {{ tool === 'polygon' ? 'Click to add vertices, double-click to close' : 'Click two corners' }}
+        Click {{ AREA_POINTS - draft.length }} more point{{ AREA_POINTS - draft.length === 1 ? '' : 's' }} · Esc cancels
       </span>
+      <span v-else-if="areaNote" class="hint">{{ areaNote }}</span>
     </div>
 
     <div v-if="loading || error || info || imageryNote" class="status">

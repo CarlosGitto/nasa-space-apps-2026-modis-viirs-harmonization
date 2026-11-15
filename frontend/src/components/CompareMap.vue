@@ -12,9 +12,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getDetections, getHexagons } from '../api'
 import { GIBS_LAYERS, gibsDate, gibsUrl } from '../gibs'
+import { cellsOutline } from '../hexGrid'
 import {
   EMPTY, HEX_FILL_COLOR, POINTS_LIMIT, POINTS_ZOOM, STATIC_COLOR, STYLE,
-  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox,
+  fmt, hexPopup, hexRes, labelLayerId, maplibregl, pointPopup, viewportBbox, whenIdle,
 } from '../mapShared'
 import { useFiltersStore } from '../stores/filters'
 
@@ -147,13 +148,19 @@ async function refresh() {
       : getHexagons(ds.id, { ...params, res: hexRes(zoom) }, signal)
   }
   loading.value = true
+  store.setBusy('curtain', true)
   try {
     const [modis, viirs] = await Promise.all([fetchSide(left), fetchSide(right)])
     result.value = { kind: zoomedIn.value ? 'points' : 'hex', modis, viirs }
     error.value = null
     render()
+    // Both sides fully drawn (data and imagery) before the time slider moves on.
+    await Promise.all([whenIdle(maps.left), whenIdle(maps.right)])
+    if (!signal.aborted) store.setBusy('curtain', false)
   } catch (e) {
-    if (e.name !== 'AbortError') error.value = e.message
+    if (e.name === 'AbortError') return // a newer refresh owns the busy flag
+    error.value = e.message
+    store.setBusy('curtain', false)
   } finally {
     if (!signal.aborted) loading.value = false
   }
@@ -220,7 +227,9 @@ function syncImagery() {
 
 function syncZone() {
   if (!bothReady()) return
-  const data = store.zone ? { type: 'Feature', geometry: store.zone, properties: {} } : EMPTY
+  // A drawn area is shown snapped to its hexagons, like on the main map.
+  const geometry = store.zoneCells.length ? cellsOutline(store.zoneCells) : store.zone
+  const data = geometry ? { type: 'Feature', geometry, properties: {} } : EMPTY
   maps.left.getSource('zone').setData(data)
   maps.right.getSource('zone').setData(data)
 }
@@ -235,6 +244,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   controller?.abort()
   clearTimeout(debounce)
+  store.setBusy('curtain', false)
   maps.left?.remove()
   maps.right?.remove()
 })
@@ -242,7 +252,7 @@ onBeforeUnmount(() => {
 watch(() => [store.queryParams, store.compareSides.left.id, store.compareSides.right.id], refresh)
 watch(detMode, render)
 watch(() => [imgLeft.value, imgRight.value, store.imageryDate], syncImagery)
-watch(() => store.zone, syncZone)
+watch(() => [store.zone, store.zoneCells], syncZone)
 </script>
 
 <template>

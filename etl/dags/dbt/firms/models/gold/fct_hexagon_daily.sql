@@ -5,7 +5,7 @@
 --
 -- Only hexagon-days with detections exist: no row means "no detection", not "no
 -- fire" (no cloud/coverage mask yet).
-{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month', partitioned_by=['acq_month'], on_schema_change='fail', contract={'enforced': true}) }}
+{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month', partitioned_by=['acq_month'], sorted_by=['h3_r6'], on_schema_change='fail', contract={'enforced': true}) }}
 {% set source_sql %}
     select * from {{ ref('fct_hexagon_detections') }}
 {% endset %}

@@ -23,6 +23,8 @@ each detection falls in (`h3_r6`), the project's fixed, sensor-agnostic spatial 
 | **gold** | `dim_hexagon` | One row per hexagon: center, real area, parents, activity, `has_static_source` |
 | **gold** | `fct_hexagon_detections` | Detail: one row per valid detection, SP and NRT, with `is_preferred` and `is_static_source` |
 | **gold** | `fct_hexagon_daily` | Metrics: hexagon × day × product × sensor × satellite × day/night |
+| **gold** | `fct_hexagon_monthly` | Continuous series (`is_preferred`) per hexagon × month × sensor × satellite |
+| **gold** | `fct_hexagon_profile` | The hexagon's "ficha": one row per hexagon × sensor with its whole history (last detection, last 7/30 days, totals, FRP max/mean/p90, peak day and month, 12-month climatology, static share) |
 
 How to read gold:
 

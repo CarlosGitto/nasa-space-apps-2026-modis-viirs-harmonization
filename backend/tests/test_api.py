@@ -30,7 +30,10 @@ def _attach(root: Path, read_only: bool = False) -> duckdb.DuckDBPyConnection:
 # the US. MODIS NRT: a version of the Nov 10 fire that SP already covers (not
 # preferred), a fire after the last SP day (preferred) and a static heat source.
 DETECTIONS = """
-    select *, h3_latlng_to_cell(latitude, longitude, 6) as h3_r6, date_trunc('month', acq_date)::date as acq_month
+    select *, h3_latlng_to_cell(latitude, longitude, 6) as h3_r6, date_trunc('month', acq_date)::date as acq_month,
+           ((extract(hour from acq_datetime_utc) + longitude / 15.0) % 24 + 24) % 24 as solar_hour_local,
+           'MODIS' as instrument, '6.1' as version, case when confidence_raw::int >= 80 then 'high' else 'nominal' end as confidence_level,
+           brightness - 20 as brightness_aux, 1.0 as scan, 1.0 as track, null::integer as fire_type
     from (values
         ('modis', 'Aqua',  'sp',  -34.6,  -58.4,  date '2026-11-10', timestamp '2026-11-10 12:30', 10.0, 'D', '85', 320.0, false, true,  '1'),
         ('modis', 'Terra', 'sp',  -31.4,  -64.2,  date '2026-11-11', timestamp '2026-11-11 03:00',  5.0, 'N', '50', 310.0, false, true,  '1'),
@@ -46,6 +49,8 @@ DAILY = """
     select h3_r6, acq_date, acq_month, product, sensor, satellite, daynight, bool_and(is_preferred) as is_preferred,
            count(*) filter (where not is_static_source) as fire_detections,
            sum(frp) filter (where not is_static_source) as fire_frp_sum,
+           max(frp) filter (where not is_static_source) as fire_frp_max,
+           count(*) filter (where not is_static_source and confidence_level = 'high') as fire_high_conf,
            count(*) filter (where is_static_source) as static_detections,
            sum(frp) filter (where is_static_source) as static_frp_sum,
            max(_dlt_load_id) as last_load_id
@@ -54,10 +59,43 @@ DAILY = """
 """
 
 HEXAGONS = """
-    select h3_r6, h3_cell_to_latlng(h3_r6)[1] as center_lat, h3_cell_to_latlng(h3_r6)[2] as center_lon,
-           min(acq_date) as first_date, max(acq_date) as last_date
+    select h3_r6, h3_h3_to_string(h3_r6) as h3_id,
+           h3_cell_to_latlng(h3_r6)[1] as center_lat, h3_cell_to_latlng(h3_r6)[2] as center_lon,
+           h3_cell_area(h3_r6, 'km^2') as area_km2, h3_cell_to_boundary_wkt(h3_r6) as boundary_wkt,
+           h3_cell_to_parent(h3_r6, 5) as h3_r5, h3_cell_to_parent(h3_r6, 4) as h3_r4, h3_cell_to_parent(h3_r6, 3) as h3_r3,
+           min(acq_date) as first_date, max(acq_date) as last_date, sum(static_detections) > 0 as has_static_source
     from lake.gold.fct_hexagon_daily
     group by h3_r6
+"""
+
+MONTHLY = """
+    select h3_r6, acq_month, sensor, satellite, string_agg(distinct product, ',' order by product) as products,
+           sum(fire_detections) as fire_detections,
+           coalesce(sum(fire_detections) filter (where daynight = 'D'), 0) as fire_day,
+           coalesce(sum(fire_detections) filter (where daynight = 'N'), 0) as fire_night,
+           sum(fire_frp_sum) as fire_frp_sum, max(fire_frp_sum) as fire_frp_max, 0 as fire_high_conf,
+           count(distinct acq_date) filter (where fire_detections > 0) as active_days,
+           sum(static_detections) as static_detections, max(last_load_id) as last_load_id
+    from lake.gold.fct_hexagon_daily where is_preferred
+    group by h3_r6, acq_month, sensor, satellite
+"""
+
+# A trimmed profile (dbt computes every column, see fct_hexagon_profile.sql).
+PROFILE = """
+    select h3_r6, sensor,
+           min(acq_date) filter (where fire_detections > 0) as first_date,
+           max(acq_date) filter (where fire_detections > 0) as last_date,
+           count(distinct acq_date) filter (where fire_detections > 0) as active_days,
+           sum(fire_detections) as fire_detections, coalesce(sum(fire_frp_sum), 0) as fire_frp_sum,
+           max(fire_frp_sum) as fire_frp_max, null::double as fire_frp_mean, null::double as fire_frp_p90,
+           null::double as high_conf_share, null::double as day_share, null::date as peak_date,
+           null::bigint as peak_day_detections, 11 as peak_month,
+           [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, sum(fire_detections), 0] as climatology,
+           0 as last_7d, 0 as last_30d, date '2026-11-12' as data_end_date,
+           sum(static_detections) as static_detections, null::double as static_share,
+           count(distinct satellite) as satellites
+    from lake.gold.fct_hexagon_daily where is_preferred
+    group by h3_r6, sensor
 """
 
 
@@ -71,6 +109,8 @@ def _build_lake(root: Path) -> None:
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_detections AS {DETECTIONS}")
     con.execute(f"CREATE TABLE lake.gold.fct_hexagon_daily AS {DAILY}")
     con.execute(f"CREATE TABLE lake.gold.dim_hexagon AS {HEXAGONS}")
+    con.execute(f"CREATE TABLE lake.gold.fct_hexagon_monthly AS {MONTHLY}")
+    con.execute(f"CREATE TABLE lake.gold.fct_hexagon_profile AS {PROFILE}")
     # Harmonized gold with only the minimum contract: no satellite/confidence/brightness, no dlt columns.
     con.execute(
         """
@@ -344,3 +384,85 @@ def test_empty_catalog_file_is_no_lake_yet(tmp_path, monkeypatch):
     monkeypatch.setenv("LAKE_PATH", str(lake))
     with TestClient(app) as c:
         assert all(not d["available"] for d in c.get("/datasets").json())
+
+
+
+# ---------------------------------------------------------------- one hexagon ---
+
+BUENOS_AIRES = (-34.6, -58.4)  # MODIS SP fire (Nov 10) + its NRT copy (not preferred)
+
+
+def test_hexagon_identity_and_profile(client):
+    h = _cell(*BUENOS_AIRES)
+    body = client.get(f"/hexagons/{h}").json()
+    assert body["h3"] == h and body["resolution"] == 6
+    assert body["boundary"]["type"] == "Polygon" and 20 < body["area_km2"] < 50
+    assert [p["sensor"] for p in body["profiles"]] == ["modis"]
+    assert body["profiles"][0]["fire_detections"] == 1  # the NRT copy is not preferred
+    assert len(body["profiles"][0]["climatology"]) == 12
+
+
+def test_hexagon_monthly(client):
+    rows = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/monthly").json()
+    assert [(r["month"], r["sensor"], r["satellite"], r["products"], r["fire_detections"]) for r in rows] == [
+        ("2026-11-01", "modis", "Aqua", "sp", 1),
+    ]
+
+
+def test_hexagon_period_respects_dates(client):
+    h = _cell(10.0, -64.0)  # the NRT static source, on Nov 12
+    full = client.get(f"/hexagons/{h}/period").json()["sensors"][0]
+    assert (full["fire_detections"], full["static_detections"]) == (0, 1)
+    assert full["daily"] == [{"date": "2026-11-12", "detections": 0, "static_detections": 1}]
+    assert client.get(f"/hexagons/{h}/period?end=2026-11-11").json()["sensors"] == []
+    assert client.get(f"/hexagons/{h}/period?start=2026-11-12&end=2026-11-11").status_code == 422
+
+
+def test_hexagon_detections_respect_dataset(client):
+    h = _cell(*BUENOS_AIRES)
+    sp = client.get(f"/hexagons/{h}/detections?dataset=modis_sp").json()
+    assert [r["product"] for r in sp["rows"]] == ["sp"] and sp["truncated"] is False
+    nrt = client.get(f"/hexagons/{h}/detections?dataset=modis_nrt").json()
+    assert [(r["product"], r["is_preferred"]) for r in nrt["rows"]] == [("nrt", False)]
+    best = client.get(f"/hexagons/{h}/detections?dataset=modis_best").json()
+    assert [r["product"] for r in best["rows"]] == ["sp"]  # NRT copy left out of the continuous series
+    assert client.get(f"/hexagons/{h}/detections?dataset=harmonized_nrt").status_code == 422
+
+
+@pytest.mark.parametrize("h3_id", ["not-a-cell", "85c2e313fffffff"])  # garbage / a resolution-5 cell
+def test_invalid_hexagon_is_422(client, h3_id):
+    assert client.get(f"/hexagons/{h3_id}").status_code == 422
+
+
+def test_hexagon_without_data_is_404(client):
+    assert client.get(f"/hexagons/{_cell(0.0, 0.0)}").status_code == 404
+
+
+
+# ---------------------------------------------------------- a selection ---
+
+def test_selection_summary_includes_only_hexagons_with_history(client):
+    ba, nrt_fire, empty = _cell(*BUENOS_AIRES), _cell(-30.0, -60.0), _cell(0.0, 0.0)
+    rows = client.post("/hexagons/selection/summary", json={"h3": [ba, nrt_fire, empty, ba]}).json()
+    assert {r["h3"]: (r["modis_total"], r["viirs_total"]) for r in rows} == {ba: (1, 0), nrt_fire: (1, 0)}
+    # The chosen dates only count in *_period; the busiest hexagon in the period comes first.
+    rows = client.post("/hexagons/selection/summary", json={"h3": [ba, nrt_fire], "start": "2026-11-12"}).json()
+    assert [(r["h3"], r["modis_period"]) for r in rows] == [(nrt_fire, 1), (ba, 0)]
+
+
+def test_selection_detections(client):
+    ba, nrt_fire = _cell(*BUENOS_AIRES), _cell(-30.0, -60.0)
+    body = client.post("/hexagons/selection/detections", json={"h3": [ba, nrt_fire], "dataset": "modis_best"}).json()
+    assert [(r["h3"], r["product"]) for r in body["rows"]] == [(nrt_fire, "nrt"), (ba, "sp")]  # most recent first
+    one = client.post("/hexagons/selection/detections", json={"h3": [ba, nrt_fire], "dataset": "modis_best", "limit": 1}).json()
+    assert one["truncated"] is True and len(one["rows"]) == 1
+
+
+@pytest.mark.parametrize("body", [
+    {"h3": []},
+    {"h3": ["not-a-cell"]},
+    {"h3": ["85c2e313fffffff"]},  # resolution 5
+    {"h3": ["86c2e3117ffffff"], "start": "2026-11-12", "end": "2026-11-11"},
+])
+def test_selection_rejects_bad_input(client, body):
+    assert client.post("/hexagons/selection/summary", json=body).status_code == 422

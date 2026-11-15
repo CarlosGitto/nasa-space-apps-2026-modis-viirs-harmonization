@@ -1,0 +1,19 @@
+/* Shared by the hexagon fichas (history and period). */
+.ficha { display: flex; flex-direction: column; gap: 12px; }
+.ficha .identity { display: flex; flex-direction: column; gap: 2px; }
+.ficha .identity code { font-size: 13px; font-weight: 600; }
+.ficha h4 { margin: 0 0 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.ficha .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.ficha .kpis { margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ficha .kpis div { background: #f9fafb; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.ficha dt { font-size: 11px; color: var(--muted); }
+.ficha dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ficha dd.note { font-size: 11px; font-weight: 400; color: var(--muted); }
+.ficha .static {
+  margin: 0; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+  background: #f3f4f6; border-left: 3px solid #6b7280;
+}
+.ficha .muted { color: var(--muted); font-size: 12px; margin: 0; }
+.ficha .small { margin-top: 6px; }
+.ficha .error { color: var(--danger); font-size: 12px; margin: 0; }
+@media (max-width: 760px) { .ficha .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

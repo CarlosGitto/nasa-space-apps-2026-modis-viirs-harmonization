@@ -10,7 +10,7 @@
 -- Incremental by acquisition month over both intermediate tables: when a new SP
 -- month lands, that month is recomputed and its NRT rows stop being preferred.
 -- (A static source discovered later only reaches older NRT months on a full refresh.)
-{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month', partitioned_by=['acq_month']) }}
+{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month', partitioned_by=['acq_month'], sorted_by=['h3_r6']) }}
 {% set source_sql %}
     select * from {{ ref('int_detections_sp') }} where dq_issue is null
     union all by name

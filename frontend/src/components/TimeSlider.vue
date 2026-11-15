@@ -7,7 +7,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getDaily } from '../api'
 import { useFiltersStore } from '../stores/filters'
 
-const PLAY_MS = 1200 // per day: leaves time for the map to load each day
+const HOLD_MS = 900 // each day stays on screen at least this long once fully drawn
+const MAX_WAIT_MS = 10_000 // never wait longer than this for a slow map
+const TICK_MS = 150
 
 const store = useFiltersStore()
 const counts = ref({}) // 'YYYY-MM-DD' -> detections
@@ -77,16 +79,38 @@ function step() {
   select(index.value < 0 || index.value >= n - 1 ? 0 : index.value + 1)
 }
 
+// Playing waits for the map: the next day comes only after the current one is fully
+// drawn (data and imagery) and has been visible HOLD_MS. A fixed interval would skip
+// ahead of a slow map, and the picture would no longer match the day on the slider.
+let shownAt = 0 // when the current day was selected
+let readyAt = null // when the map finished drawing it
+
+function tick() {
+  if (!playing.value) return
+  const now = Date.now()
+  // Give the maps a moment to start loading before trusting "not busy".
+  if (store.isBusy || now - shownAt < 300) readyAt = null
+  else readyAt ??= now
+  if ((readyAt && now - readyAt >= HOLD_MS) || now - shownAt >= MAX_WAIT_MS) {
+    step()
+    shownAt = now
+    readyAt = null
+  }
+  timer = setTimeout(tick, TICK_MS)
+}
+
 function play() {
   if (!days.value.length) return
   playing.value = true
   if (index.value < 0) select(0)
-  timer = setInterval(step, PLAY_MS)
+  shownAt = Date.now()
+  readyAt = null
+  timer = setTimeout(tick, TICK_MS)
 }
 
 function stop() {
   playing.value = false
-  clearInterval(timer)
+  clearTimeout(timer)
   timer = null
 }
 

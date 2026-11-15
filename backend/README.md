@@ -36,6 +36,12 @@ starts, with every dataset `available: false`.
 | `GET /datasets/{dataset}/stats/monthly` | Detections and FRP per year and month (burn calendar) |
 | `GET /datasets/{dataset}/stats/hex` | GeoJSON H3 hexagons with detections and FRP, resolution `res` (0–6: 6 is the base cell, coarser levels are its parents). Cells crossing the antimeridian are dropped |
 | `GET /datasets/{dataset}/stats/grid` | GeoJSON polygons with detections and FRP per `cell` degrees (0.1–10) |
+| `GET /hexagons/{h3}` | One res-6 hexagon: identity (center, area, boundary, parents, static source) and its **whole-history profile** per sensor |
+| `GET /hexagons/{h3}/monthly` | Its monthly series per sensor and satellite |
+| `GET /hexagons/{h3}/period` | Its profile for `start`..`end` per sensor: totals, per satellite, daily series |
+| `GET /hexagons/{h3}/detections` | Its detections as a table for a `dataset` and `start`/`end` (MODIS/VIIRS datasets only). `limit` (default 2000) |
+| `POST /hexagons/selection/summary` | Many hexagons at once (`{"h3": [...], "start", "end"}`, up to 5000): per hexagon with any history, its totals and its detections in the dates, per sensor, busiest first |
+| `POST /hexagons/selection/detections` | Detections of many hexagons as one table (`{"h3": [...], "dataset", "start", "end", "limit"}`) |
 
 Common filters (all optional; without them the whole world and all dates):
 
@@ -49,6 +55,12 @@ gas flares, industry, volcanoes) is reported apart as `static_detections`, and
 `/detections` returns those points flagged with `is_static_source`. On the
 aggregated endpoints (hex, daily, monthly) `bbox` and `zone` select hexagons by
 their center: the hexagon is the unit.
+
+The `/hexagons/{h3}` endpoints are lookups by key on precomputed gold tables
+(`fct_hexagon_profile`, `fct_hexagon_monthly`, `fct_hexagon_daily`), sorted by
+hexagon: tens of milliseconds on the dev lake. They use the continuous series
+(SP + NRT), one profile per sensor. An id that is not a valid res-6 cell gives
+422; a hexagon without data, 404.
 
 The OpenAPI schema (`/openapi.json`) is typed, so the frontend can generate its client from it.
 

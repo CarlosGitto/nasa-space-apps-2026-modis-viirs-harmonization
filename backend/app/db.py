@@ -75,6 +75,8 @@ GOLD_SCHEMA = "gold"
 DETECTIONS = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_detections"
 DAILY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_daily"
 HEXAGONS = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.dim_hexagon"
+MONTHLY = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_monthly"
+PROFILE = f"{LAKE_ALIAS}.{GOLD_SCHEMA}.fct_hexagon_profile"
 HEXAGON_TABLES = ("fct_hexagon_detections", "fct_hexagon_daily", "dim_hexagon")
 
 # Harmonized datasets (own relation) must have these columns (same names in the lake).
@@ -409,3 +411,197 @@ class Filters:
             clauses.append("daynight = ?")
             params.append(self.daynight)
         return " and ".join(clauses), params
+
+
+# --------------------------------------------------------------- one hexagon ---
+# Everything below reads rows of ONE hexagon from tables sorted by h3_r6, so a
+# lookup only touches the files that hold it: the products are precomputed in
+# gold, the API just hands them over.
+
+
+class InvalidHexagon(ValueError):
+    """Not a valid H3 resolution-6 cell id."""
+
+
+def hexagon_key(cur: duckdb.DuckDBPyConnection, h3_id: str) -> int:
+    """The UBIGINT key of a resolution-6 H3 id given as text (e.g. 86c2e3117ffffff)."""
+    valid, res, key = cur.execute(
+        "select h3_is_valid_cell(?), "
+        "case when h3_is_valid_cell(?) then h3_get_resolution(?) end, "
+        "case when h3_is_valid_cell(?) then h3_string_to_h3(?) end",
+        [h3_id] * 5,
+    ).fetchone()
+    if not valid or res != H3_RES:
+        raise InvalidHexagon(f"{h3_id} is not a valid H3 resolution-{H3_RES} cell")
+    return key
+
+
+def hexagon_tables_ready(cur: duckdb.DuckDBPyConnection) -> bool:
+    """Whether the lake has the hexagon gold products (catalog lookup, no data scan)."""
+    if not _attached:
+        return False
+    names = _tables(cur)
+    return all(t in names for t in (*HEXAGON_TABLES, "fct_hexagon_monthly", "fct_hexagon_profile"))
+
+
+def hexagon_identity(cur: duckdb.DuckDBPyConnection, key: int) -> tuple | None:
+    """dim_hexagon row: id, center, area, boundary (GeoJSON), parents, dates, static flag."""
+    return cur.execute(
+        f"""
+        select h3_id, center_lon, center_lat, area_km2, ST_AsGeoJSON(ST_GeomFromText(boundary_wkt)),
+               h3_h3_to_string(h3_r5), h3_h3_to_string(h3_r4), h3_h3_to_string(h3_r3),
+               first_date, last_date, has_static_source
+        from {HEXAGONS} where h3_r6 = ?
+        """,
+        [key],
+    ).fetchone()
+
+
+def hexagon_profiles(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
+    """fct_hexagon_profile rows (one per sensor) as dicts."""
+    rel = cur.execute(f"select * exclude (h3_r6) from {PROFILE} where h3_r6 = ? order by sensor", [key])
+    cols = [d[0] for d in rel.description]
+    return [dict(zip(cols, row)) for row in rel.fetchall()]
+
+
+def hexagon_monthly(cur: duckdb.DuckDBPyConnection, key: int) -> list[dict]:
+    rel = cur.execute(
+        f"select * exclude (h3_r6, last_load_id) from {MONTHLY} where h3_r6 = ? order by acq_month, sensor, satellite",
+        [key],
+    )
+    cols = [d[0] for d in rel.description]
+    return [dict(zip(cols, row)) for row in rel.fetchall()]
+
+
+def hexagon_period(cur: duckdb.DuckDBPyConnection, key: int, start: date | None, end: date | None) -> list[tuple]:
+    """Preferred daily rows of one hexagon in [start, end]: (sensor, satellite, date, daynight,
+    fire, frp_sum, frp_max, high_conf, static)."""
+    clauses, params = ["h3_r6 = ?", "is_preferred"], [key]
+    if start:
+        clauses.append("acq_date >= ?")
+        params.append(start)
+    if end:
+        clauses.append("acq_date <= ?")
+        params.append(end)
+    return cur.execute(
+        f"""
+        select sensor, satellite, acq_date, daynight, fire_detections, fire_frp_sum, fire_frp_max,
+               fire_high_conf, static_detections
+        from {DAILY} where {" and ".join(clauses)}
+        order by acq_date
+        """,
+        params,
+    ).fetchall()
+
+
+DETECTION_COLUMNS = (
+    "acq_datetime_utc", "solar_hour_local", "sensor", "satellite", "product", "instrument", "version",
+    "latitude", "longitude", "frp", "confidence_raw", "confidence_level", "daynight",
+    "brightness", "brightness_aux", "scan", "track", "fire_type", "is_static_source", "is_preferred",
+)
+
+
+def hexagon_detections(
+    cur: duckdb.DuckDBPyConnection, key: int, ds: Dataset, start: date | None, end: date | None, limit: int
+) -> list[dict]:
+    """Detections of one hexagon for a dataset and date range, most recent first (limit + 1 rows)."""
+    clauses, params = ["h3_r6 = ?", ds.predicate()], [key]
+    if start:
+        clauses.append("acq_date >= ?")
+        params.append(start)
+    if end:
+        clauses.append("acq_date <= ?")
+        params.append(end)
+    rel = cur.execute(
+        f"select {', '.join(DETECTION_COLUMNS)} from {DETECTIONS} where {' and '.join(clauses)} "
+        "order by acq_datetime_utc desc limit ?",
+        [*params, limit + 1],
+    )
+    return [dict(zip(DETECTION_COLUMNS, row)) for row in rel.fetchall()]
+
+
+# ------------------------------------------------- a selection of hexagons ---
+# A drawn area or a multi-selection: many res-6 hexagons at once, empty or not.
+
+MAX_SELECTION = 5000
+
+
+def hexagon_keys(cur: duckdb.DuckDBPyConnection, ids: list[str]) -> list[int]:
+    """UBIGINT keys of res-6 H3 ids (duplicates dropped); InvalidHexagon on the first bad id."""
+    rows = cur.execute(
+        "select id, case when h3_is_valid_cell(id) and h3_get_resolution(id) = ? then h3_string_to_h3(id) end "
+        "from unnest(?::varchar[]) with ordinality t(id, n) order by n",
+        [H3_RES, ids],
+    ).fetchall()
+    keys = []
+    for h3_id, key in rows:
+        if key is None:
+            raise InvalidHexagon(f"{h3_id} is not a valid H3 resolution-{H3_RES} cell")
+        keys.append(key)
+    return list(dict.fromkeys(keys))
+
+
+def _key_list(keys: list[int]) -> str:
+    # Integers we produced ourselves: safe as SQL literals, and literals let DuckLake
+    # skip the files whose h3_r6 min/max can't contain them.
+    return ", ".join(str(int(k)) for k in keys)
+
+
+def _date_clauses(start: date | None, end: date | None) -> tuple[list[str], list]:
+    clauses, params = [], []
+    if start:
+        clauses.append("acq_date >= ?")
+        params.append(start)
+    if end:
+        clauses.append("acq_date <= ?")
+        params.append(end)
+    return clauses, params
+
+
+def selection_summary(
+    cur: duckdb.DuckDBPyConnection, keys: list[int], start: date | None, end: date | None
+) -> list[tuple]:
+    """Per hexagon with any history: (h3, modis_total, viirs_total, last_date,
+    modis_period, viirs_period, static_period). Continuous series; never adds sensors."""
+    in_keys = _key_list(keys)
+    dates, params = _date_clauses(start, end)
+    period_where = " and ".join(["is_preferred", f"h3_r6 in ({in_keys})", *dates])
+    return cur.execute(
+        f"""
+        with hist as (
+            select h3_r6,
+                   coalesce(sum(fire_detections) filter (where sensor = 'modis'), 0) as modis_total,
+                   coalesce(sum(fire_detections) filter (where sensor = 'viirs'), 0) as viirs_total,
+                   max(last_date) as last_date
+            from {PROFILE} where h3_r6 in ({in_keys})
+            group by h3_r6
+        ),
+        period as (
+            select h3_r6,
+                   coalesce(sum(fire_detections) filter (where sensor = 'modis'), 0) as modis_period,
+                   coalesce(sum(fire_detections) filter (where sensor = 'viirs'), 0) as viirs_period,
+                   sum(static_detections) as static_period
+            from {DAILY} where {period_where}
+            group by h3_r6
+        )
+        select h3_h3_to_string(h3_r6), modis_total, viirs_total, last_date,
+               coalesce(modis_period, 0), coalesce(viirs_period, 0), coalesce(static_period, 0)
+        from hist left join period using (h3_r6)
+        order by coalesce(modis_period, 0) + coalesce(viirs_period, 0) desc, modis_total + viirs_total desc
+        """,
+        params,
+    ).fetchall()
+
+
+def selection_detections(
+    cur: duckdb.DuckDBPyConnection, keys: list[int], ds: Dataset, start: date | None, end: date | None, limit: int
+) -> list[dict]:
+    """Detections of many hexagons for a dataset and date range, most recent first (limit + 1 rows)."""
+    dates, params = _date_clauses(start, end)
+    where = " and ".join([f"h3_r6 in ({_key_list(keys)})", ds.predicate(), *dates])
+    rel = cur.execute(
+        f"select h3_h3_to_string(h3_r6) as h3, {', '.join(DETECTION_COLUMNS)} from {DETECTIONS} where {where} "
+        "order by acq_datetime_utc desc limit ?",
+        [*params, limit + 1],
+    )
+    return [dict(zip(("h3", *DETECTION_COLUMNS), row)) for row in rel.fetchall()]

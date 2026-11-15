@@ -119,3 +119,73 @@ models:
       - {name: static_detections, data_type: bigint}
       - {name: static_frp_sum, data_type: double}
       - {name: last_load_id, data_type: varchar}
+
+  - name: fct_hexagon_monthly
+    description: >
+      Monthly series of the hexagon on the continuous series (preferred rows):
+      hexagon x month x sensor x satellite. Feeds per-hexagon charts and climatology.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [h3_r6, acq_month, sensor, satellite]
+            recent_only: true
+            load_col: last_load_id
+    # Contract: the backend relies on these columns and types.
+    columns:
+      - name: h3_r6
+        data_type: ubigint
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_hexagon'), field: h3_r6}
+      - {name: acq_month, data_type: date}
+      - {name: sensor, data_type: varchar}
+      - {name: satellite, data_type: varchar}
+      - {name: products, data_type: varchar, description: "Products in the month: sp, nrt or both (sp,nrt)."}
+      - {name: fire_detections, data_type: bigint}
+      - {name: fire_day, data_type: bigint}
+      - {name: fire_night, data_type: bigint}
+      - {name: fire_frp_sum, data_type: double}
+      - {name: fire_frp_max, data_type: double}
+      - {name: fire_high_conf, data_type: bigint}
+      - {name: active_days, data_type: bigint}
+      - {name: static_detections, data_type: bigint}
+      - {name: last_load_id, data_type: varchar}
+
+  - name: fct_hexagon_profile
+    description: >
+      Profile of the hexagon ("ficha técnica", whole history): one row per
+      hexagon x sensor, precomputed on the continuous series. Recent activity is
+      relative to data_end_date (the last day with data), not to today.
+    data_tests:
+      - unique_combination:
+          arguments: {columns: [h3_r6, sensor]}
+    # Contract: the backend relies on these columns and types.
+    columns:
+      - name: h3_r6
+        data_type: ubigint
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_hexagon'), field: h3_r6}
+      - {name: sensor, data_type: varchar, data_tests: [{accepted_values: {arguments: {values: [modis, viirs]}}}]}
+      - {name: first_date, data_type: date}
+      - {name: last_date, data_type: date}
+      - {name: active_days, data_type: bigint}
+      - {name: fire_detections, data_type: bigint}
+      - {name: fire_frp_sum, data_type: double}
+      - {name: fire_frp_max, data_type: double}
+      - {name: fire_frp_mean, data_type: double}
+      - {name: fire_frp_p90, data_type: double}
+      - {name: high_conf_share, data_type: double}
+      - {name: day_share, data_type: double}
+      - {name: peak_date, data_type: date}
+      - {name: peak_day_detections, data_type: bigint}
+      - {name: peak_month, data_type: integer, description: "1-12, the month of the year with most detections."}
+      - {name: climatology, data_type: "bigint[]", description: "Detections per month of the year, January to December."}
+      - {name: last_7d, data_type: bigint}
+      - {name: last_30d, data_type: bigint}
+      - {name: data_end_date, data_type: date}
+      - {name: static_detections, data_type: bigint}
+      - {name: static_share, data_type: double}
+      - {name: satellites, data_type: bigint}

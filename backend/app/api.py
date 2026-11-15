@@ -11,8 +11,8 @@ from datetime import date, datetime
 from typing import Annotated, Literal
 
 import duckdb
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from pydantic import BaseModel, Field
 
 from app import db
 from app.db import DATASETS, BBox, Dataset, DatasetId, Filters, Product, Sensor, Zone
@@ -423,3 +423,311 @@ def monthly_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[
     return [
         MonthlyStat(year=y, month=m, detections=n, frp_sum=fs, static_detections=st) for y, m, n, fs, st in rows
     ]
+
+
+# ------------------------------------------------------------- one hexagon ---
+# The hexagon is the canonical entity: these endpoints hand over its products
+# (identity, profile, monthly series, period summary, detections), precomputed
+# in gold and looked up by key.
+
+
+class HexagonParents(BaseModel):
+    r5: str
+    r4: str
+    r3: str
+
+
+class HexagonSensorProfile(BaseModel):
+    """Whole-history profile of one sensor in the hexagon (continuous SP + NRT series)."""
+
+    sensor: Sensor
+    first_date: date | None
+    last_date: date | None
+    active_days: int
+    fire_detections: int
+    fire_frp_sum: float
+    fire_frp_max: float | None
+    fire_frp_mean: float | None
+    fire_frp_p90: float | None
+    high_conf_share: float | None
+    day_share: float | None
+    peak_date: date | None
+    peak_day_detections: int | None
+    peak_month: int | None  # 1-12
+    climatology: list[int]  # detections per month of the year, Jan..Dec
+    last_7d: int
+    last_30d: int
+    data_end_date: date | None  # last_7d / last_30d are relative to this day
+    static_detections: int
+    static_share: float | None
+    satellites: int
+
+
+class HexagonInfo(BaseModel):
+    h3: str
+    resolution: int
+    center: tuple[float, float]  # lon, lat
+    area_km2: float
+    boundary: PolygonGeometry
+    parents: HexagonParents
+    first_date: date | None
+    last_date: date | None
+    has_static_source: bool
+    profiles: list[HexagonSensorProfile]
+
+
+class HexagonMonth(BaseModel):
+    month: date
+    sensor: Sensor
+    satellite: str
+    products: str  # sp, nrt or "nrt,sp"
+    fire_detections: int
+    fire_day: int
+    fire_night: int
+    fire_frp_sum: float | None
+    fire_frp_max: float | None
+    fire_high_conf: int
+    active_days: int
+    static_detections: int
+
+
+class HexagonDay(BaseModel):
+    date: date
+    detections: int
+    static_detections: int
+
+
+class HexagonPeriodSensor(BaseModel):
+    sensor: Sensor
+    fire_detections: int
+    active_days: int
+    fire_frp_sum: float
+    fire_frp_max: float | None
+    high_conf_share: float | None
+    day_share: float | None
+    static_detections: int
+    satellites: dict[str, int]  # wildfire detections per satellite
+    daily: list[HexagonDay]
+
+
+class HexagonPeriod(BaseModel):
+    h3: str
+    start: date | None
+    end: date | None
+    sensors: list[HexagonPeriodSensor]
+
+
+class HexagonDetection(BaseModel):
+    acq_datetime_utc: datetime
+    solar_hour_local: float | None
+    sensor: Sensor
+    satellite: str | None
+    product: Product
+    instrument: str | None
+    version: str | None
+    latitude: float
+    longitude: float
+    frp: float | None
+    confidence_raw: str | None
+    confidence_level: str | None
+    daynight: str | None
+    brightness: float | None
+    brightness_aux: float | None
+    scan: float | None
+    track: float | None
+    fire_type: int | None
+    is_static_source: bool
+    is_preferred: bool
+
+
+class HexagonDetections(BaseModel):
+    h3: str
+    dataset: DatasetId
+    truncated: bool
+    rows: list[HexagonDetection]
+
+
+HexId = Annotated[str, Path(description="H3 resolution-6 cell id, e.g. 86c2e3117ffffff")]
+
+
+def _hexagon(cur: duckdb.DuckDBPyConnection, h3_id: str) -> tuple[int, tuple]:
+    """(key, dim_hexagon row) of a hexagon with data, or 422 (invalid id) / 404 (no data)."""
+    try:
+        key = db.hexagon_key(cur, h3_id)
+    except db.InvalidHexagon as e:
+        raise HTTPException(422, str(e)) from None
+    if not db.hexagon_tables_ready(cur):
+        raise HTTPException(404, "no hexagon data in the lake yet")
+    identity = db.hexagon_identity(cur, key)
+    if identity is None:
+        raise HTTPException(404, f"no detections in hexagon {h3_id}")
+    return key, identity
+
+
+@router.get("/hexagons/{h3_id}")
+def hexagon(h3_id: HexId, cur: Cursor) -> HexagonInfo:
+    """Identity and whole-history profile of a hexagon, one profile per sensor."""
+    key, (h3, lon, lat, area, boundary, r5, r4, r3, first, last, has_static) = _hexagon(cur, h3_id)
+    return HexagonInfo(
+        h3=h3, resolution=db.H3_RES, center=(lon, lat), area_km2=area, boundary=json.loads(boundary),
+        parents=HexagonParents(r5=r5, r4=r4, r3=r3), first_date=first, last_date=last,
+        has_static_source=has_static,
+        profiles=[HexagonSensorProfile(**p) for p in db.hexagon_profiles(cur, key)],
+    )
+
+
+@router.get("/hexagons/{h3_id}/monthly")
+def hexagon_monthly(h3_id: HexId, cur: Cursor) -> list[HexagonMonth]:
+    """Monthly series of the hexagon (continuous series), per sensor and satellite."""
+    key, _ = _hexagon(cur, h3_id)
+    return [HexagonMonth(month=r.pop("acq_month"), **r) for r in db.hexagon_monthly(cur, key)]
+
+
+@router.get("/hexagons/{h3_id}/period")
+def hexagon_period(
+    h3_id: HexId,
+    cur: Cursor,
+    start: Annotated[date | None, Query(description="First acquisition date (inclusive)")] = None,
+    end: Annotated[date | None, Query(description="Last acquisition date (inclusive)")] = None,
+) -> HexagonPeriod:
+    """Profile of the hexagon for a date range, per sensor (continuous series).
+
+    Sums the precomputed daily rows of this one hexagon (tens to hundreds of rows).
+    """
+    if start and end and end < start:
+        raise HTTPException(422, "end must be on or after start")
+    key, _ = _hexagon(cur, h3_id)
+    by_sensor: dict[str, dict] = {}
+    for sensor, satellite, day, daynight, fire, frp_sum, frp_max, high, static in db.hexagon_period(cur, key, start, end):
+        s = by_sensor.setdefault(sensor, {"fire": 0, "frp": 0.0, "frp_max": None, "high": 0, "day": 0,
+                                          "static": 0, "sats": {}, "daily": {}})
+        s["fire"] += fire
+        s["frp"] += frp_sum or 0.0
+        if frp_max is not None:
+            s["frp_max"] = max(s["frp_max"] or 0.0, frp_max)
+        s["high"] += high
+        s["day"] += fire if daynight == "D" else 0
+        s["static"] += static
+        s["sats"][satellite] = s["sats"].get(satellite, 0) + fire
+        d = s["daily"].setdefault(day, [0, 0])
+        d[0] += fire
+        d[1] += static
+    sensors = [
+        HexagonPeriodSensor(
+            sensor=sensor,
+            fire_detections=s["fire"],
+            active_days=sum(1 for f, _ in s["daily"].values() if f > 0),
+            fire_frp_sum=s["frp"],
+            fire_frp_max=s["frp_max"],
+            high_conf_share=s["high"] / s["fire"] if s["fire"] else None,
+            day_share=s["day"] / s["fire"] if s["fire"] else None,
+            static_detections=s["static"],
+            satellites=s["sats"],
+            daily=[HexagonDay(date=d, detections=f, static_detections=st) for d, (f, st) in sorted(s["daily"].items())],
+        )
+        for sensor, s in sorted(by_sensor.items())
+    ]
+    return HexagonPeriod(h3=h3_id, start=start, end=end, sensors=sensors)
+
+
+@router.get("/hexagons/{h3_id}/detections")
+def hexagon_detections(
+    h3_id: HexId,
+    cur: Cursor,
+    dataset: Annotated[DatasetId, Query(description="Which series (e.g. viirs_best)")] = DatasetId.viirs_best,
+    start: Annotated[date | None, Query()] = None,
+    end: Annotated[date | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=20_000)] = 2_000,
+) -> HexagonDetections:
+    """Every detection in the hexagon for a dataset and date range, most recent first (a table)."""
+    ds = DATASETS[dataset]
+    if not ds.on_hexagon_model:
+        raise HTTPException(422, f"{dataset} has no per-hexagon detail")
+    if start and end and end < start:
+        raise HTTPException(422, "end must be on or after start")
+    key, _ = _hexagon(cur, h3_id)
+    rows = db.hexagon_detections(cur, key, ds, start, end, limit)
+    return HexagonDetections(
+        h3=h3_id, dataset=dataset, truncated=len(rows) > limit,
+        rows=[HexagonDetection(**r) for r in rows[:limit]],
+    )
+
+
+# ------------------------------------------------- a selection of hexagons ---
+# A drawn area or a multi-selection: many res-6 hexagons in one request (POST, since
+# a list of thousands of ids doesn't fit in a URL). Empty hexagons are allowed.
+
+SelectionIds = Annotated[list[str], Field(min_length=1, max_length=db.MAX_SELECTION, description="H3 res-6 ids")]
+
+
+class SelectionSummaryQuery(BaseModel):
+    h3: SelectionIds
+    start: date | None = None
+    end: date | None = None
+
+
+class HexagonSummary(BaseModel):
+    """One hexagon of the selection: whole history and the chosen dates, per sensor."""
+
+    h3: str
+    modis_total: int
+    viirs_total: int
+    last_date: date | None
+    modis_period: int
+    viirs_period: int
+    static_period: int
+
+
+class SelectionDetectionsQuery(BaseModel):
+    h3: SelectionIds
+    dataset: DatasetId = DatasetId.viirs_best
+    start: date | None = None
+    end: date | None = None
+    limit: int = Field(5_000, ge=1, le=20_000)
+
+
+class SelectionDetection(HexagonDetection):
+    h3: str
+
+
+class SelectionDetections(BaseModel):
+    dataset: DatasetId
+    truncated: bool
+    rows: list[SelectionDetection]
+
+
+def _selection_keys(cur: duckdb.DuckDBPyConnection, ids: list[str], start: date | None, end: date | None) -> list[int]:
+    if start and end and end < start:
+        raise HTTPException(422, "end must be on or after start")
+    try:
+        keys = db.hexagon_keys(cur, ids)
+    except db.InvalidHexagon as e:
+        raise HTTPException(422, str(e)) from None
+    if not db.hexagon_tables_ready(cur):
+        raise HTTPException(404, "no hexagon data in the lake yet")
+    return keys
+
+
+@router.post("/hexagons/selection/summary")
+def selection_summary(body: SelectionSummaryQuery, cur: Cursor) -> list[HexagonSummary]:
+    """The hexagons of a selection that have any history, busiest in the chosen dates first.
+
+    Hexagons never seen burning are left out (the caller knows its own list).
+    """
+    keys = _selection_keys(cur, body.h3, body.start, body.end)
+    fields = HexagonSummary.model_fields
+    return [HexagonSummary(**dict(zip(fields, row))) for row in db.selection_summary(cur, keys, body.start, body.end)]
+
+
+@router.post("/hexagons/selection/detections")
+def selection_detections(body: SelectionDetectionsQuery, cur: Cursor) -> SelectionDetections:
+    """Every detection of the selected hexagons for a dataset and dates, most recent first."""
+    ds = DATASETS[body.dataset]
+    if not ds.on_hexagon_model:
+        raise HTTPException(422, f"{body.dataset} has no per-hexagon detail")
+    keys = _selection_keys(cur, body.h3, body.start, body.end)
+    rows = db.selection_detections(cur, keys, ds, body.start, body.end, body.limit)
+    return SelectionDetections(
+        dataset=body.dataset, truncated=len(rows) > body.limit,
+        rows=[SelectionDetection(**r) for r in rows[: body.limit]],
+    )
