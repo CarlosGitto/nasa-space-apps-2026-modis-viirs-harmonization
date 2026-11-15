@@ -200,7 +200,7 @@
   },
   "regions": {
     "label": "Región",
-    "follow": "Seguir el mapa (lo que se ve)",
+    "follow": "Seguir el mapa",
     "view": "Lo que se ve en el mapa",
     "world": "Todo el mundo",
     "custom": "Área dibujada",

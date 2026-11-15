@@ -465,7 +465,6 @@ const legendStyle = computed(() => ({
       </div>
       <label class="region">
         <span class="sr-only">{{ $t('regions.label') }}</span>
-        <span aria-hidden="true" class="pin">◎</span>
         <select :value="store.region ?? ''" @change="store.setRegion($event.target.value || null)">
           <option value="view">{{ $t('regions.follow') }}</option>
           <option value="">{{ $t('regions.world') }}</option>
@@ -651,7 +650,6 @@ const legendStyle = computed(() => ({
 .seg button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 .seg button:disabled { opacity: 0.45; cursor: not-allowed; }
 .region { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; min-width: 0; flex: 1; justify-content: flex-end; }
-.region .pin { color: var(--accent); }
 .region select, .opts select {
   font: inherit; font-size: 0.8125rem; color: var(--text); background: var(--bg);
   border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; max-width: 100%;
@@ -687,7 +685,7 @@ const legendStyle = computed(() => ({
 
 /* Years x months */
 .years { display: flex; flex-direction: column; gap: 2px; }
-.yrow { display: grid; grid-template-columns: 2.6rem repeat(12, 1fr) 3.2rem; gap: 2px; align-items: stretch; }
+.yrow { display: grid; grid-template-columns: 3.6rem repeat(12, 1fr) 3.2rem; gap: 2px; align-items: stretch; }
 .yrow.head span { font-size: 0.625rem; color: var(--muted); text-align: center; }
 .yrow .cell { height: 1.05rem; }
 .years.few .yrow .cell { height: 2rem; } /* a few years of data: bigger cells */

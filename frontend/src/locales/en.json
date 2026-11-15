@@ -200,7 +200,7 @@
   },
   "regions": {
     "label": "Region",
-    "follow": "Follow the map (what's on screen)",
+    "follow": "Follow the map",
     "view": "What's on the map",
     "world": "Whole world",
     "custom": "Drawn area",
