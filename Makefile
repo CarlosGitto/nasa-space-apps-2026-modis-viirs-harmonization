@@ -15,7 +15,7 @@ DEV_SP_RANGES := 2025-01-01:2025-03-31 2025-04-01:2025-06-30 2025-07-01:2025-09-
 DEV_NRT_START := 2026-08-01
 
 .DEFAULT_GOAL := help
-.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev backend-setup backend-dev backend-test frontend-setup frontend-dev
+.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev etl-reprocess backend-setup backend-dev backend-test frontend-setup frontend-dev
 
 help: ## List available commands
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -52,6 +52,13 @@ etl-seed-dev: ## Load the dev dataset: South America, SP 2025 -> latest + NRT af
 	@# NRT: from the day after the last SP month up to yesterday.
 	cd $(ETL_DIR) && astro dev run dags trigger firms_ingest_nrt \
 		--conf "{\"area\": \"$(DEV_AREA)\", \"start_date\": \"$(DEV_NRT_START)\"}"
+
+etl-reprocess: ## Rebuild silver + gold from the raw data already loaded, no download (Airflow running)
+	@# Full refresh of every dbt model in dependency order: bronze stays, silver and gold are rebuilt.
+	@# Parse the DAGs first (~10 s): a just-added DAG isn't known until the dag-processor's next pass.
+	cd $(ETL_DIR) && astro dev run dags reserialize
+	cd $(ETL_DIR) && astro dev run dags unpause firms_dbt_reprocess
+	cd $(ETL_DIR) && astro dev run dags trigger firms_dbt_reprocess
 
 # --- backend (FastAPI) -------------------------------------------------------
 
