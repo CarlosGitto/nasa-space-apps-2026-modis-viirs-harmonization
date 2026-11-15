@@ -152,7 +152,7 @@ export const fireCandidates = (neighborhood) =>
     return { lon, lat, ring }
   })
 
-// Candidates everywhere: the cells of the coarsest grid loaded (MERRA-2 when on).
+// Candidates everywhere: the cells of a loaded grid (all layers share POWER's grid).
 export function gridCandidates(grids) {
   const grid = grids.temperature ?? grids.wind ?? grids.precipitation
   return grid ? grid.response.cells.map(([lon, lat]) => ({ lon, lat, ring: 0 })) : []
@@ -215,20 +215,10 @@ export function weatherTooltip(grids, lon, lat) {
 
 // ------------------------------------------------------------------ fetching ---
 
-// Rain at full resolution (0.1°) only from this zoom on; below it the whole area,
-// averaged by the backend into coarser cells. Temperature and wind (0.5°) always come
-// for the whole area: ~11 k cells, one request per day, reused while panning.
-export const RAIN_DETAIL_ZOOM = 5.5
-const SNAP_DEG = 5 // detailed rain: the view's bbox snapped outwards, so nearby pans hit the cache
-
-export function weatherRequest(id, date, zoom, bounds) {
-  if (id !== 'precipitation' || zoom < RAIN_DETAIL_ZOOM || !bounds) return { date }
-  const snap = (v, f) => Math.max(-180, Math.min(180, f(v / SNAP_DEG) * SNAP_DEG))
-  const bbox = [
-    snap(bounds.getWest(), Math.floor), Math.max(-90, snap(bounds.getSouth(), Math.floor)),
-    snap(bounds.getEast(), Math.ceil), Math.min(90, snap(bounds.getNorth(), Math.ceil)),
-  ].join(',')
-  return { date, bbox }
+// Every layer comes for the whole loaded area (NASA POWER daily near fires, on the
+// MERRA-2 grid: a few thousand cells): one request per layer and day, reused while panning.
+export function weatherRequest(id, date) {
+  return { date }
 }
 
 // Small LRU (of request promises): the slider replays days, panning reuses the same request.

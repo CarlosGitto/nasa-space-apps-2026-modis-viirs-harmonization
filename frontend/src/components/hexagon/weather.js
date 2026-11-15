@@ -24,13 +24,11 @@ export function weatherKpis(days) {
   ]
 }
 
-// "MERRA-2 a 21 km · IMERG a 3 km": which grid cells stand for the hexagon.
+// "celda NASA POWER a 16 km": which grid cell stands for the hexagon.
 export const cellsLabel = (weather) =>
-  (weather?.cells ?? [])
-    .map((c) => `${c.product === 'merra2' ? 'MERRA-2' : 'IMERG'} a ${num(c.distance_km, 1)} km`)
-    .join(' · ')
+  (weather?.cells ?? []).map((c) => `celda NASA POWER a ${num(c.distance_km, 1)} km`).join(' · ')
 
-// The newest days have IMERG but not MERRA-2 yet (published weeks later).
+// The newest days may have rain but not temperature yet (POWER fills them in ~2 days).
 export const merraMissing = (days) => days.some((d) => d.precipitation_mm !== null && d.t2m_max_c === null)
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO']
@@ -44,10 +42,9 @@ export const daysBefore = (iso, days) => {
   return d.toISOString().slice(0, 10)
 }
 
-const PRODUCTS = { merra2: 'MERRA-2 (temperatura, humedad, viento)', imerg: 'IMERG (lluvia)' }
+const PRODUCTS = { power: 'NASA POWER' }
 
-// "MERRA-2 (…) 2025-01-01 → 2025-01-31 · IMERG (lluvia) 2025-01-01 → 2025-03-03": the
-// days loaded for this place, per product.
+// "NASA POWER: 1981-01-01 → 2026-11-13": the days available for this place.
 export const coverageLabel = (weather) =>
   (weather?.cells ?? [])
     .filter((c) => c.first_date)
@@ -57,10 +54,10 @@ export const coverageLabel = (weather) =>
 export const hasTemperature = (days) => days.some((d) => d.t2m_max_c !== null && d.t2m_max_c !== undefined)
 
 // Dates to jump to when the selected ones have no weather: the last `days` days that have
-// MERRA-2 (it lags, so they also have rain), else the last ones with any product.
+// data.
 export function suggestedRange(weather, days = 30) {
   const cells = (weather?.cells ?? []).filter((c) => c.last_date)
-  const cell = cells.find((c) => c.product === 'merra2') ?? cells[0]
+  const cell = cells[0]
   if (!cell) return null
   const start = daysBefore(cell.last_date, days - 1)
   return { start: start > cell.first_date ? start : cell.first_date, end: cell.last_date }

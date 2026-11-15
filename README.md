@@ -1,13 +1,13 @@
 # MODIS · VIIRS fire detections
 
 NASA Space Apps 2026. NASA FIRMS active-fire detections from **MODIS** and
-**VIIRS**, with the weather around them (NASA Earthdata: MERRA-2 and GPM IMERG),
+**VIIRS**, with the weather around them (NASA POWER: MERRA-2 / GEOS-IT daily),
 ingested into a local lake and shown on a map.
 
 ```
 FIRMS API ───────┐
                  ├──▶ etl/ (Airflow: dlt + dbt) ──▶ data/lake (DuckLake) ──▶ backend/ (FastAPI) ──▶ frontend/ (Vue map)
-NASA Earthdata ──┘
+NASA POWER ──────┘
 ```
 
 | Folder | What | Docs |
@@ -33,7 +33,6 @@ Linux steps inside it**: the Makefile relies on `make`, `bash` and `setfacl`.
 | [Node.js](https://nodejs.org/) + npm | 22 LTS (≥ 20.19) | Frontend (Vue + Vite) |
 | acl (`setfacl`) | any | **Linux only**: lets your user read what Airflow writes in `data/` |
 | FIRMS MAP_KEY | — | Free key to download from NASA FIRMS |
-| NASA Earthdata Login | — | Free account to download the weather (MERRA-2, GPM IMERG) |
 
 You don't need to install Python yourself: uv downloads the version pinned in
 `.python-version` (3.14) the first time you run `make etl-setup` or `make backend-setup`.
@@ -100,21 +99,6 @@ Request it (free, it arrives by email) at
 https://firms.modaps.eosdis.nasa.gov/api/map_key/. You'll paste it into `etl/.env`
 in the next section. Don't commit it.
 
-### 7. NASA Earthdata Login
-
-Create a free account at https://urs.earthdata.nasa.gov/users/new, then approve
-the two applications the weather DAG goes through (a script can't click "Approve":
-until you do it once in a browser, every download answers **403**):
-
-1. In your profile, **Applications → Authorized Apps → Approve More Applications**:
-   approve **NASA GESDISC DATA ARCHIVE** (MERRA-2 and IMERG are GES DISC data).
-2. Open this file once in the browser, logged in to Earthdata, and approve what it
-   asks for (OPeNDAP, which cuts the files to the area): it should end up showing
-   an XML document.
-   https://opendap.earthdata.nasa.gov/collections/C1276812863-GES_DISC/granules/M2T1NXSLV.5.12.4%3AMERRA2_400.tavg1_2d_slv_Nx.20250101.nc4.dmr
-
-Your username and password go into `etl/.env` in the next section.
-
 ### Optional: DuckDB CLI
 
 Only needed to query the lake by hand (see [data/README.md](data/README.md)). It
@@ -141,7 +125,7 @@ If every command prints a version, continue with [First time](#first-time).
 From the repo root:
 
 ```bash
-# 1. Keys and area: edit etl/.env and replace YOUR_MAP_KEY and the YOUR_EARTHDATA_* values
+# 1. Key and area: edit etl/.env and replace YOUR_MAP_KEY
 cp etl/.env.example etl/.env
 
 # 2. Install everything and prepare data/
@@ -191,9 +175,7 @@ NASA has published since the last run).
 | `uv sync` fails with `Required uv version >=0.9` | `uv self update` |
 | Airflow tasks fail with `Permission denied` on `data/` | Run `make etl-setup` again (it sets the folder permissions) |
 | `conn_id firms_default isn't defined` | `etl/.env` is missing the key line: copy it from `etl/.env.example`, then `make etl-restart` |
-| `conn_id earthdata_default isn't defined` | Same for the Earthdata line (`AIRFLOW_CONN_EARTHDATA_DEFAULT`), then `make etl-restart` |
-| Weather tasks fail with `Earthdata refused the request (401 …)` | Wrong username/password in `etl/.env`, then `make etl-restart` |
-| Weather tasks fail with `Earthdata refused the request (403 …)` | An application not approved yet in your Earthdata account: do both parts of [step 7](#7-nasa-earthdata-login), then clear the failed task |
-| The hexagon panel shows weather but no temperature or wind for the last weeks | Expected: MERRA-2 is published weeks late; precipitation (IMERG Late) is there |
+| The hexagon panel says `NASA POWER answered 429` / `unreachable` (503) | POWER is rate limiting or down: try again in a minute (answers are cached, so it asks POWER only once per place and day) |
+| The map's weather layers are empty for recent days | Expected for a day or two: POWER is ~2 days behind; the map only has weather near fires already loaded |
 | The `duckdb` CLI can't open the lake | Use DuckDB 1.5.6 (same as the project); see [data/README.md](data/README.md) for the `ATTACH` |
 | macOS | The lake catalog uses SQLite WAL, which isn't shared across Docker Desktop's VM: run the backend in a container too |

@@ -1,5 +1,5 @@
 <script setup>
-// What to show when the selected dates have no weather (or rain but no MERRA-2): which
+// What to show when the selected dates have no weather (or rain but no temperature): which
 // dates this place does have, and a button to jump to them.
 import { computed } from 'vue'
 import { useFiltersStore } from '../../stores/filters'

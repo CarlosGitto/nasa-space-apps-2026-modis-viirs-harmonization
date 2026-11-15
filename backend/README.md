@@ -40,8 +40,8 @@ starts, with every dataset `available: false`.
 | `GET /hexagons/{h3}/monthly` | Its monthly series per sensor and satellite |
 | `GET /hexagons/{h3}/period` | Its profile for `start`..`end` per sensor: totals, per satellite, daily series |
 | `GET /hexagons/{h3}/detections` | Its detections as a table for a `dataset` and `start`/`end` (MODIS/VIIRS datasets only). `limit` (default 2000) |
-| `GET /hexagons/{h3}/weather` | Its daily weather for `start`..`end` (default: the last 90 days with weather, at most 731): temperature, dew point, relative humidity, VPD and wind (MERRA-2); precipitation, its 7 / 30-day totals and days since rain (IMERG). Any hexagon in the loaded area, with or without detections |
-| `GET /weather/map` | One UTC day (`date`) of a weather `layer` for the map, inside `bbox`: `temperature` (MERRA-2 daily max, °C), `precipitation` (IMERG daily total, mm; dry cells < 0.1 mm left out) or `wind` (MERRA-2 daily mean speed, m/s, and the direction it comes from). Compact `[lon, lat, value(, deg)]` cell centers plus the cell size; fine grids are averaged into coarser cells to stay under ~20 k cells. With no cells, `coverage` says which days the layer has |
+| `GET /hexagons/{h3}/weather` | Its daily weather for `start`..`end` (default: the last 90 days up to yesterday, at most 731), asked to **NASA POWER on demand** for the hexagon's center and cached: temperature, dew point, humidity, VPD, wind, precipitation with its 7 / 30-day totals and days since rain. Any hexagon on Earth. 503 if POWER doesn't answer |
+| `GET /weather/map` | One UTC day (`date`) of a weather `layer` for the map, inside `bbox`, from the lake (NASA POWER daily near fires): `temperature` (daily max, °C), `precipitation` (daily total, mm; dry cells < 0.1 mm left out) or `wind` (daily mean speed, m/s, and the direction it comes from). Compact `[lon, lat, value(, deg)]` cell centers plus the cell size; big areas are averaged into coarser cells (~20 k at most). With no cells, `coverage` says which days the layer has |
 | `POST /hexagons/selection/summary` | Many hexagons at once (`{"h3": [...], "start", "end"}`, up to 5000): per hexagon with any history, its totals and its detections in the dates, per sensor, busiest first |
 | `POST /hexagons/selection/detections` | Detections of many hexagons as one table (`{"h3": [...], "dataset", "start", "end", "limit"}`) |
 
@@ -64,12 +64,14 @@ hexagon: tens of milliseconds on the dev lake. They use the continuous series
 (SP + NRT), one profile per sensor. An id that is not a valid res-6 cell gives
 422; a hexagon without data, 404.
 
-Weather is stored per grid cell, not per hexagon (see [data/README.md](../data/README.md#weather-nasa-earthdata)):
-`/hexagons/{h3}/weather` takes, for each grid, the cell nearest to the hexagon's
-center and says which (`cells`: product, center, distance). Days are UTC, like
-`acq_date`. The most recent weeks have precipitation but no MERRA-2 yet: those
-fields are `null`. A rain day is >= `rain_day_mm` (1 mm). 404 until the first
-weather load; an empty `days` list outside the loaded area.
+The hexagon's weather comes from [NASA POWER](https://power.larc.nasa.gov) on demand
+(`app/power.py`): one point request per place, cached per POWER grid cell (0.5° ×
+0.625°) and day in `data/cache/power.sqlite` (`POWER_CACHE_PATH`), recent days
+refreshed at most every 6 hours; one request at a time, a second apart. POWER is ~2
+days behind real time, so the newest days can be null. VPD and minimum relative
+humidity are derived from temperature and dew point (Magnus). A rain day is >=
+`rain_day_mm` (1 mm). The map's weather layers read the lake instead (see
+[data/README.md](../data/README.md#weather-nasa-power)).
 
 The OpenAPI schema (`/openapi.json`) is typed, so the frontend can generate its client from it.
 

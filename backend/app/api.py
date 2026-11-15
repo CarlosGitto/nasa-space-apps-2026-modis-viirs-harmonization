@@ -7,6 +7,7 @@ flares, industry, volcanoes) is reported apart as `static_detections`.
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
@@ -14,7 +15,7 @@ import duckdb
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
-from app import db
+from app import db, power
 from app.db import DATASETS, BBox, Dataset, DatasetId, Filters, Product, Sensor, Zone
 
 router = APIRouter()
@@ -654,56 +655,80 @@ def hexagon_detections(
 
 
 # ----------------------------------------------------- weather of a hexagon ---
-# NASA Earthdata weather is keyed by grid cell: the hexagon takes the nearest cell
-# of each grid (MERRA-2 for temperature, humidity and wind; IMERG for precipitation).
+# Asked to NASA POWER on demand for the hexagon's center (app/power.py, cached per
+# POWER grid cell and day): any place on Earth, with or without fires or ingestion.
 
 WEATHER_DEFAULT_DAYS = 90
 WEATHER_MAX_DAYS = 731
+# Days of history before `start` fetched for the accumulations (30-day rain, days since rain).
+WEATHER_LOOKBACK_DAYS = 60
 
 
 class WeatherCell(BaseModel):
-    """Grid cell whose values stand for the hexagon."""
+    """The NASA POWER grid cell (MERRA-2 grid, 0.5° x 0.625°) whose values stand for the hexagon."""
 
-    product: Literal["merra2", "imerg"]
+    product: Literal["power"]
     center: tuple[float, float]  # lon, lat
     distance_km: float  # from the hexagon's center
-    first_date: date | None  # days with data in this cell: what a range can ask for
+    first_date: date | None  # days with data: what a range can ask for
     last_date: date | None
 
 
 class HexagonWeatherDay(BaseModel):
-    """Weather of one UTC day. Fields of a product without data that day are null."""
+    """Weather of one UTC day (NASA POWER daily). Null when POWER has no value yet."""
 
     date: date
-    # MERRA-2
     t2m_max_c: float | None = None
     t2m_min_c: float | None = None
     t2m_mean_c: float | None = None
     dewpoint_mean_c: float | None = None
-    rh_min_pct: float | None = None
+    rh_min_pct: float | None = None  # at the hottest moment: from max temperature and dew point
     rh_mean_pct: float | None = None
     vpd_max_kpa: float | None = None  # vapour pressure deficit: how hard the air dries fuel
     vpd_mean_kpa: float | None = None
-    wind_speed_max_ms: float | None = None  # hourly means at 10 m, not gusts
+    wind_speed_max_ms: float | None = None  # 10 m, not gusts
     wind_speed_mean_ms: float | None = None
     wind_dir_mean_deg: float | None = None  # where the wind comes from, 0 = north
-    hours: int | None = None  # 24 = complete day
-    # IMERG
     precipitation_mm: float | None = None
     precipitation_7d_mm: float | None = None  # last 7 days, this one included
     precipitation_30d_mm: float | None = None
-    days_since_rain: int | None = None  # since the last day with >= rain_day_mm
-    imerg_run: Literal["final", "late"] | None = None
+    days_since_rain: int | None = None  # since the last day with >= rain_day_mm (null: none in the lookback)
 
 
 class HexagonWeather(BaseModel):
     h3: str
     center: tuple[float, float]  # lon, lat
-    start: date | None  # null when there is no weather for this place
+    start: date | None
     end: date | None
     rain_day_mm: float
     cells: list[WeatherCell]
     days: list[HexagonWeatherDay]
+
+
+def _svp_kpa(t: float) -> float:
+    """Saturation vapour pressure (kPa) at t °C (Magnus, Alduchov & Eskridge 1996)."""
+    return 0.61094 * math.exp(17.625 * t / (t + 243.04))
+
+
+def _weather_day(day: date, v: dict, series: dict[date, dict]) -> HexagonWeatherDay:
+    """One day's values plus what derives from them: VPD, minimum RH, rain accumulations."""
+    tmax, tmean, td = v.get("t2m_max_c"), v.get("t2m_mean_c"), v.get("dewpoint_mean_c")
+    extra = {}
+    if td is not None and tmax is not None:
+        extra["vpd_max_kpa"] = max(0.0, _svp_kpa(tmax) - _svp_kpa(td))
+        extra["rh_min_pct"] = min(100.0, 100 * _svp_kpa(td) / _svp_kpa(tmax))
+    if td is not None and tmean is not None:
+        extra["vpd_mean_kpa"] = max(0.0, _svp_kpa(tmean) - _svp_kpa(td))
+
+    def rain_over(n: int) -> float | None:
+        values = [series.get(day - timedelta(days=i), {}).get("precipitation_mm") for i in range(n)]
+        known = [x for x in values if x is not None]
+        return sum(known) if known else None
+
+    since = next((i for i in range(WEATHER_LOOKBACK_DAYS)
+                  if (series.get(day - timedelta(days=i), {}).get("precipitation_mm") or 0) >= db.RAIN_DAY_MM), None)
+    return HexagonWeatherDay(date=day, **v, **extra, precipitation_7d_mm=rain_over(7),
+                             precipitation_30d_mm=rain_over(30), days_since_rain=since)
 
 
 @router.get("/hexagons/{h3_id}/weather")
@@ -711,12 +736,14 @@ def hexagon_weather(
     h3_id: HexId,
     cur: Cursor,
     start: Annotated[date | None, Query(description="First UTC day (default: 90 days before end)")] = None,
-    end: Annotated[date | None, Query(description="Last UTC day (default: the last day with weather)")] = None,
+    end: Annotated[date | None, Query(description="Last UTC day (default: yesterday)")] = None,
 ) -> HexagonWeather:
-    """Daily weather of the hexagon: temperature, humidity, VPD and wind (MERRA-2), and
-    precipitation with its 7 / 30-day accumulations and days since rain (IMERG).
+    """Daily weather of the hexagon from NASA POWER (MERRA-2 / GEOS-IT, ~2 days behind):
+    temperature, dew point, humidity, VPD, wind, and precipitation with its 7 / 30-day
+    totals and days since rain. Any hexagon on Earth, with or without detections.
 
-    Works for any hexagon, with or without detections, inside the loaded area.
+    Asked on demand and cached per POWER grid cell and day (the first view of a place
+    takes ~1-2 s). 503 if POWER doesn't answer (rate limit, outage).
     """
     if start and end and end < start:
         raise HTTPException(422, "end must be on or after start")
@@ -724,40 +751,29 @@ def hexagon_weather(
         key = db.hexagon_key(cur, h3_id)
     except db.InvalidHexagon as e:
         raise HTTPException(422, str(e)) from None
-    tables = db.weather_tables(cur)
-    if not tables:
-        raise HTTPException(404, "no weather data in the lake yet")
-
     lat, lon = db.hexagon_center(cur, key)
-    products = {db.WEATHER: "merra2", db.PRECIPITATION: "imerg"}
-    found = {t: db.nearest_cell(cur, t, lat, lon) for t in tables}
-    cells = {t: (c[0], c[1]) for t, c in found.items() if c}
-    coverage = {t: db.weather_coverage(cur, t, c) for t, c in cells.items()}
-    info = [
-        WeatherCell(product=products[t], center=(c[1], c[0]), distance_km=round(c[2], 1),
-                    first_date=(coverage[t] or (None, None))[0], last_date=(coverage[t] or (None, None))[1])
-        for t, c in sorted(found.items(), key=lambda kv: products[kv[0]]) if c
-    ]
-
-    end = end or max((cov[1] for cov in coverage.values() if cov), default=None)
-    if end is None:  # outside the loaded area
-        return HexagonWeather(h3=h3_id, center=(lon, lat), start=None, end=None,
-                              rain_day_mm=db.RAIN_DAY_MM, cells=info, days=[])
+    yesterday = date.today() - timedelta(days=1)
+    end = min(end or yesterday, yesterday)
     start = start or end - timedelta(days=WEATHER_DEFAULT_DAYS - 1)
+    if end < start:
+        raise HTTPException(422, "no weather for future dates")
     if (end - start).days + 1 > WEATHER_MAX_DAYS:
         raise HTTPException(422, f"at most {WEATHER_MAX_DAYS} days per request")
+    try:
+        series = power.daily(lat, lon, start - timedelta(days=WEATHER_LOOKBACK_DAYS), end)
+    except power.PowerUnavailable as e:
+        raise HTTPException(503, f"{e}; try again in a minute") from None
 
-    days: dict[date, dict] = {}
-    if db.WEATHER in cells:
-        for d, row in db.weather_days(cur, cells[db.WEATHER], start, end).items():
-            days.setdefault(d, {}).update(row)
-    if db.PRECIPITATION in cells:
-        for d, row in db.precipitation_days(cur, cells[db.PRECIPITATION], start, end).items():
-            days.setdefault(d, {}).update(row)
-    return HexagonWeather(
-        h3=h3_id, center=(lon, lat), start=start, end=end, rain_day_mm=db.RAIN_DAY_MM, cells=info,
-        days=[HexagonWeatherDay(date=d, **row) for d, row in sorted(days.items())],
+    cell_lat, cell_lon = power.cell_of(lat, lon)
+    known = [d for d, v in series.items() if any(x is not None for x in v.values())]
+    cell = WeatherCell(
+        product="power", center=(cell_lon, cell_lat),
+        distance_km=round(111.2 * math.hypot(cell_lat - lat, (cell_lon - lon) * math.cos(math.radians(lat))), 1),
+        first_date=power.FIRST_DAY, last_date=max(known, default=None),
     )
+    days = [_weather_day(d, v, series) for d, v in series.items() if start <= d <= end]
+    return HexagonWeather(h3=h3_id, center=(lon, lat), start=start, end=end, rain_day_mm=db.RAIN_DAY_MM,
+                          cells=[cell], days=days)
 
 
 # ------------------------------------------------- a selection of hexagons ---
@@ -855,7 +871,7 @@ class WeatherCoverage(BaseModel):
 
 class WeatherMap(BaseModel):
     layer: WeatherLayerId
-    product: Literal["merra2", "imerg"]
+    product: Literal["power"]
     date: date
     unit: str
     cell: tuple[float, float]  # size of each drawn cell, degrees (lat, lon); coarser than native when zoomed out
@@ -871,11 +887,11 @@ def weather_map(
     day: Annotated[date, Query(alias="date", description="UTC day")],
     bbox: Annotated[str | None, Query(description="minLon,minLat,maxLon,maxLat (default: the whole loaded area)")] = None,
 ) -> WeatherMap:
-    """A weather layer for the map: one UTC day of temperature (MERRA-2 daily maximum),
-    precipitation (IMERG daily total; dry cells under 0.1 mm left out) or wind (MERRA-2
-    daily mean speed and the direction it comes from) inside bbox."""
+    """A weather layer for the map, near fires (NASA POWER daily, ingested by the ETL):
+    one UTC day of max temperature, precipitation (dry cells under 0.1 mm left out) or
+    mean wind (speed and the direction it comes from) inside bbox."""
     spec = db.WEATHER_LAYERS[layer]
-    if spec.table not in db.weather_tables(cur):
+    if not db.weather_ready(cur):
         raise HTTPException(404, "no weather data in the lake yet")
     extent = db.weather_extent(cur, spec, day)
     area = _parse_bbox(bbox) if bbox else extent
@@ -893,6 +909,6 @@ def weather_map(
         found = db.weather_layer_coverage(cur, spec)
         coverage = WeatherCoverage(first_date=found[0], last_date=found[1]) if found else None
     return WeatherMap(
-        layer=layer, product=spec.product, date=day, unit=WEATHER_UNITS[layer], cell=cell, coverage=coverage,
+        layer=layer, product="power", date=day, unit=WEATHER_UNITS[layer], cell=cell, coverage=coverage,
         cells=[[round(v, 4) if i < 2 else round(v, 2) for i, v in enumerate(r)] for r in rows if r[2] is not None],
     )

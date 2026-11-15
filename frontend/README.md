@@ -44,8 +44,8 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   hexagon's weather day by day, at least 30 days up to the end date, with the time
   slider's day marked: fire detections per sensor against the maximum VPD,
   temperature and dew point, minimum humidity and wind (with direction in the
-  tooltip), daily rain with its 30-day total and days since rain. NASA MERRA-2 and
-  GPM IMERG, from the grid cell nearest to the hexagon. With
+  tooltip), daily rain with its 30-day total and days since rain. NASA POWER,
+  asked on demand by the backend for the hexagon's center (any place). With
   several hexagons, "Detalle" shows one ficha each; "Agrupado" is a work in progress.
 - **Weather layers**: "Weather layers" in the side panel adds the weather of the day the
   map shows (the time slider's day, else the end of the range) as icons that never paint
@@ -54,15 +54,15 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   images so MapLibre colors them per value:
   **Temperature**: a thermometer colored by the daily max (usual temperature-map colors);
   **Rain**: a drop sized by the daily total (none where it's dry); **Wind**: an arrow
-  pointing where it blows, sized and colored by speed. NASA MERRA-2 and GPM IMERG.
+  pointing where it blows, sized and colored by speed. NASA POWER daily (ingested near fires).
   Each place gets one group (thermometer, arrow, drop), thinned to ~72 px. Two scopes:
   - **Around fires** (default): around the fire hexagons on screen, out to 3 rings of
     neighbors (H3), fading with the distance, and placed on the neighbors so the fire
     itself stays uncovered. Computed in the browser from the hexagons already loaded.
   - **Everywhere**: the same icons over the whole loaded area.
 
-  Responses are cached per layer and day (temperature and wind come for the whole area,
-  rain too until zoom 5.5, then per 5° tile), requests in flight are shared, and the
+  Responses are cached per layer and day (each layer comes for the whole loaded area),
+  requests in flight are shared, and the
   next day is prefetched while the slider plays: panning and replaying days don't hit
   the backend again. Hovering shows the values; a day without data says which days a
   layer has, with a button to jump there. See [src/mapWeather.js](src/mapWeather.js)

@@ -99,13 +99,13 @@ async function refresh() {
 
 // Weather layers for the map's day (the slider's, else the end of the range). Responses
 // are cached: temperature and wind come for the whole area (one request per day), rain
-// too until RAIN_DETAIL_ZOOM, then per snapped bbox. A day without data for a layer
+// (NASA POWER near fires, ingested by the ETL). A day without data for a layer
 // leaves a note saying which days it has.
 // The cache holds promises, not responses: a request already on its way (another layer
 // toggled, the prefetch, a quick pan) is shared instead of cancelled and sent again.
 // Responses are small; a stale one is just ignored by refreshWeather.
 function loadWeather(id, date) {
-  const request = weatherRequest(id, date, map.getZoom(), map.getBounds())
+  const request = weatherRequest(id, date)
   const key = `${id}|${request.date}|${request.bbox ?? ''}`
   let pending = weatherCache.get(key)
   if (!pending) {
@@ -609,7 +609,7 @@ watch(() => store.zone, (zone) => { if (!zone) areaNote.value = '' })
         </span>
       </div>
       <span class="legend-fade">
-        {{ store.imageryDate }} UTC ({{ store.day ? 'slider day' : 'end of range' }}) · NASA MERRA-2, GPM IMERG
+        {{ store.imageryDate }} UTC ({{ store.day ? 'slider day' : 'end of range' }}) · NASA POWER
         <template v-if="store.weatherScope === 'fires'"> · fading away from fires</template>
       </span>
     </div>

@@ -4,17 +4,16 @@
 Runs the dbt models tagged `weather` and everything downstream (`tag:weather+`)
 whenever `weather_ingest` updates the `weather_raw` asset:
 
-`stg_weather__*` (silver views: units, relative humidity, VPD, wind speed and
-direction) → `int_weather_merra2_hourly`, `int_weather_imerg_daily` (silver:
-latest version, IMERG Final preferred over Late) → gold
-(`fct_weather_daily`, `fct_precipitation_daily`).
+`stg_weather__power_daily` (silver view: types, `dq_issue`) →
+`int_weather_power_daily` (silver: latest version per cell and day) → gold
+`fct_weather_daily` (NASA POWER daily near fires, for the map's weather layers).
 
 Weather gold is keyed by grid cell and day, independent of the fire models:
 the backend looks up the cell under a hexagon. One Cosmos task per model and
 test; every task writes through the single-writer `ducklake` pool.
 
-**Bounded runs.** The big weather models recompute at most
-`weather_months_per_run` months per run (dbt var, default 2), oldest pending
+**Bounded runs.** The silver model recomputes at most `weather_months_per_run`
+months per run (dbt var, default 6), oldest pending
 first (macros/incremental.sql, pending_months_scope): a backlog (a long backfill,
 or dbt failing for a while) is worked through in steps that fit in DuckDB's
 memory cap instead of one query over every month. Besides each weather load, the
