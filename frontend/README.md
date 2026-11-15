@@ -121,9 +121,10 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
 - **Fire calendar** ([src/components/FireCalendar.vue](src/components/FireCalendar.vue)): the app's main
   control, at the top of the left panel. It picks the period the map shows.
   - **Values**: *Harmonized* (one series 2000 → today in MODIS units, `/stats/harmonized/{monthly,daily}`; the
-    default once `make etl-harmonize` has built it) or *Raw* (the chosen dataset as published). The switch is
+    default: the app starts on it and falls back to raw only if `make etl-harmonize` hasn't built it) or *Raw* (the chosen dataset as published). The switch is
     global: the main map and the time slider follow it.
-  - **Zoom levels**: *Years* (years × months, each year's total as a bar and a *Typical* row = the mean of each
+  - **Zoom levels**: *Years* (years × months, newest year on top, in a box that scrolls past ~14 years with the
+    header and *Typical* row fixed; a period picked elsewhere is scrolled to the center; each year's total as a bar and a *Typical* row = the mean of each
     month: which years and which seasons burn most), *Year* (twelve month calendars, one square per day) and
     *Month* (a big calendar with each day's count). No tabs: a year label (or double-clicking a month) and a
     month title drill down, and the trail on top (*2025 – 2026 › 2026 › October*) goes back up. ‹ › step a
