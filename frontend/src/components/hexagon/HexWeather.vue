@@ -54,7 +54,7 @@ const chartText = computed(() =>
 
 <template>
   <section class="weather">
-    <h3>{{ $t('weather.title') }} <span class="muted">· NASA POWER</span></h3>
+    <h3>{{ $t('weather.title') }} <span class="muted">· POWER</span></h3>
     <p v-if="loading && !weather" class="muted">{{ $t('common.loading') }}</p>
     <p v-else-if="error" class="error" role="alert">{{ errorMessage(error) }}</p>
     <template v-else-if="weather">
