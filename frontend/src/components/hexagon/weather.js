@@ -1,5 +1,6 @@
 // Shared by the hexagon's weather views (HexWeather in Ficha · período, HexClimate in the
 // Clima tab): summary figures and labels from GET /hexagons/{h3}/weather.
+import { mdiThermometer, mdiWaterOff, mdiWaterPercent, mdiWeatherRainy, mdiWeatherSunny, mdiWeatherWindy } from '@mdi/js'
 import { num } from './charts'
 
 const present = (days, key) => days.map((d) => d[key]).filter((v) => v !== null && v !== undefined)
@@ -12,13 +13,14 @@ export function weatherKpis(days) {
   const last = days.at(-1)
   // '–' alone when there is no value, never '– °C'.
   const withUnit = (v, digits, unit) => (v === null ? '–' : `${num(v, digits)} ${unit}`)
+  // icon: Material Design Icons path (the map uses the same family); color: the variable's.
   return [
-    { label: 'Temp. máx', value: withUnit(maxOf(days, 't2m_max_c'), 1, '°C') },
-    { label: 'Humedad mín', value: withUnit(minOf(days, 'rh_min_pct'), 0, '%') },
-    { label: 'VPD máx', value: withUnit(maxOf(days, 'vpd_max_kpa'), 1, 'kPa') },
-    { label: 'Viento máx', value: withUnit(maxOf(days, 'wind_speed_max_ms'), 1, 'm/s') },
-    { label: 'Lluvia total', value: rain.length ? `${num(rain.reduce((a, b) => a + b, 0), 1)} mm` : '–' },
-    { label: 'Días sin lluvia', value: num(last?.days_since_rain), note: last ? `al ${last.date}` : '' },
+    { label: 'Temp. máx', icon: mdiThermometer, color: '#dc2626', value: withUnit(maxOf(days, 't2m_max_c'), 1, '°C') },
+    { label: 'Humedad mín', icon: mdiWaterPercent, color: '#0d9488', value: withUnit(minOf(days, 'rh_min_pct'), 0, '%') },
+    { label: 'VPD máx', icon: mdiWeatherSunny, color: '#7c3aed', value: withUnit(maxOf(days, 'vpd_max_kpa'), 1, 'kPa') },
+    { label: 'Viento máx', icon: mdiWeatherWindy, color: '#475569', value: withUnit(maxOf(days, 'wind_speed_max_ms'), 1, 'm/s') },
+    { label: 'Lluvia total', icon: mdiWeatherRainy, color: '#2563eb', value: rain.length ? `${num(rain.reduce((a, b) => a + b, 0), 1)} mm` : '–' },
+    { label: 'Días sin lluvia', icon: mdiWaterOff, color: '#64748b', value: num(last?.days_since_rain), note: last ? `al ${last.date}` : '' },
   ]
 }
 
