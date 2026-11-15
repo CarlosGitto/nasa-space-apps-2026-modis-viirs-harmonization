@@ -15,6 +15,7 @@ so adding or adjusting a dataset only touches DATASETS below.
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -60,6 +61,12 @@ GOLD_SCHEMA = "gold"
 
 # Every dataset must have these columns (same names in the lake).
 REQUIRED_COLUMNS = ("latitude", "longitude", "acq_date", "acq_datetime_utc", "frp", "daynight")
+# The project's fixed spatial unit: the H3 resolution-6 cell of each detection.
+# Taken from the lake when the dataset has it (dbt silver computes it once),
+# computed from latitude/longitude otherwise (e.g. a harmonized table without it).
+H3_RES = 6
+H3_COLUMN = "h3_r6"
+
 # API property -> lake column. Missing columns are returned as null.
 OPTIONAL_PROPERTIES = ("satellite", "confidence", "brightness")
 
@@ -117,6 +124,24 @@ def connect() -> None:
     _ensure_attached()
 
 
+def _catalog_initialized(catalog: str) -> bool:
+    """Whether DuckLake has created its tables in the catalog yet.
+
+    The ETL creates an empty SQLite file (to set WAL mode) before its first
+    write; a READ_ONLY attach refuses that file, so wait until it's initialized.
+    """
+    if not os.path.exists(catalog):
+        return False
+    con = sqlite3.connect(f"file:{catalog}?mode=ro", uri=True)
+    try:
+        return (
+            con.execute("select 1 from sqlite_master where type = 'table' and name = 'ducklake_metadata'").fetchone()
+            is not None
+        )
+    finally:
+        con.close()
+
+
 def _ensure_attached() -> bool:
     """Attach the lake once its catalog exists (the ETL may not have run yet).
 
@@ -128,7 +153,7 @@ def _ensure_attached() -> bool:
     if _attached:
         return True
     catalog = f"{lake_path()}/catalog.sqlite"
-    if not os.path.exists(catalog):
+    if not _catalog_initialized(catalog):
         return False
     with _attach_lock:
         if not _attached:
@@ -188,7 +213,8 @@ def exists(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> bool:
 def base_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
     """Subquery with the common columns of a dataset, whatever its sensor.
 
-    Columns: the required ones plus satellite / confidence (as text) / brightness.
+    Columns: the required ones, satellite / confidence (as text) / brightness,
+    and h3_r6 (the fixed H3 resolution-6 cell).
     """
     source = ds.relation
     present = {row[0] for row in cur.execute(f"describe {source}").fetchall()}
@@ -205,6 +231,15 @@ def base_relation(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> str:
         else:
             expr = f"cast(null as {'double' if prop == 'brightness' else 'varchar'})"
         optional.append(f"{expr} as {prop}")
+
+    if H3_COLUMN in present:
+        h3 = f"cast({_ident(H3_COLUMN)} as ubigint)"
+    else:
+        h3 = (
+            f"case when latitude between -90 and 90 and longitude between -180 and 180 "
+            f"then h3_latlng_to_cell(latitude, longitude, {H3_RES}) end"
+        )
+    optional.append(f"{h3} as {H3_COLUMN}")
 
     return (
         f"(select {', '.join(REQUIRED_COLUMNS)}, {', '.join(optional)} "

@@ -34,13 +34,11 @@ from include.firms.config import LAKE_WRITER_POOL
 def firms_lake_maintenance():
     @task(pool=LAKE_WRITER_POOL)
     def maintain_lake(params=None):
-        import os
-
         import duckdb
 
-        from include.firms.config import CATALOG_PATH, LAKE_ALIAS, attach_sql
+        from include.firms.config import LAKE_ALIAS, attach_sql, catalog_initialized
 
-        if not os.path.exists(CATALOG_PATH):
+        if not catalog_initialized():
             from airflow.sdk.exceptions import AirflowSkipException
 
             raise AirflowSkipException("No lake catalog yet")

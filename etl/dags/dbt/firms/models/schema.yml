@@ -36,6 +36,9 @@ models:
             columns: [latitude, longitude, acq_date, acq_time, satellite]
             recent_only: true  # months touched by the latest load
     columns: &gold_modis_columns
+      - name: h3_r6
+        description: H3 resolution-6 cell (UBIGINT) of the detection's center; the project's fixed spatial unit.
+        data_tests: [not_null]
       - name: acq_datetime_utc
         data_tests: [not_null]
       - name: confidence
@@ -54,6 +57,9 @@ models:
     description: Clean VIIRS NRT detections (silver rows with no dq_issue).
     data_tests: *gold_key_test
     columns: &gold_viirs_columns
+      - name: h3_r6
+        description: H3 resolution-6 cell (UBIGINT) of the detection's center; the project's fixed spatial unit.
+        data_tests: [not_null]
       - name: acq_datetime_utc
         data_tests: [not_null]
       - name: confidence

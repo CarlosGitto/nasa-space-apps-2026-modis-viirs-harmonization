@@ -326,9 +326,14 @@ def hex_stats(
     dataset: DatasetId,
     cur: Cursor,
     filters: FiltersDep,
-    res: Annotated[int, Query(ge=0, le=8, description="H3 resolution (0 = coarsest)")] = 3,
+    res: Annotated[
+        int, Query(ge=0, le=db.H3_RES, description="H3 resolution: 6 is the base cell, 0-5 roll up to its parents")
+    ] = 3,
 ) -> HexCollection:
     """Detections aggregated on H3 hexagons, as GeoJSON polygons.
+
+    Every detection belongs to one fixed resolution-6 cell (h3_r6); coarser
+    resolutions group those cells by their parent, so all levels share the same grid.
 
     Cells crossing the antimeridian are dropped: as plain lon/lat polygons they
     would be drawn spanning the whole map.
@@ -338,10 +343,10 @@ def hex_stats(
     rows = cur.execute(
         f"""
         with cells as (
-            select h3_latlng_to_cell(latitude, longitude, ?) as cell,
+            select h3_cell_to_parent(h3_r6, ?) as cell,
                    count(*) as detections, sum(frp) as frp_sum
             from {base}
-            where {where}
+            where {where} and h3_r6 is not null
             group by 1
         ),
         shapes as (

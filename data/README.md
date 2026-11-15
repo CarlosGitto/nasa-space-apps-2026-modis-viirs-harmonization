@@ -46,6 +46,27 @@ SELECT count(*) FROM lake.gold.modis_sp AT (VERSION => 42);
 Always attach `READ_ONLY` unless you are the ETL: the SQLite catalog takes a
 single writer at a time.
 
+## Local dev dataset
+
+For development we work on a fixed slice, so everyone has the same data:
+**South America, all four satellites (MODIS, VIIRS S-NPP, NOAA-20, NOAA-21),
+continuous from 2025-01-01 to today**:
+
+```
+SP  (science quality):  2025-01-01 ──────────────▶ last published month (VIIRS ~3 months behind, MODIS ~2)
+NRT (near real time):                   day after SP ──────────────▶ yesterday
+```
+
+1. In `etl/.env` set `FIRMS_AREA=-82,-56,-34,13` (see `etl/.env.example`), so the
+   scheduled NRT/SP runs keep the same South America coverage.
+2. `make etl-start`, then `make etl-seed-dev`: quarterly SP loads plus one NRT
+   backfill, run one after the other (~2 h in total; follow them in the Airflow UI).
+3. After that the scheduled runs keep it current on their own: NRT daily (last
+   2 days) and SP weekly (each new month FIRMS publishes).
+
+Instead of downloading, you can copy someone's `data/lake/` folder (stop Airflow
+first so nothing is writing): the catalog and its files travel together.
+
 ## Setup (once per machine)
 
 `make etl-setup` does it. Airflow runs as uid 50000 inside the containers and
