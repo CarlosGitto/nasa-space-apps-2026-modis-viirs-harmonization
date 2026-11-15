@@ -1,4 +1,8 @@
-"""HTTP endpoints. Same contract for every dataset (MODIS, VIIRS, harmonized)."""
+"""HTTP endpoints. Same contract for every dataset (MODIS, VIIRS, harmonized).
+
+`detections` counts are wildfires; heat from static sources (refineries, gas
+flares, industry, volcanoes) is reported apart as `static_detections`.
+"""
 
 from __future__ import annotations
 
@@ -28,9 +32,9 @@ class Health(BaseModel):
 class DatasetInfo(BaseModel):
     id: DatasetId
     sensor: Sensor
-    product: Product
+    product: Product  # sp | nrt | best (SP where published, NRT after it)
     available: bool
-    rows: int
+    rows: int  # wildfire detections (static sources excluded)
     start_date: date | None
     end_date: date | None
 
@@ -42,6 +46,8 @@ class PointGeometry(BaseModel):
 
 class DetectionProperties(BaseModel):
     sensor: Sensor
+    product: Product  # where this detection comes from: sp or nrt
+    is_static_source: bool  # heat that is not a wildfire (refinery, gas flare, volcano...)
     satellite: str | None
     acq_datetime_utc: datetime
     frp: float | None
@@ -69,6 +75,7 @@ class DailyStat(BaseModel):
     night: int
     frp_sum: float | None
     frp_mean: float | None
+    static_detections: int
 
 
 class MonthlyStat(BaseModel):
@@ -76,6 +83,7 @@ class MonthlyStat(BaseModel):
     month: int  # 1-12
     detections: int
     frp_sum: float | None
+    static_detections: int
 
 
 class PolygonGeometry(BaseModel):
@@ -86,6 +94,7 @@ class PolygonGeometry(BaseModel):
 class CellProperties(BaseModel):
     detections: int
     frp_sum: float | None
+    static_detections: int
 
 
 class CellFeature(BaseModel):
@@ -104,6 +113,7 @@ class HexProperties(BaseModel):
     h3: str  # H3 cell index
     detections: int
     frp_sum: float | None
+    static_detections: int
 
 
 class HexFeature(BaseModel):
@@ -185,15 +195,25 @@ def _parse_zone(raw: str) -> Zone:
 FiltersDep = Annotated[Filters, Depends(parse_filters)]
 
 
-def _source(cur: duckdb.DuckDBPyConnection, dataset: DatasetId) -> tuple[Dataset, str]:
-    """The dataset and its base subquery, or 404 if nothing has landed yet."""
+def _dataset(cur: duckdb.DuckDBPyConnection, dataset: DatasetId) -> Dataset:
+    """The dataset, or 404 if nothing has landed for it yet."""
     ds = DATASETS[dataset]
     if not db.exists(cur, ds):
-        raise HTTPException(404, f"no data yet for {dataset} (no table gold.{dataset} in the lake)")
+        raise HTTPException(404, f"no data yet for {dataset}")
+    return ds
+
+
+def _relation(build, cur: duckdb.DuckDBPyConnection, ds: Dataset, **kwargs) -> str:
     try:
-        return ds, db.base_relation(cur, ds)
+        return build(cur, ds, **kwargs)
     except db.DatasetSchemaError as e:
         raise HTTPException(500, str(e)) from None
+
+
+def _cells(cur: duckdb.DuckDBPyConnection, dataset: DatasetId, filters: Filters) -> str:
+    """Hexagon rows of a dataset; with the hexagon centers only if a spatial filter needs them."""
+    spatial = filters.bbox is not None or filters.zone is not None
+    return _relation(db.cells_relation, cur, _dataset(cur, dataset), with_center=spatial)
 
 
 # --------------------------------------------------------------- endpoints ---
@@ -207,17 +227,21 @@ def health() -> Health:
 @router.get("/datasets")
 def list_datasets(cur: Cursor) -> list[DatasetInfo]:
     """Every dataset the API knows about, with what is currently in the lake."""
+    hexagon = db.hexagon_summaries(cur)  # all MODIS/VIIRS datasets in one pass
     out = []
     for ds in DATASETS.values():
         rows, start, end = 0, None, None
-        available = db.exists(cur, ds)
-        if available:
-            try:
-                rows, start, end = cur.execute(
-                    f"select count(*), min(acq_date), max(acq_date) from {db.base_relation(cur, ds)}"
-                ).fetchone()
-            except db.DatasetSchemaError:
-                available = False
+        if ds.on_hexagon_model:
+            available = ds.id in hexagon
+            if available:
+                rows, start, end = hexagon[ds.id]
+        else:
+            available = db.exists(cur, ds)
+            if available:
+                try:
+                    rows, start, end = db.summary(cur, ds)
+                except db.DatasetSchemaError:
+                    available = False
         out.append(
             DatasetInfo(
                 id=ds.id, sensor=ds.sensor, product=ds.product,
@@ -234,13 +258,14 @@ def detections(
     filters: FiltersDep,
     limit: Annotated[int, Query(ge=1, le=50_000)] = 5_000,
 ) -> DetectionCollection:
-    """Fire detections as GeoJSON points, most recent first."""
-    ds, base = _source(cur, dataset)
+    """Detections as GeoJSON points, most recent first (static sources flagged, not removed)."""
+    ds = _dataset(cur, dataset)
+    base = _relation(db.points_relation, cur, ds)
     where, params = filters.where()
     rows = cur.execute(
         f"""
         select ST_AsGeoJSON(ST_Point(longitude, latitude)) as geometry,
-               satellite, acq_datetime_utc, frp, confidence, daynight, brightness
+               satellite, acq_datetime_utc, frp, confidence, daynight, brightness, product, is_static_source
         from {base}
         where {where}
         order by acq_datetime_utc desc
@@ -253,11 +278,13 @@ def detections(
         DetectionFeature(
             geometry=json.loads(geometry),
             properties=DetectionProperties(
-                sensor=ds.sensor, satellite=satellite, acq_datetime_utc=acq_datetime_utc, frp=frp,
-                confidence=confidence, daynight=daynight, brightness=brightness,
+                sensor=ds.sensor, product=product, is_static_source=is_static, satellite=satellite,
+                acq_datetime_utc=acq_datetime_utc, frp=frp, confidence=confidence, daynight=daynight,
+                brightness=brightness,
             ),
         )
-        for geometry, satellite, acq_datetime_utc, frp, confidence, daynight, brightness in rows[:limit]
+        for geometry, satellite, acq_datetime_utc, frp, confidence, daynight, brightness, product, is_static
+        in rows[:limit]
     ]
     return DetectionCollection(features=features, truncated=len(rows) > limit)
 
@@ -265,14 +292,15 @@ def detections(
 @router.get("/datasets/{dataset}/stats/daily")
 def daily_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[DailyStat]:
     """Detections and FRP per acquisition date."""
-    _, base = _source(cur, dataset)
+    base = _cells(cur, dataset, filters)
     where, params = filters.where()
     rows = cur.execute(
         f"""
-        select acq_date, count(*),
-               count(*) filter (where daynight = 'D'),
-               count(*) filter (where daynight = 'N'),
-               sum(frp), avg(frp)
+        select acq_date, sum(detections),
+               coalesce(sum(detections) filter (where daynight = 'D'), 0),
+               coalesce(sum(detections) filter (where daynight = 'N'), 0),
+               sum(frp_sum), sum(frp_sum) / nullif(sum(detections), 0),
+               sum(static_detections)
         from {base}
         where {where}
         group by acq_date
@@ -281,8 +309,8 @@ def daily_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[Da
         params,
     ).fetchall()
     return [
-        DailyStat(date=d, detections=n, day=day, night=night, frp_sum=fs, frp_mean=fm)
-        for d, n, day, night, fs, fm in rows
+        DailyStat(date=d, detections=n, day=day, night=night, frp_sum=fs, frp_mean=fm, static_detections=st)
+        for d, n, day, night, fs, fm, st in rows
     ]
 
 
@@ -294,19 +322,21 @@ def grid_stats(
     cell: Annotated[float, Query(ge=0.1, le=10, description="Cell size in degrees")] = 1.0,
 ) -> GridCollection:
     """Detections aggregated on a lat/lon grid, as GeoJSON polygons (for heatmaps)."""
-    _, base = _source(cur, dataset)
+    base = _relation(db.points_relation, cur, _dataset(cur, dataset))
     where, params = filters.where()
     rows = cur.execute(
         f"""
         with cells as (
             select floor(longitude / ?) * ? as x0, floor(latitude / ?) * ? as y0,
-                   count(*) as detections, sum(frp) as frp_sum
+                   count(*) filter (where not is_static_source) as detections,
+                   sum(frp) filter (where not is_static_source) as frp_sum,
+                   count(*) filter (where is_static_source) as static_detections
             from {base}
             where {where}
             group by all
         )
         select ST_AsGeoJSON(ST_MakeEnvelope(x0, y0, least(x0 + ?, 180), least(y0 + ?, 90))),
-               detections, frp_sum
+               detections, frp_sum, static_detections
         from cells
         order by detections desc
         """,
@@ -315,8 +345,8 @@ def grid_stats(
     return GridCollection(
         cell=cell,
         features=[
-            CellFeature(geometry=json.loads(g), properties=CellProperties(detections=n, frp_sum=fs))
-            for g, n, fs in rows
+            CellFeature(geometry=json.loads(g), properties=CellProperties(detections=n, frp_sum=fs, static_detections=st))
+            for g, n, fs, st in rows
         ],
     )
 
@@ -334,27 +364,29 @@ def hex_stats(
 
     Every detection belongs to one fixed resolution-6 cell (h3_r6); coarser
     resolutions group those cells by their parent, so all levels share the same grid.
+    bbox/zone select hexagons by their center.
 
     Cells crossing the antimeridian are dropped: as plain lon/lat polygons they
     would be drawn spanning the whole map.
     """
-    _, base = _source(cur, dataset)
+    base = _cells(cur, dataset, filters)
     where, params = filters.where()
     rows = cur.execute(
         f"""
         with cells as (
             select h3_cell_to_parent(h3_r6, ?) as cell,
-                   count(*) as detections, sum(frp) as frp_sum
+                   sum(detections) as detections, sum(frp_sum) as frp_sum,
+                   sum(static_detections) as static_detections
             from {base}
-            where {where} and h3_r6 is not null
+            where {where}
             group by 1
         ),
         shapes as (
-            select cell, detections, frp_sum,
+            select cell, detections, frp_sum, static_detections,
                    ST_GeomFromText(h3_cell_to_boundary_wkt(cell)) as geom
             from cells
         )
-        select h3_h3_to_string(cell), ST_AsGeoJSON(geom), detections, frp_sum
+        select h3_h3_to_string(cell), ST_AsGeoJSON(geom), detections, frp_sum, static_detections
         from shapes
         where ST_XMax(geom) - ST_XMin(geom) < 180
         order by detections desc
@@ -364,8 +396,11 @@ def hex_stats(
     return HexCollection(
         resolution=res,
         features=[
-            HexFeature(geometry=json.loads(g), properties=HexProperties(h3=h, detections=n, frp_sum=fs))
-            for h, g, n, fs in rows
+            HexFeature(
+                geometry=json.loads(g),
+                properties=HexProperties(h3=h, detections=n, frp_sum=fs, static_detections=st),
+            )
+            for h, g, n, fs, st in rows
         ],
     )
 
@@ -373,11 +408,11 @@ def hex_stats(
 @router.get("/datasets/{dataset}/stats/monthly")
 def monthly_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[MonthlyStat]:
     """Detections and FRP per year and month (burn calendar)."""
-    _, base = _source(cur, dataset)
+    base = _cells(cur, dataset, filters)
     where, params = filters.where()
     rows = cur.execute(
         f"""
-        select year(acq_date), month(acq_date), count(*), sum(frp)
+        select year(acq_date), month(acq_date), sum(detections), sum(frp_sum), sum(static_detections)
         from {base}
         where {where}
         group by all
@@ -385,4 +420,6 @@ def monthly_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[
         """,
         params,
     ).fetchall()
-    return [MonthlyStat(year=y, month=m, detections=n, frp_sum=fs) for y, m, n, fs in rows]
+    return [
+        MonthlyStat(year=y, month=m, detections=n, frp_sum=fs, static_detections=st) for y, m, n, fs, st in rows
+    ]
