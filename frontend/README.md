@@ -54,6 +54,41 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
   detections per month × year (`/stats/monthly`) for the dataset and zone.
   Clicking a month sets the map dates to that month.
 
+## Languages (English / Spanish)
+
+[vue-i18n](https://vue-i18n.intlify.dev/). Only what the user reads is translated: code,
+API, data and technical names (SP, NRT, MODIS, NOAA-20, H3 ids) stay as they are.
+
+- Texts live in [src/locales/en.json](src/locales/en.json) and [src/locales/es.json](src/locales/es.json),
+  with the same keys. To add a text: add the key to **both** files and use
+  `{{ $t('area.key') }}` in a template (`useI18n().t` in a component's script,
+  `i18n.global.t` elsewhere).
+- Numbers and dates: the helpers in [src/format.js](src/format.js) (`num`, `pct`, `date`),
+  never `toLocaleString` with a fixed language.
+- Write keys literally (`cond ? $t('a') : $t('b')`, not `$t(cond ? 'a' : 'b')`) so the
+  linter can check them. Families built from a value on purpose (`panel.tabs.${id}`) are
+  listed in [eslint.config.js](eslint.config.js).
+- The language starts from the browser (Spanish if it's in Spanish, else English) and
+  the user's choice (ES | EN, top left) is remembered in the browser.
+
+## Accessibility
+
+Target: WCAG 2.2 AA, following the WAI-ARIA authoring practices on top of native HTML.
+
+- **Accessibility menu** (universal-access icon, top left), saved in the browser:
+  - text size 100 / 125 / 150 % (every `font-size` is in `rem`: use rem for new ones too);
+  - high contrast (color tokens in [src/style.css](src/style.css): use `var(--…)`, not fixed colors, for UI);
+  - reduce motion (starts on if the system asks for it);
+  - easy reading: Atkinson Hyperlegible font, wider text spacing, patterns in charts.
+- **Keyboard**: "Skip to map" link; on the focused map, arrows move, +/− zoom,
+  **Enter** acts at the center (crosshair) like a click, **Shift+Enter** adds a hexagon,
+  Esc cancels a drawing. The panel's tabs move with the arrows, Home and End; opening
+  the panel focuses it and closing it (✕ or Esc) returns the focus.
+- **Screen readers**: map status, area notes and loading are announced; charts and the
+  burn calendar have a text summary; tables have captions.
+- **Lint**: `make frontend-lint` fails on text written straight into a template, keys
+  missing from (or unused in) the locales, and common accessibility mistakes.
+
 ## Manual check
 
 1. On load: world map with hexagons and the world burn calendar, nothing drawn.
@@ -62,4 +97,7 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
    neighbor: two fichas under "Detalle". Zoom past 10: dashed borders, points on top.
 3. "Area (4 points)" and click 4 points: the area snaps to its hexagons, the panel opens with
    them, and map and calendar only show that area; "Clear area" goes back to the world.
-4. Pick `MODIS SP` and click a month in the calendar: the dates change to that month.
+4. ES | EN switches every text, number and date format; reload keeps it.
+5. Accessibility menu: each option changes the page and stays after a reload. Tab from
+   the top: "Skip to map", then the map; Enter on a hexagon opens the panel.
+6. Pick `MODIS SP` and click a month in the calendar: the dates change to that month.
