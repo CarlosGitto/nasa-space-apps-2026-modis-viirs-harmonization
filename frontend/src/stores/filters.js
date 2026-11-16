@@ -9,7 +9,6 @@ import { errorMessage } from '../format'
 import { pickLayer } from '../gibs'
 import { REGIONS, bbox } from '../regions'
 
-const DEFAULT_DAYS = 7
 const PREFERRED_DATASET = 'viirs_best' // continuous: SP where published, NRT after it
 
 const isoDate = (d) => d.toISOString().slice(0, 10)
@@ -17,6 +16,16 @@ const addDays = (iso, days) => {
   const d = new Date(`${iso}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() + days)
   return isoDate(d)
+}
+// The default view, whatever the data: the latest whole month between first and last (a calendar opens on a month,
+// not on a few days). The last day closes its month only if it's the month's last day; otherwise the month before.
+// Less than a whole month of data: all of it.
+export function latestMonth(first, last) {
+  const monthEnd = isoDate(new Date(Date.UTC(+last.slice(0, 4), +last.slice(5, 7), 0)))
+  const end = monthEnd === last ? last : addDays(`${last.slice(0, 7)}-01`, -1)
+  if (end < first) return [first, last]
+  const start = `${end.slice(0, 7)}-01`
+  return [start < first ? first : start, end]
 }
 
 export const useFiltersStore = defineStore('filters', () => {
@@ -111,11 +120,12 @@ export const useFiltersStore = defineStore('filters', () => {
     basemap.value === 'vector' ? null : pickLayer(basemap.value, day.value ?? end.value),
   )
 
-  function lastDays(info) {
+  // A dataset's default view: its latest whole month (raw values, a dataset change, harmonized not built).
+  function lastMonth(info) {
+    const [s, e] = latestMonth(info.start_date, info.end_date)
     day.value = null
-    end.value = info.end_date
-    start.value = addDays(info.end_date, -(DEFAULT_DAYS - 1))
-    if (start.value < info.start_date) start.value = info.start_date
+    start.value = s
+    end.value = e
   }
 
   async function loadDatasets() {
@@ -130,7 +140,7 @@ export const useFiltersStore = defineStore('filters', () => {
     const pick = available.find((d) => d.id === PREFERRED_DATASET) ?? available[0]
     if (pick) {
       dataset.value = pick.id
-      lastDays(pick)
+      lastMonth(pick)
     }
     // The harmonized series is the calendar's default once the ETL has built it. Where it starts depends on what
     // was loaded into the lake (2000 with the whole MODIS archive): its first month.
@@ -138,18 +148,15 @@ export const useFiltersStore = defineStore('filters', () => {
       const months = await getHarmonizedMonthly({})
       if (!months.length) throw new Error('empty harmonized series')
       const month = (r) => `${r.year}-${String(r.month).padStart(2, '0')}`
-      const lastMonth = months[months.length - 1]
-      const days = await getHarmonizedDaily({ start: `${month(lastMonth)}-01`, end: isoDate(new Date(Date.UTC(lastMonth.year, lastMonth.month, 0))) })
+      const newest = months[months.length - 1]
+      const days = await getHarmonizedDaily({ start: `${month(newest)}-01`, end: isoDate(new Date(Date.UTC(newest.year, newest.month, 0))) })
       harmonizedFirst.value = `${month(months[0])}-01`
-      harmonizedLast.value = days.length ? days[days.length - 1].date : isoDate(new Date(Date.UTC(lastMonth.year, lastMonth.month, 0)))
+      harmonizedLast.value = days.length ? days[days.length - 1].date : isoDate(new Date(Date.UTC(newest.year, newest.month, 0)))
       harmonizedReady.value = true
       values.value = 'harmonized'
       hexHarmonized.value = true
-      // Open on the latest complete month: a calendar starts on a month, not on a few days.
-      const last = harmonizedLast.value
-      const lastOfIt = isoDate(new Date(Date.UTC(+last.slice(0, 4), +last.slice(5, 7), 0)))
-      const endMonth = lastOfIt === last ? last : addDays(`${last.slice(0, 7)}-01`, -1)
-      setRange(`${endMonth.slice(0, 7)}-01`, endMonth)
+      // Open on its latest whole month, like any dataset.
+      setRange(...latestMonth(harmonizedFirst.value, harmonizedLast.value))
     } catch {
       // Not built (or empty): the chosen dataset as published, everywhere.
       harmonizedReady.value = false
@@ -165,7 +172,7 @@ export const useFiltersStore = defineStore('filters', () => {
     hexHarmonized.value = v === 'harmonized' // the hexagon report follows (it keeps its own switch)
     // Back to a dataset that doesn't cover the period (say, 2005 harmonized -> VIIRS raw): its last days.
     const s = span.value
-    if (s && (!start.value || !end.value || end.value < s.start || start.value > s.end)) lastDays(currentDataset.value)
+    if (s && (!start.value || !end.value || end.value < s.start || start.value > s.end)) lastMonth(currentDataset.value)
   }
 
   // The fire calendar: a period (and optionally one day in it, for the time slider), clamped to what can be shown.
@@ -191,7 +198,7 @@ export const useFiltersStore = defineStore('filters', () => {
     const info = currentDataset.value
     if (!info?.available || harmonized.value) return // harmonized: the dataset only feeds the points up close
     const outside = !start.value || !end.value || end.value < info.start_date || start.value > info.end_date
-    if (outside) lastDays(info)
+    if (outside) lastMonth(info)
   }
 
   function setDates(newStart, newEnd) {

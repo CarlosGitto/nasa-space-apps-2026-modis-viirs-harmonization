@@ -131,6 +131,8 @@ In dev, `/api/*` is proxied to `http://localhost:8000` (override with
     year or a month.
   - **Period** (above the grid): *From / To* date fields and shortcut chips (*Last 7 days*, *Last 30 days*,
     *This year*, up to the last day with data; the matching one is checked). Grid and fields stay in sync.
+    The app opens on the **latest whole month** with data (`latestMonth` in the store), on any values or
+    dataset, and so does a dataset change that leaves the period without data.
   - **Picking**: click a month (or a year label) to show it on the map, drag over months (or Shift + click) for
     several in a row, even across years; double-click a month to open its days; click a
     day to show it (its month becomes the slider's range); drag over days or Shift + click for a range. Arrow
