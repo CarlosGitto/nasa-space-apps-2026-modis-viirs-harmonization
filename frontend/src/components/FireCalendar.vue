@@ -226,6 +226,7 @@ const readout = computed(() => {
 const inRange = (iso) => !!store.start && iso >= store.start && iso <= store.end
 const monthSelected = (y, m) => !!store.start && store.start <= last(y, m) && store.end >= first(y, m)
 const drag = ref(null) // { anchor, current } while dragging over days
+// While dragging, only the range being dragged is marked (not mixed with the period picked before).
 const preview = (iso) => {
   if (!drag.value || drag.value.anchor.length !== iso.length) return false
   const [a, b] = [drag.value.anchor, drag.value.current].sort()
@@ -639,7 +640,7 @@ const legendStyle = computed(() => ({
           <button
             v-for="m in 12" :key="m" type="button" class="cell"
             :data-k="mKey(y, m)" :tabindex="tab(mKey(y, m))" :disabled="!monthInSpan(y, m)"
-            :class="{ off: !monthInSpan(y, m), sel: monthSelected(y, m) || preview(mKey(y, m)) }"
+            :class="{ off: !monthInSpan(y, m), sel: drag ? preview(mKey(y, m)) : monthSelected(y, m) }"
             :style="monthInSpan(y, m) ? paint(raw(monthly.get(mKey(y, m))), maxMonth, monthRatio(y, m)) : null"
             :aria-label="monthText(y, m)" :aria-pressed="monthSelected(y, m)"
             @pointerdown="onDown($event, mKey(y, m))" @click="onMonthKey($event, y, m)"
@@ -674,7 +675,7 @@ const legendStyle = computed(() => ({
               <button
                 v-else type="button" class="day"
                 :data-k="iso" :tabindex="tab(iso)" :disabled="!inSpan(iso)"
-                :class="{ off: !inSpan(iso), sel: inRange(iso) || preview(iso), pick: store.day === iso }"
+                :class="{ off: !inSpan(iso), sel: drag ? preview(iso) : inRange(iso), pick: store.day === iso }"
                 :style="inSpan(iso) ? paint(raw(daily.get(iso)), maxDayYear, dayRatio(iso)) : null"
                 :aria-label="dayText(iso)" :aria-pressed="inRange(iso)"
                 @pointerdown="onDown($event, iso)" @click="onDayKey($event, iso)" @focus="hovered = iso"
@@ -693,7 +694,7 @@ const legendStyle = computed(() => ({
             <button
               v-else type="button" class="big"
               :data-k="iso" :tabindex="tab(iso)" :disabled="!inSpan(iso)"
-              :class="{ off: !inSpan(iso), sel: inRange(iso) || preview(iso), pick: store.day === iso }"
+              :class="{ off: !inSpan(iso), sel: drag ? preview(iso) : inRange(iso), pick: store.day === iso }"
               :style="inSpan(iso) ? paint(raw(daily.get(iso)), maxDayMonth, dayRatio(iso)) : null"
               :aria-label="dayText(iso)" :aria-pressed="inRange(iso)"
               @pointerdown="onDown($event, iso)" @click="onDayKey($event, iso)" @focus="hovered = iso"
@@ -817,10 +818,18 @@ button.crumb:focus-visible { outline: 2px solid var(--focus); outline-offset: 2p
   cursor: default; color: var(--muted);
   background: repeating-linear-gradient(135deg, transparent 0 3px, var(--border) 3px 4px);
 }
-/* A white inner ring under the blue one, so the selection reads on the darkest cells too. */
-.cell.sel, .day.sel, .big.sel { box-shadow: inset 0 0 0 2px var(--selected), inset 0 0 0 3px #fff; }
-.day.pick, .big.pick { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--selected); z-index: 1; }
-.cell:not(.off):hover, .day:not(.off):hover, .big:not(.off):hover { outline: 2px solid var(--text); outline-offset: -1px; z-index: 2; }
+/* Picked (or being dragged over): a fine blue line with a soft white one inside, so it still reads on the darkest
+   cells without weighing on the colors. Hover is a fine line too. High contrast keeps them strong. */
+.cell.sel, .day.sel, .big.sel { box-shadow: inset 0 0 0 1.5px var(--selected), inset 0 0 0 2.5px rgb(255 255 255 / 0.7); }
+.day.pick, .big.pick { box-shadow: 0 0 0 1px var(--panel), 0 0 0 2.5px var(--selected); z-index: 1; }
+.cell:not(.off):hover, .day:not(.off):hover, .big:not(.off):hover {
+  outline: 1px solid color-mix(in srgb, var(--text) 70%, transparent); outline-offset: -1px; z-index: 2;
+}
+:global(html[data-contrast]) .cell.sel, :global(html[data-contrast]) .day.sel, :global(html[data-contrast]) .big.sel {
+  box-shadow: inset 0 0 0 2px var(--selected), inset 0 0 0 3px #fff;
+}
+:global(html[data-contrast]) .cell:not(.off):hover, :global(html[data-contrast]) .day:not(.off):hover,
+:global(html[data-contrast]) .big:not(.off):hover { outline: 2px solid var(--text); }
 
 /* Years x months */
 .years {
