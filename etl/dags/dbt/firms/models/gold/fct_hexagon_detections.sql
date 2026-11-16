@@ -19,8 +19,8 @@
 
 with detections as (
     select * exclude (dq_issue) from ({{ source_sql }})
-    {% if is_incremental() and execute %}
-    where {{ incremental_months_scope(source_sql) }}
+    {% if execute %}
+    where {{ pending_months_scope(source_sql, 'acq_date', var('firms_months_per_run', 1), month_col='acq_month') }}
     {% endif %}
 ),
 

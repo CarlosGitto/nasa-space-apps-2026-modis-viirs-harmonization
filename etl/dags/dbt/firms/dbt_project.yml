@@ -20,8 +20,10 @@ macro-paths: ["macros"]
 #                                    plus weather per grid cell and day near fires:
 #                                    fct_weather_daily (NASA POWER)
 #
-# Incremental models recompute only the acquisition months touched by new loads
-# (macros/incremental.sql). `dbt build --full-refresh` rebuilds everything.
+# Incremental models recompute only the acquisition months whose newest load is newer than what the model has for that
+# month, at most `firms_months_per_run` (default 1) per run, oldest first (macros/incremental.sql, pending_months_scope):
+# a backlog (a long backfill landing before dbt, or dbt failing for a while) is worked through in steps that fit in memory
+# and the rest stays pending until the next run. `dbt build --full-refresh` also builds only the oldest months of those models.
 #
 # Airflow (Cosmos) runs `tag:sp+` after SP loads, `tag:nrt+` after NRT loads and
 # `tag:weather+` after weather loads: each branch plus everything downstream (gold).

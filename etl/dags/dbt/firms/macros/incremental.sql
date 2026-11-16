@@ -71,8 +71,11 @@
     source_load_col   load id column in the source rows        (default _dlt_load_id)
     target_load_col   load id column stored in {{ this }}      (default _dlt_load_id)
     month_col         month column stored in {{ this }}        (default obs_month)
+    undated           also take rows WITHOUT a date, which belong to no month: the ones loaded after the newest load of
+                      {{ this }} (every row of the first build). FIRMS keeps invalid rows flagged in dq_issue, undated
+                      ones included; the weather models drop them (default false)
 #}
-{% macro pending_months_scope(source_sql, date_col, max_months, source_load_col='_dlt_load_id', target_load_col='_dlt_load_id', month_col='obs_month') %}
+{% macro pending_months_scope(source_sql, date_col, max_months, source_load_col='_dlt_load_id', target_load_col='_dlt_load_id', month_col='obs_month', undated=False) %}
     {% if not execute %}
         {{ return("true") }}
     {% endif %}
@@ -91,15 +94,24 @@
     ).columns[0].values() %}
     {% set months = pending[:max_months] %}
     {% do log(this ~ ": " ~ (pending | length) ~ " pending months, this run: " ~ (months | join(", ") or "none"), info=true) %}
+    {% set undated_sql = "false" %}
+    {% if undated %}
+        {% if is_incremental() %}
+            {% set watermark = run_query("select max(" ~ target_load_col ~ ") from " ~ this).columns[0].values()[0] %}
+            {% set undated_sql = "(" ~ date_col ~ " is null and " ~ source_load_col ~ " > '" ~ watermark ~ "')" if watermark is not none else date_col ~ " is null" %}
+        {% else %}
+            {% set undated_sql = date_col ~ " is null" %}
+        {% endif %}
+    {% endif %}
     {% if months | length == 0 %}
-        {{ return("false") }}
+        {{ return(undated_sql) }}
     {% endif %}
     {% set month_list = [] %}
     {% for m in months %}
         {% do month_list.append("date '" ~ m ~ "'") %}
     {% endfor %}
-    {{ return(
+    {% set dated_sql =
         "(" ~ date_col ~ " >= date '" ~ months[0] ~ "' and " ~ date_col ~ " < date '" ~ months[-1] ~ "' + interval 1 month"
-        ~ " and date_trunc('month', " ~ date_col ~ ") in (" ~ month_list | join(", ") ~ "))"
-    ) }}
+        ~ " and date_trunc('month', " ~ date_col ~ ") in (" ~ month_list | join(", ") ~ "))" %}
+    {{ return("(" ~ dated_sql ~ " or " ~ undated_sql ~ ")" if undated else dated_sql) }}
 {% endmacro %}

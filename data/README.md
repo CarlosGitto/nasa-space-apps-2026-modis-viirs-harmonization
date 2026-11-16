@@ -235,6 +235,26 @@ regional or global guess; the reliability index is a proxy (confirmation by anot
 0.73 VIIRS, 2019 only), not truth. A huge first build of `hrm_detection_reliability` can run by month:
 `dbt build -s hrm_detection_reliability --vars '{only_months: ["2019-01-01", "2019-02-01"]}'`.
 
+## Backlogs: months per run
+
+The incremental dbt models (`int_detections_*`, `fct_hexagon_detections/daily/monthly`, `hrm_modis_merged`,
+`hrm_detection_reliability`) build **at most `firms_months_per_run` months per run** (default 1), the oldest first, and leave the
+rest pending: a month is pending when its newest load is newer than what the model holds for that month. Before, one global
+watermark meant that when dbt failed, the next run took those months plus the new ones, so the work grew with every failure until
+it no longer fitted in memory (DuckDB's limit, 3.7 GiB on a 7.5 GB server: `Out of Memory Error` in `int_detections_sp`).
+
+- **To drain a backlog, run the dbt DAG again** (`firms_dbt_nrt` / `firms_dbt_sp`): each run takes the next month(s). The log of each
+  model says `N pending months, this run: ...`; `0 pending months` means up to date. Runs queue (one at a time), so several triggers
+  can be sent together.
+- **Change the size of a step** with `--vars '{firms_months_per_run: 2}'` (local dbt) or in the DAG's dbt vars. Memory per run is
+  roughly proportional to the rows of the months taken: measured 0.5-1.2 KB per row over the whole build, so a world month of
+  6-8 million detections may still need several GB.
+- **`--full-refresh` and `make etl-reprocess` also take only the oldest month(s)**: run the dbt DAG again until nothing is pending.
+- `hrm_detection_reliability` also marks a month pending when the first 2 days of the next one change (its neighbour counts cross
+  the month end), so it is exactly the same whether built at once or month by month (checked: 0 differing rows of 1.87 M).
+- Full-table models (`fct_hexagon_profile`, `dim_hexagon`, the harmonized series) are rebuilt whole each run: their memory grows
+  with the total lake, not with the months per run.
+
 ## Setup (once per machine)
 
 `make etl-setup` does it. Airflow runs as uid 50000 inside the containers and

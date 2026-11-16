@@ -9,8 +9,8 @@
 
 with daily as (
     select * from ({{ source_sql }})
-    {% if is_incremental() and execute %}
-    where {{ incremental_months_scope(source_sql, source_load_col='last_load_id', target_load_col='last_load_id') }}
+    {% if execute %}
+    where {{ pending_months_scope(source_sql, 'acq_date', var('firms_months_per_run', 1), source_load_col='last_load_id', target_load_col='last_load_id', month_col='acq_month') }}
     {% endif %}
 )
 
