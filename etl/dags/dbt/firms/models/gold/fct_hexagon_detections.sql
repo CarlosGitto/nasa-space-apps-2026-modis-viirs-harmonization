@@ -7,10 +7,11 @@
 --                     only after the last SP date of the same satellite. Filter
 --                     on it to get one continuous series without duplicates.
 --
--- Incremental by acquisition month over both intermediate tables: when a new SP
--- month lands, that month is recomputed and its NRT rows stop being preferred.
--- (A static source discovered later only reaches older NRT months on a full refresh.)
-{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month', partitioned_by=['acq_month'], sorted_by=['h3_r6']) }}
+-- Incremental in blocks of var('firms_block_days') days (a week) over both intermediate tables, at most var('firms_blocks_per_run')
+-- per run, oldest first (pending_blocks_scope): when new SP days land, their blocks are recomputed and the NRT rows of
+-- those days stop being preferred. Deletes by day (unique_key acq_date).
+-- (A static source discovered later only reaches older NRT days on a full refresh.)
+{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_date', partitioned_by=['acq_month'], sorted_by=['h3_r6']) }}
 {% set source_sql %}
     select * from {{ ref('int_detections_sp') }} where dq_issue is null
     union all by name
@@ -20,7 +21,7 @@
 with detections as (
     select * exclude (dq_issue) from ({{ source_sql }})
     {% if execute %}
-    where {{ pending_months_scope(source_sql, 'acq_date', var('firms_months_per_run', 1), month_col='acq_month') }}
+    where {{ pending_blocks_scope(source_sql, 'acq_date', var('firms_block_days', 7), var('firms_blocks_per_run', 1)) }}
     {% endif %}
 ),
 

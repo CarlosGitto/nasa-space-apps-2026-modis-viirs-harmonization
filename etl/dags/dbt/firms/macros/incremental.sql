@@ -42,6 +42,70 @@
 {% endmacro %}
 
 
+{#
+  Bounded incremental scope in BLOCKS OF N DAYS (default a week), for the FIRMS models whose key includes the day: a detection,
+  a pass, a hexagon-day. A block is pending when its newest source load is newer than the newest one the model holds for
+  that block; at most `max_blocks` pending blocks, oldest first, are taken per run and the rest stays pending. A month of the
+  whole world is ~6 M detections, which needs about 4 GB of DuckDB's memory in the heaviest models: a week needs a fourth.
+
+  Blocks are aligned to Mondays (2000-01-03), so a 7-day block is an ISO week. The model must delete by day, not by month:
+  unique_key='acq_date' (a month key would erase the other weeks of the month). The target needs the same date column.
+
+    source_sql        the model's source query (rows to filter)
+    date_col          date column of the source rows and of {{ this }}
+    block_days        days per block
+    max_blocks        blocks per run
+    source_load_col   load id column in the source rows        (default _dlt_load_id)
+    target_load_col   load id column stored in {{ this }}      (default _dlt_load_id)
+    undated           also take rows WITHOUT a date (see pending_months_scope)
+#}
+{% macro block_start_sql(date_expr, block_days) -%}
+(date '2000-01-03' + (floor(date_diff('day', date '2000-01-03', {{ date_expr }}) / {{ block_days }}.0)::bigint * {{ block_days }})::integer)
+{%- endmacro %}
+
+{% macro pending_blocks_scope(source_sql, date_col, block_days, max_blocks, source_load_col='_dlt_load_id', target_load_col='_dlt_load_id', undated=False) %}
+    {% if not execute %}
+        {{ return("true") }}
+    {% endif %}
+    {% set blk = block_start_sql(date_col, block_days) %}
+    {% set target_blocks %}
+        {% if is_incremental() %}
+        select {{ blk }} as b, max({{ target_load_col }}) as l from {{ this }} where {{ date_col }} is not null group by 1
+        {% else %}
+        select null::date as b, null::varchar as l where false
+        {% endif %}
+    {% endset %}
+    {% set pending = run_query(
+        "with s as (select " ~ blk ~ " as b, max(" ~ source_load_col ~ ") as l "
+        ~ "from (" ~ source_sql ~ ") where " ~ date_col ~ " is not null group by 1), "
+        ~ "t as (" ~ target_blocks ~ ") "
+        ~ "select strftime(s.b, '%Y-%m-%d') from s left join t using (b) where t.l is null or s.l > t.l order by 1"
+    ).columns[0].values() %}
+    {% set blocks = pending[:max_blocks] %}
+    {% do log(this ~ ": " ~ (pending | length) ~ " pending blocks of " ~ block_days ~ " days, this run: " ~ (blocks | join(", ") or "none"), info=true) %}
+    {% set undated_sql = "false" %}
+    {% if undated %}
+        {% if is_incremental() %}
+            {% set watermark = run_query("select max(" ~ target_load_col ~ ") from " ~ this).columns[0].values()[0] %}
+            {% set undated_sql = "(" ~ date_col ~ " is null and " ~ source_load_col ~ " > '" ~ watermark ~ "')" if watermark is not none else date_col ~ " is null" %}
+        {% else %}
+            {% set undated_sql = date_col ~ " is null" %}
+        {% endif %}
+    {% endif %}
+    {% if blocks | length == 0 %}
+        {{ return(undated_sql) }}
+    {% endif %}
+    {% set block_list = [] %}
+    {% for b in blocks %}
+        {% do block_list.append("date '" ~ b ~ "'") %}
+    {% endfor %}
+    {% set dated_sql =
+        "(" ~ date_col ~ " >= date '" ~ blocks[0] ~ "' and " ~ date_col ~ " < date '" ~ blocks[-1] ~ "' + interval " ~ block_days ~ " day"
+        ~ " and " ~ blk ~ " in (" ~ block_list | join(", ") ~ "))" %}
+    {{ return("(" ~ dated_sql ~ " or " ~ undated_sql ~ ")" if undated else dated_sql) }}
+{% endmacro %}
+
+
 {# Union of several relations by column name (models of the same layer share one schema). #}
 {% macro union_relations_sql(model_names) %}
     {% for m in model_names %}

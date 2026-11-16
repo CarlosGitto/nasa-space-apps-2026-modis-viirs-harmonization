@@ -1,17 +1,13 @@
 -- Monthly series of the hexagon: hexagon x month x sensor x satellite, on the
 -- continuous series (preferred rows: SP where published, NRT after it). Feeds the
 -- per-hexagon time series and climatology. Satellites stay apart, as in daily.
-{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month',
-          partitioned_by=['acq_month'], sorted_by=['h3_r6'], on_schema_change='fail', contract={'enforced': true}) }}
-{% set source_sql %}
-    select * from {{ ref('fct_hexagon_daily') }} where is_preferred
-{% endset %}
+-- Rebuilt whole on every run (a table, not incremental): it aggregates fct_hexagon_daily, which is already small, and the daily
+-- table now arrives in blocks of a week while this one is a month. An incremental month could never tell that another week of
+-- the month had arrived (a backfill is often one load, so the load id does not change), and would stay partial.
+{{ config(materialized='table', partitioned_by=['acq_month'], sorted_by=['h3_r6'], contract={'enforced': true}) }}
 
 with daily as (
-    select * from ({{ source_sql }})
-    {% if execute %}
-    where {{ pending_months_scope(source_sql, 'acq_date', var('firms_months_per_run', 1), source_load_col='last_load_id', target_load_col='last_load_id', month_col='acq_month') }}
-    {% endif %}
+    select * from {{ ref('fct_hexagon_daily') }} where is_preferred
 )
 
 select

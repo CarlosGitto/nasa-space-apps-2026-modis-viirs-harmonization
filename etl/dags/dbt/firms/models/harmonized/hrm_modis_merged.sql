@@ -10,9 +10,9 @@
 -- data_exploration/k_cell/ and SUMMARY.md). frp_size_corrected divides the FRP by the pixel-size factor.
 --
 -- Input: preferred, non-static, MODIS confidence >= 30 (the confidence the harmonisation was built with).
--- Incremental by acquisition month: a pass never crosses a month except at midnight, and the merge key
--- includes the date, so a month is always recomputed whole.
-{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month',
+-- Incremental in blocks of var('firms_block_days') days (a week), at most var('firms_blocks_per_run') per run, oldest first
+-- (pending_blocks_scope): the merge key includes the date, so a day is always recomputed whole. Deletes by day.
+{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_date',
           partitioned_by=['acq_month'], sorted_by=['h3_r6'], tags=['harmonized']) }}
 {% set rounds = 8 %}{# label propagation rounds: covers chains of up to 2^rounds pixels, far more than ever occur #}
 {% set source_sql %}
@@ -26,7 +26,7 @@
 with src as materialized (
     select * from ({{ source_sql }})
     {% if execute %}
-    where {{ pending_months_scope(source_sql, 'acq_date', var('firms_months_per_run', 1), target_load_col='last_load_id', month_col='acq_month') }}
+    where {{ pending_blocks_scope(source_sql, 'acq_date', var('firms_block_days', 7), var('firms_blocks_per_run', 1), target_load_col='last_load_id') }}
     {% endif %}
 ),
 

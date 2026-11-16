@@ -25,7 +25,7 @@ DEV_START     := 2025-01-01
 DEV_NRT_START := 2026-08-01
 
 .DEFAULT_GOAL := help
-.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev etl-seed-weather-dev etl-load-local etl-reprocess etl-harmonize etl-lake-perms backend-setup backend-dev backend-test frontend-setup frontend-dev frontend-lint
+.PHONY: help etl-setup etl-start etl-stop etl-restart etl-parse etl-seed-dev etl-seed-weather-dev etl-load-local etl-reprocess etl-harmonize etl-drain etl-lake-perms backend-setup backend-dev backend-test frontend-setup frontend-dev frontend-lint
 
 help: ## List available commands
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -80,6 +80,12 @@ etl-reprocess: ## Rebuild silver + gold from the raw data already loaded, no dow
 	cd $(ETL_DIR) && astro dev run dags reserialize
 	cd $(ETL_DIR) && astro dev run dags unpause firms_dbt_reprocess
 	cd $(ETL_DIR) && astro dev run dags trigger firms_dbt_reprocess
+
+etl-drain: ## Work through the dbt backlog (runs dbt until nothing is pending; leave it running; Airflow running)
+	@# The incremental models take a few weeks per run so each run fits in memory; a long backlog needs many runs.
+	cd $(ETL_DIR) && astro dev run dags reserialize
+	cd $(ETL_DIR) && astro dev run dags unpause firms_dbt_drain
+	cd $(ETL_DIR) && astro dev run dags trigger firms_dbt_drain
 
 etl-lake-perms: ## After writing to the lake from a terminal (local dbt, loader): let Airflow write next to it
 	@# DuckDB creates folders with mode 755 whatever the umask: Airflow (uid 50000) could read but not write them.

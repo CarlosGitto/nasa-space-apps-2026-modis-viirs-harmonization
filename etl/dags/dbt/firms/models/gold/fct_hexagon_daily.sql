@@ -5,7 +5,7 @@
 --
 -- Only hexagon-days with detections exist: no row means "no detection", not "no
 -- fire" (no cloud/coverage mask yet).
-{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_month', partitioned_by=['acq_month'], sorted_by=['h3_r6'], on_schema_change='fail', contract={'enforced': true}) }}
+{{ config(materialized='incremental', incremental_strategy='delete+insert', unique_key='acq_date', partitioned_by=['acq_month'], sorted_by=['h3_r6'], on_schema_change='fail', contract={'enforced': true}) }}
 {% set source_sql %}
     select * from {{ ref('fct_hexagon_detections') }}
 {% endset %}
@@ -13,7 +13,7 @@
 with detections as (
     select * from ({{ source_sql }})
     {% if execute %}
-    where {{ pending_months_scope(source_sql, 'acq_date', var('firms_months_per_run', 1), target_load_col='last_load_id', month_col='acq_month') }}
+    where {{ pending_blocks_scope(source_sql, 'acq_date', var('firms_block_days', 7), var('firms_blocks_per_run', 1), target_load_col='last_load_id') }}
     {% endif %}
 )
 
