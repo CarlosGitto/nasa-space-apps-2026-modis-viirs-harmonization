@@ -266,6 +266,17 @@ def test_detections_limit_sets_truncated(client):
     assert body["truncated"] is True
 
 
+def test_detections_csv(client):
+    r = client.get("/datasets/modis_sp/detections.csv", params={"start": "2026-11-01", "end": "2026-11-30"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    assert 'filename="hotspots_modis_sp_2026-11-01_2026-11-30.csv"' in r.headers["content-disposition"]
+    lines = r.text.strip().split("\n")
+    assert lines[0].split(",")[:4] == ["latitude", "longitude", "acq_date", "acq_datetime_utc"]
+    assert len(lines) - 1 == len(client.get("/datasets/modis_sp/detections?start=2026-11-01&end=2026-11-30").json()["features"])
+    assert r.headers["x-truncated"] == "false"
+    assert client.get("/datasets/modis_sp/detections.csv?limit=1").headers["x-truncated"] == "true"
+
+
 def test_harmonized_with_minimum_columns(client):
     body = client.get("/datasets/harmonized_nrt/detections").json()
     props = body["features"][0]["properties"]
@@ -738,6 +749,12 @@ def test_harmonized_calendar_needs_the_harmonized_layer(client):
     assert r.status_code == 404 and "not been built" in r.json()["detail"]
 
 
+def test_harmonized_daily_calendar_needs_the_harmonized_layer(client):
+    # the calendar's day and month views ask for the harmonized series per day: same clear 404 while it isn't built
+    r = client.get("/stats/harmonized/daily", params={"start": "2019-01-01", "end": "2019-12-31"})
+    assert r.status_code == 404 and "not been built" in r.json()["detail"]
+
+
 def test_harmonized_hexagons_need_the_harmonized_layer(client):
     # the curtain's periods ask for the harmonized series per hexagon: same clear 404 while it isn't built
     r = client.get("/stats/harmonized/hex", params={"start": "2025-01-01", "end": "2025-12-31", "res": 4})
@@ -748,3 +765,32 @@ def test_hexagon_reliability_needs_the_reliability_layer(client):
     # the test lake has no fct_hexagon_reliability_monthly: a clear 404 for a valid hexagon, not a SQL error
     r = client.get(f"/hexagons/{_cell(*BUENOS_AIRES)}/reliability")
     assert r.status_code == 404 and "not been built" in r.json()["detail"]
+
+
+def test_typical_hexagons_need_dates_and_other_years(client):
+    # anomalies on the map: the same dates in the other years. The test lake only has November 2026: nothing to
+    # compare with, so no features (years = 0) rather than a fake "typical" of zero.
+    assert client.get("/datasets/modis_sp/stats/hex/typical", params={"res": 4}).status_code == 422
+    body = client.get("/datasets/modis_sp/stats/hex/typical", params={"start": "2026-11-01", "end": "2026-11-30", "res": 4}).json()
+    assert body["years"] == 0 and body["features"] == []
+
+
+def test_harmonized_typical_hexagons_need_the_harmonized_layer(client):
+    r = client.get("/stats/harmonized/hex/typical", params={"start": "2025-01-01", "end": "2025-01-31"})
+    assert r.status_code == 404 and "not been built" in r.json()["detail"]
+
+
+def test_typical_windows_are_whole_other_years():
+    from datetime import date
+
+    from app.api import _typical_windows
+
+    con = duckdb.connect()
+    con.execute("create table d as select unnest(generate_series(date '2020-03-15', date '2024-06-30', interval 1 day))::date as acq_date")
+    w = _typical_windows(con, "d", date(2022, 2, 1), date(2022, 2, 28))
+    # 2020-02 starts before the data (2020-03-15); 2022 itself is the asked period; 2024-02 is whole
+    assert w == [(date(2021, 2, 1), date(2021, 2, 28)), (date(2023, 2, 1), date(2023, 2, 28)), (date(2024, 2, 1), date(2024, 2, 28))]
+    # 29 February moves to the 28th in years without it
+    assert (date(2023, 2, 28), date(2023, 3, 1)) in _typical_windows(con, "d", date(2024, 2, 29), date(2024, 3, 1))
+    # a period longer than a year never overlaps itself
+    assert _typical_windows(con, "d", date(2021, 1, 1), date(2022, 6, 30)) == [(date(2023, 1, 1), date(2024, 6, 30))]

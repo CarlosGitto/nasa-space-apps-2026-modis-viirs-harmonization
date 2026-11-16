@@ -15,7 +15,7 @@ NASA POWER ──────┘
 | `etl/` | Airflow (Astro): FIRMS and weather ingestion with dlt, transformations with dbt | Each DAG's docs in the Airflow UI |
 | `data/` | The lake: bronze / silver / gold around the H3 hexagon, plus the dev dataset | [data/README.md](data/README.md) |
 | `backend/` | API over the gold layer (DuckDB + spatial + H3) | [backend/README.md](backend/README.md) |
-| `frontend/` | Map: hexagons, drawn zones, burn calendar, time slider, MODIS \| VIIRS curtain | [frontend/README.md](frontend/README.md) |
+| `frontend/` | Fire calendar (years / year / month, harmonized 2000 → today, regions, CSV) with its map: hexagons, 3D, time slider, MODIS \| VIIRS curtain | [frontend/README.md](frontend/README.md) |
 
 ## Setup guide: tools to install
 

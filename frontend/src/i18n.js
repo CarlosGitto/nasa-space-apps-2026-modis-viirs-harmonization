@@ -26,6 +26,7 @@ const numberFormats = {
   decimal4: { minimumFractionDigits: 4, maximumFractionDigits: 4 },
   significant2: { maximumSignificantDigits: 2, useGrouping: 'always' },
   percent: { style: 'percent', maximumFractionDigits: 0 },
+  compact: { notation: 'compact', maximumFractionDigits: 1 }, // 1.2K / 1,2 mil: inside a calendar day
 }
 // Dates in the data are UTC calendar days: format them in UTC so they never shift.
 const datetimeFormats = {
@@ -34,6 +35,9 @@ const datetimeFormats = {
   monthShort: { month: 'short', timeZone: 'UTC' },
   monthYear: { month: 'short', year: '2-digit', timeZone: 'UTC' },
   dayMonth: { month: 'short', day: 'numeric', timeZone: 'UTC' },
+  monthLong: { month: 'long', year: 'numeric', timeZone: 'UTC' },
+  monthOnly: { month: 'long', timeZone: 'UTC' },
+  weekdayNarrow: { weekday: 'narrow', timeZone: 'UTC' },
 }
 
 export const i18n = createI18n({

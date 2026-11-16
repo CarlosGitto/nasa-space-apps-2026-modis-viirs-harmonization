@@ -19,6 +19,9 @@ const SENSOR_NAMES = { modis: 'MODIS', viirs: 'VIIRS' }
 export const datasetName = (d) =>
   d ? `${SENSOR_NAMES[d.sensor] ?? g.t(`controls.sensors.${d.sensor}`)} ${g.t(`controls.products.${d.product}`)}` : ''
 
+// Short number for a calendar cell: 1.2K / 1,2 mil.
+export const compact = (value) => (value === null || value === undefined || Number.isNaN(value) ? '–' : g.n(value, 'compact'))
+
 // Share (0..1) as a percentage; '–' when missing.
 export const pct = (share) => (share === null || share === undefined ? '–' : g.n(share, 'percent'))
 
@@ -31,6 +34,23 @@ export const date = (iso, style = 'short') => (iso ? g.d(utcDay(iso), style) : '
 export function monthName(m) {
   const s = g.d(new Date(Date.UTC(2000, m - 1, 1)), 'monthShort').replace('.', '')
   return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+// '2019-08-..' -> 'August 2019' / 'Agosto de 2019'; month (1-12) -> 'August' / 'Agosto'.
+export const monthLong = (iso) => cap(g.d(utcDay(iso), 'monthLong'))
+export const monthFull = (m) => cap(g.d(new Date(Date.UTC(2000, m - 1, 1)), 'monthOnly'))
+// Weekday initials, Monday first (2024-01-01 was a Monday).
+export const weekdays = () => Array.from({ length: 7 }, (_, i) => cap(g.d(new Date(Date.UTC(2024, 0, 1 + i)), 'weekdayNarrow')))
+
+const lastOfMonth = (iso) => new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7), 0)).toISOString().slice(0, 10)
+// A period as people say it: one day, 'August 2019', '2019', else 'Aug 1, 2019 – Sep 3, 2019'.
+export function period(start, end) {
+  if (!start || !end) return '–'
+  if (start === end) return date(start, 'long')
+  if (start.endsWith('-01') && end === lastOfMonth(start)) return monthLong(start)
+  if (start.slice(0, 4) === end.slice(0, 4) && start.endsWith('-01-01') && end.endsWith('-12-31')) return start.slice(0, 4)
+  return `${date(start)} – ${date(end)}`
 }
 
 // Error from api.js -> a message in the user's language (the API speaks English).

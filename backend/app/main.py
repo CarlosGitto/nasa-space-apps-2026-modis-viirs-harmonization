@@ -29,6 +29,7 @@ app.add_middleware(
     allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(","),
     allow_methods=["GET"],
     allow_headers=["*"],
+    expose_headers=["X-Truncated", "Content-Disposition"],  # the hotspots CSV download
 )
 
 app.include_router(router)

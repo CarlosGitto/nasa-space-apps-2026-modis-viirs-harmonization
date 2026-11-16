@@ -1,5 +1,6 @@
 <script setup>
-// Dataset ("release"), dates, basemap and zone status.
+// Dataset ("release") for the raw values and the points up close, basemap, weather layers and zone
+// status. Folded under the fire calendar, which picks the period (grid or From / To) and the region.
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { date, num } from '../format'
@@ -33,14 +34,6 @@ const groups = computed(() =>
 
 <template>
   <section class="controls">
-    <div class="view" role="group" :aria-label="$t('controls.view')">
-      <button :aria-pressed="store.view === 'map'" :class="{ on: store.view === 'map' }" @click="store.setView('map')">
-        {{ $t('controls.map') }}
-      </button>
-      <button :aria-pressed="store.view === 'compare'" :class="{ on: store.view === 'compare' }" @click="store.setView('compare')">
-        {{ $t('controls.compare') }}
-      </button>
-    </div>
     <label>
       {{ $t('controls.dataset') }}
       <select :value="store.dataset" @change="store.setDataset($event.target.value)">
@@ -57,25 +50,6 @@ const groups = computed(() =>
         n: num(store.currentDataset.rows), start: date(store.currentDataset.start_date), end: date(store.currentDataset.end_date),
       }) }}
     </p>
-
-    <div class="dates">
-      <label>
-        {{ $t('controls.from') }}
-        <input
-          type="date" :value="store.start"
-          :min="store.currentDataset?.start_date" :max="store.end"
-          @change="store.setDates($event.target.value, store.end)"
-        />
-      </label>
-      <label>
-        {{ $t('controls.to') }}
-        <input
-          type="date" :value="store.end"
-          :min="store.start" :max="store.currentDataset?.end_date"
-          @change="store.setDates(store.start, $event.target.value)"
-        />
-      </label>
-    </div>
 
     <label v-if="store.view === 'map'">
       {{ $t('controls.basemap') }}
@@ -119,19 +93,12 @@ const groups = computed(() =>
 
 <style scoped>
 .controls { display: flex; flex-direction: column; gap: 10px; }
-.view { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
-.view button {
-  flex: 1; border: none; background: none; padding: 6px 8px; border-radius: 6px;
-  font: inherit; font-size: 0.8125rem; color: var(--muted); cursor: pointer;
-}
-.view button.on { background: var(--accent); color: var(--on-accent); }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--muted); }
 select, input {
   font: inherit; font-size: 0.875rem; color: var(--text); background: var(--bg);
   border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
 }
 .meta { margin: -4px 0 0; font-size: 0.75rem; color: var(--muted); }
-.dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .weather { border: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .weather legend { font-size: 0.75rem; color: var(--muted); padding: 0; margin-bottom: 4px; width: 100%; }
 .weather .check { flex-direction: row; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--text); cursor: pointer; }

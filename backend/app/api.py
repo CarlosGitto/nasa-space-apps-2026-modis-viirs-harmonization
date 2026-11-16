@@ -6,13 +6,15 @@ flares, industry, volcanoes) is reported apart as `static_detections`.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
 import duckdb
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pydantic import BaseModel, Field
 
 from app import db, power
@@ -291,10 +293,69 @@ def detections(
     return DetectionCollection(features=features, truncated=len(rows) > limit)
 
 
+CSV_MAX_ROWS = 1_000_000
+CSV_COLUMNS = (
+    "latitude", "longitude", "acq_date", "acq_datetime_utc", "satellite", "product", "confidence", "daynight",
+    "frp", "brightness", "is_static_source", "h3_r6",
+)
+
+
+@router.get("/datasets/{dataset}/detections.csv")
+def detections_csv(
+    dataset: DatasetId,
+    cur: Cursor,
+    filters: FiltersDep,
+    limit: Annotated[int, Query(ge=1, le=CSV_MAX_ROWS)] = CSV_MAX_ROWS,
+) -> Response:
+    """Every detection matching the filters as a CSV download (the hotspots of a calendar search), oldest first.
+    Static sources are kept and flagged. `X-Truncated: true` when more matched than `limit`."""
+    ds = _dataset(cur, dataset)
+    base = _relation(db.points_relation, cur, ds)
+    where, params = filters.where()
+    rows = cur.execute(
+        f"""
+        select latitude, longitude, acq_date, acq_datetime_utc, satellite, product, confidence, daynight,
+               frp, brightness, is_static_source, h3_h3_to_string(h3_r6)
+        from {base}
+        where {where}
+        order by acq_datetime_utc
+        limit ?
+        """,
+        [*params, limit + 1],
+    ).fetchall()
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(CSV_COLUMNS)
+    writer.writerows(rows[:limit])
+    span = "_".join(str(d) for d in (filters.start, filters.end) if d) or "all"
+    return Response(
+        out.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="hotspots_{dataset}_{span}.csv"',
+            "X-Truncated": "true" if len(rows) > limit else "false",
+        },
+    )
+
+
 @router.get("/datasets/{dataset}/stats/daily")
 def daily_stats(dataset: DatasetId, cur: Cursor, filters: FiltersDep) -> list[DailyStat]:
     """Detections and FRP per acquisition date."""
-    base = _cells(cur, dataset, filters)
+    return _daily(cur, _cells(cur, dataset, filters), filters)
+
+
+@router.get("/stats/harmonized/daily")
+def harmonized_daily_stats(cur: Cursor, filters: FiltersDep) -> list[DailyStat]:
+    """Daily calendar of the harmonized series (MODIS before 2012-02, VIIRS S-NPP / k after), in MODIS units.
+    Detections are fractional. Same shape as /datasets/{dataset}/stats/daily."""
+    if not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    base = db.harmonized_series_relation(with_center=filters.bbox is not None or filters.zone is not None)
+    return _daily(cur, base, filters)
+
+
+def _daily(cur: duckdb.DuckDBPyConnection, base: str, filters: Filters) -> list[DailyStat]:
+    """Rows of `base` (acq_date, daynight, detections, frp_sum, static_detections) summed per date."""
     where, params = filters.where()
     rows = cur.execute(
         f"""
@@ -358,15 +419,22 @@ ResParam = Annotated[
 ]
 
 
-def _hex_collection(cur: duckdb.DuckDBPyConnection, base: str, filters: Filters, res: int) -> HexCollection:
-    """Rows of `base` (h3_r6, detections, frp_sum, static_detections) summed per hexagon at `res`, as GeoJSON."""
+def _hex_collection(
+    cur: duckdb.DuckDBPyConnection, base: str, filters: Filters, res: int,
+    extra: tuple[str, list] | None = None, divide: int = 1,
+) -> HexCollection:
+    """Rows of `base` (h3_r6, detections, frp_sum, static_detections) summed per hexagon at `res`, as GeoJSON.
+    `extra` adds a WHERE clause (and its parameters); `divide` turns the sums into a mean (typical: per year)."""
     where, params = filters.where()
+    if extra:
+        where = f"{where} and ({extra[0]})"
+        params = [*params, *extra[1]]
     rows = cur.execute(
         f"""
         with cells as (
             select h3_cell_to_parent(h3_r6, ?) as cell,
-                   sum(detections) as detections, sum(frp_sum) as frp_sum,
-                   sum(static_detections) as static_detections
+                   sum(detections) / {divide} as detections, sum(frp_sum) / {divide} as frp_sum,
+                   round(sum(static_detections) / {divide})::bigint as static_detections
             from {base}
             where {where}
             group by 1
@@ -418,6 +486,68 @@ def harmonized_hex_stats(cur: Cursor, filters: FiltersDep, res: ResParam = 3) ->
         raise HTTPException(404, "the harmonized series has not been built yet")
     base = db.harmonized_series_relation(with_center=filters.bbox is not None or filters.zone is not None)
     return _hex_collection(cur, base, filters, res)
+
+
+# ------------------------------------------------------------ typical (anomalies) ---
+# What a hexagon usually has in the asked period: the same dates in the other years, averaged. The map divides the
+# period's value by it (anomalies). Only years whose shifted period lies whole inside the data, and never overlapping
+# the period itself.
+
+
+class TypicalHexCollection(HexCollection):
+    years: int  # how many other years the mean is over (0: nothing to compare with, no features)
+
+
+def _shift_years(d: date, years: int) -> date:
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:  # 29 February in a year without it
+        return d.replace(year=d.year + years, day=28)
+
+
+def _typical_windows(cur: duckdb.DuckDBPyConnection, plain: str, start: date, end: date) -> list[tuple[date, date]]:
+    """The asked period moved to every other year of `plain` (rows without centers) that holds it whole."""
+    first, last = cur.execute(f"select min(acq_date), max(acq_date) from {plain}").fetchone()
+    if first is None:
+        return []
+    windows = []
+    for k in range(first.year - end.year, last.year - start.year + 1):
+        ws, we = _shift_years(start, k), _shift_years(end, k)
+        if k and ws >= first and we <= last and (we < start or ws > end):
+            windows.append((ws, we))
+    return windows
+
+
+def _typical(cur: duckdb.DuckDBPyConnection, plain: str, base: str, filters: Filters, res: int) -> TypicalHexCollection:
+    if not (filters.start and filters.end):
+        raise HTTPException(422, "start and end are required")
+    windows = _typical_windows(cur, plain, filters.start, filters.end)
+    if not windows:
+        return TypicalHexCollection(resolution=res, features=[], years=0)
+    # The other years' dates instead of the asked ones; bbox / zone / daynight stay.
+    spatial = Filters(bbox=filters.bbox, zone=filters.zone, daynight=filters.daynight)
+    extra = (" or ".join(["acq_date between ? and ?"] * len(windows)), [d for w in windows for d in w])
+    fc = _hex_collection(cur, base, spatial, res, extra=extra, divide=len(windows))
+    return TypicalHexCollection(resolution=res, features=fc.features, years=len(windows))
+
+
+@router.get("/datasets/{dataset}/stats/hex/typical")
+def hex_typical(dataset: DatasetId, cur: Cursor, filters: FiltersDep, res: ResParam = 3) -> TypicalHexCollection:
+    """Typical hexagons of the period (start and end required): the same dates in each other year of the dataset,
+    averaged (detections and FRP per year). Same shape as /stats/hex, plus `years`."""
+    ds = _dataset(cur, dataset)
+    plain = _relation(db.cells_relation, cur, ds, with_center=False)
+    return _typical(cur, plain, _cells(cur, dataset, filters), filters, res)
+
+
+@router.get("/stats/harmonized/hex/typical")
+def harmonized_hex_typical(cur: Cursor, filters: FiltersDep, res: ResParam = 3) -> TypicalHexCollection:
+    """Typical hexagons of the period on the harmonized series (MODIS units): same as /datasets/{dataset}/stats/hex/typical."""
+    if not db.harmonized_series_ready(cur):
+        raise HTTPException(404, "the harmonized series has not been built yet")
+    plain = db.harmonized_series_relation(with_center=False)
+    base = db.harmonized_series_relation(with_center=filters.bbox is not None or filters.zone is not None)
+    return _typical(cur, plain, base, filters, res)
 
 
 @router.get("/datasets/{dataset}/stats/monthly")
