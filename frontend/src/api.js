@@ -11,10 +11,24 @@ async function get(path, params = {}, signal) {
   }
   const qs = query.toString()
   const res = await fetch(`${BASE}${path}${qs ? `?${qs}` : ''}`, { signal })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail ?? `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw await httpError(res)
+  return res.json()
+}
+
+// The API's messages are English, for developers: the error keeps the HTTP status so
+// the UI shows its own message in the user's language (format.js errorMessage).
+async function httpError(res) {
+  const detail = (await res.json().catch(() => ({}))).detail
+  const error = new Error(typeof detail === 'string' ? detail : `HTTP ${res.status}`)
+  error.status = res.status
+  return error
+}
+
+async function post(path, body, signal) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
+  })
+  if (!res.ok) throw await httpError(res)
   return res.json()
 }
 
@@ -23,11 +37,64 @@ export const listDatasets = () => get('/datasets')
 export const getDetections = (dataset, params, signal) =>
   get(`/datasets/${dataset}/detections`, params, signal)
 
+// Link that downloads every detection (hotspot) of a search as CSV: same filters as getDetections.
+export function detectionsCsvUrl(dataset, params) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== '') query.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
+  }
+  return `${BASE}/datasets/${dataset}/detections.csv?${query}`
+}
+
 export const getHexagons = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/hex`, params, signal)
 
 export const getMonthly = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/monthly`, params, signal)
 
+export const getHarmonizedMonthly = (params, signal) => get('/stats/harmonized/monthly', params, signal)
+// Hexagons of the harmonized series (MODIS before 2012-02, VIIRS S-NPP / k after), same shape as getHexagons.
+export const getHarmonizedHexagons = (params, signal) => get('/stats/harmonized/hex', params, signal)
+// Typical hexagons of a period (anomalies): the same dates in the other years, averaged; plus `years`.
+export const getHexagonsTypical = (dataset, params, signal) => get(`/datasets/${dataset}/stats/hex/typical`, params, signal)
+export const getHarmonizedHexagonsTypical = (params, signal) => get('/stats/harmonized/hex/typical', params, signal)
+
 export const getDaily = (dataset, params, signal) =>
   get(`/datasets/${dataset}/stats/daily`, params, signal)
+// The harmonized series per day (MODIS units, 2000 onward), same shape as getDaily.
+export const getHarmonizedDaily = (params, signal) => get('/stats/harmonized/daily', params, signal)
+
+// One hexagon (fixed H3 res-6 cell). Identity + whole-history profile and the monthly
+// series only change when the ETL runs: cache them for the session.
+const cache = new Map()
+const cached = (key, load) => {
+  if (!cache.has(key)) cache.set(key, load().catch((e) => { cache.delete(key); throw e }))
+  return cache.get(key)
+}
+
+export const getHexagon = (h3, harmonized = false) =>
+  cached(`hex:${h3}:${harmonized}`, () => get(`/hexagons/${h3}`, { harmonized: harmonized || null }))
+
+export const getHexagonMonthly = (h3) => cached(`monthly:${h3}`, () => get(`/hexagons/${h3}/monthly`))
+
+export const getHexagonHarmonized = (h3) => cached(`harmonized:${h3}`, () => get(`/hexagons/${h3}/harmonized`))
+
+export const getHexagonReliability = (h3) => cached(`reliability:${h3}`, () => get(`/hexagons/${h3}/reliability`))
+
+export const getHexagonPeriod = (h3, params, signal) => get(`/hexagons/${h3}/period`, params, signal)
+
+export const getHexagonDetections = (h3, params, signal) => get(`/hexagons/${h3}/detections`, params, signal)
+
+// One UTC day of a weather layer (temperature | precipitation | wind) over a bbox, for the map.
+export const getWeatherMap = (layer, params, signal) => get('/weather/map', { layer, ...params }, signal)
+
+// The map's weather (NASA POWER, on demand) of selected hexagons, every day of start..end.
+export const getSelectionWeather = (body, signal) => post('/hexagons/selection/weather', body, signal)
+
+// Daily weather of a hexagon (NASA POWER, asked on demand by the backend for its center).
+export const getHexagonWeather = (h3, params, signal) => get(`/hexagons/${h3}/weather`, params, signal)
+
+// Many hexagons at once (a drawn area or a multi-selection): POST, ids in the body.
+export const getSelectionSummary = (body, signal) => post('/hexagons/selection/summary', body, signal)
+
+export const getSelectionDetections = (body, signal) => post('/hexagons/selection/detections', body, signal)

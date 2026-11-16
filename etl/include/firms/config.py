@@ -47,9 +47,11 @@ FIRMS_AREA = os.getenv("FIRMS_AREA", "world")
 # HTTP connection whose password is the FIRMS MAP_KEY.
 FIRMS_CONN_ID = "firms_default"
 
-# Updated by the ingest DAGs, consumed by the dbt DAGs.
+# FIRMS_RAW_*: updated by the ingest DAGs, consumed by the dbt DAGs.
 FIRMS_RAW_NRT = Asset("firms_raw_nrt")
 FIRMS_RAW_SP = Asset("firms_raw_sp")
+# Updated when firms_dbt_sp / firms_dbt_nrt finish (silver and gold are fresh): the harmonization runs after it.
+FIRMS_GOLD = Asset("firms_gold")
 
 DBT_PROJECT_PATH = AIRFLOW_HOME / "dags" / "dbt" / "firms"
 DBT_EXECUTABLE = AIRFLOW_HOME / "dbt_venv" / "bin" / "dbt"  # created in the Dockerfile
@@ -91,12 +93,16 @@ def ensure_catalog() -> None:
 
 def attach_sql(read_only: bool = False) -> str:
     """ATTACH statement for the lake (needs the ducklake and sqlite extensions)."""
-    options = f"DATA_PATH '{LAKE_DATA_PATH}'" + (", READ_ONLY" if read_only else "")
+    # OVERRIDE_DATA_PATH: the catalog keeps the data path of whoever wrote first (inside Airflow:
+    # /usr/local/airflow/data/lake/files/); the same files are seen under another path from a terminal on the host
+    # (make etl-load-local, local dbt, the backend). Data files are stored relative to it, so overriding is safe and a
+    # no-op when the paths already match.
+    options = f"DATA_PATH '{LAKE_DATA_PATH}', OVERRIDE_DATA_PATH true" + (", READ_ONLY" if read_only else "")
     return f"ATTACH 'ducklake:sqlite:{CATALOG_PATH}' AS {LAKE_ALIAS} ({options})"
 
 
-def raw_pipeline(name: str):
-    """dlt pipeline that appends to the bronze tables of the lake."""
+def raw_pipeline(name: str, dataset: str = RAW_DATASET):
+    """dlt pipeline that appends to the bronze tables of the lake (schema `dataset`)."""
     import dlt
     from dlt.destinations.impl.ducklake.configuration import DuckLakeCredentials
 
@@ -104,8 +110,8 @@ def raw_pipeline(name: str):
     credentials = DuckLakeCredentials(LAKE_ALIAS, catalog=f"sqlite:///{CATALOG_PATH}", storage=LAKE_DATA_PATH)
     return dlt.pipeline(
         pipeline_name=name,
-        destination=dlt.destinations.ducklake(credentials=credentials),
-        dataset_name=RAW_DATASET,
+        destination=dlt.destinations.ducklake(credentials=credentials, override_data_path=True),
+        dataset_name=dataset,
     )
 
 
@@ -130,8 +136,10 @@ def catalog_initialized() -> bool:
     return row is not None
 
 
-def last_loaded_dates(tables: list[str]) -> dict[str, "date"]:  # noqa: F821
-    """table -> max(acq_date) in the bronze tables that exist and have rows."""
+def last_loaded_dates(
+    tables: list[str], dataset: str = RAW_DATASET, date_column: str = "acq_date"
+) -> dict[str, "date"]:  # noqa: F821
+    """table -> max(date_column) in the bronze tables of `dataset` that exist and have rows."""
     import duckdb
 
     if not catalog_initialized():  # nothing loaded yet
@@ -143,13 +151,13 @@ def last_loaded_dates(tables: list[str]) -> dict[str, "date"]:  # noqa: F821
             row[0]
             for row in con.execute(
                 "select table_name from information_schema.tables where table_catalog = ? and table_schema = ?",
-                [LAKE_ALIAS, RAW_DATASET],
+                [LAKE_ALIAS, dataset],
             ).fetchall()
         }
         for table in tables:
             if table not in existing:
                 continue
-            last = con.execute(f'select max(acq_date) from {LAKE_ALIAS}.{RAW_DATASET}."{table}"').fetchone()[0]
+            last = con.execute(f'select max("{date_column}") from {LAKE_ALIAS}.{dataset}."{table}"').fetchone()[0]
             if last is not None:
                 out[table] = last
     return out

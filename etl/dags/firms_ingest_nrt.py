@@ -8,7 +8,8 @@ Append-only: every load is kept as a new version; dbt silver deduplicates.
 
 Each scheduled run covers the day of its data interval plus the `day_range - 1`
 days before it, so detections that FIRMS publishes late are picked up on the
-next run.
+next run; and if days are missing since the last load (Airflow was off), it
+goes back to the day after the last one loaded, as far as FIRMS still keeps NRT.
 
 **Backfill:** set `start_date` (and optionally `end_date`, default yesterday) to
 load a range instead, e.g. the NRT period after the last published SP month so
@@ -77,10 +78,25 @@ def firms_ingest_nrt():
 
                 raise AirflowSkipException("No NRT data available for that range")
         else:
-            # Scheduled: the run's day plus the day_range - 1 days before it.
+            # Scheduled: the run's day plus the day_range - 1 days before it (late
+            # detections), and back to the day after the last one loaded if that's older
+            # (Airflow was off): no gaps. Clamped to the days FIRMS still keeps.
+            from include.firms.config import last_loaded_dates
+
             end = (data_interval_start or pendulum.now("UTC").subtract(days=1)).date()
-            start = end - timedelta(days=int(params["day_range"]) - 1)
-            ranges = {product: (start, end) for product in NRT_PRODUCTS}
+            window_start = end - timedelta(days=int(params["day_range"]) - 1)
+            last_loaded = last_loaded_dates([p.lower() for p in NRT_PRODUCTS])
+            availability = fetch_availability(map_key)
+            ranges = {}
+            for product in NRT_PRODUCTS:
+                last = last_loaded.get(product.lower())
+                start = min(window_start, last + timedelta(days=1)) if last else window_start
+                if product in availability:
+                    start = max(start, availability[product][0])
+                if start <= end:
+                    ranges[product] = (start, end)
+                    if start < window_start:
+                        print(f"{product}: catching up from {start} (last loaded {last})")
 
         pipeline = raw_pipeline("firms_nrt")
         load_info = pipeline.run(firms_nrt_source(map_key=map_key, ranges=ranges, area=params["area"]))

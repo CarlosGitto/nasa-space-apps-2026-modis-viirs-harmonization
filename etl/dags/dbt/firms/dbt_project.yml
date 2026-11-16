@@ -5,31 +5,46 @@ profile: firms
 model-paths: ["models"]
 macro-paths: ["macros"]
 
-# Two independent paths, selected by tag from Airflow (Cosmos):
-#   nrt: lake.firms_raw.*_nrt -> lake.silver.*_nrt -> lake.gold.*_nrt   (firms_dbt_nrt)
-#   sp:  lake.firms_raw.*_sp  -> lake.silver.*_sp  -> lake.gold.*_sp    (firms_dbt_sp)
+# Layers (all in the DuckLake attached as `lake`, see profiles.yml):
 #
-# Everything lives in the DuckLake attached as `lake` (profiles.yml):
-# - silver: incremental. Each run recomputes only the acquisition months that
-#   received new loads in bronze (see macros/firms_silver.sql) and replaces
-#   them atomically (delete+insert on acq_month, partitioned by acq_month).
-#   `dbt run --full-refresh` rebuilds everything from bronze.
-# - gold: views over silver (clean rows only), so they never need rebuilding.
+#   bronze   lake.firms_raw.*        dlt, append-only (sources.yml)
+#            lake.weather_raw.*      dlt, append-only: NASA POWER daily weather near fires
+#   silver   staging/                one view per bronze table: cleaning, types,
+#                                    dq_issue, origin columns, hexagon (h3_r6)
+#            intermediate/           one table per product (SP, NRT): satellites
+#                                    unioned, latest version per detection;
+#                                    plus the static-source mask
+#   gold     gold/                   everything about the hexagon, the canonical
+#                                    entity: dim_hexagon, fct_hexagon_detections
+#                                    (detail), fct_hexagon_daily (metrics)
+#                                    plus weather per grid cell and day near fires:
+#                                    fct_weather_daily (NASA POWER)
+#
+# Incremental models recompute only the acquisition months touched by new loads
+# (macros/incremental.sql). `dbt build --full-refresh` rebuilds everything.
+#
+# Airflow (Cosmos) runs `tag:sp+` after SP loads, `tag:nrt+` after NRT loads and
+# `tag:weather+` after weather loads: each branch plus everything downstream (gold).
+# The weather branch doesn't touch the fire models and vice versa.
 models:
   firms:
     +database: lake
-    nrt:
-      +tags: [nrt]
-      silver: &silver
-        +schema: silver
-        +materialized: incremental
-        +incremental_strategy: delete+insert
-        +unique_key: acq_month
-        +partitioned_by: [acq_month]
-      gold: &gold
-        +schema: gold
-        +materialized: view
-    sp:
-      +tags: [sp]
-      silver: *silver
-      gold: *gold
+    staging:
+      +schema: silver
+      +materialized: view
+    intermediate:
+      +schema: silver
+    gold:
+      +schema: gold
+    harmonized:
+      +schema: gold
+      +tags: ['harmonized']  # built by the firms_dbt_harmonize DAG, not by firms_dbt_sp / firms_dbt_nrt
+
+# k = VIIRS / MODIS per H3 cell, frozen (see seeds/k_cell.csv, schema.yml).
+seeds:
+  firms:
+    +database: lake
+    +schema: gold
+    +tags: ['harmonized']
+    k_cell:
+      +column_types: {h3: varchar, res: integer, n_modis: bigint, n_viirs: bigint, k_frp: double, k_count: double}
