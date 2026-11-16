@@ -227,7 +227,7 @@ layers that put both in the same units (MODIS units). All of it is dbt, tagged `
 | `hrm_modis_merged` | MODIS with bow-tie duplicates merged (same pass, within half a pixel along track and along scan) and FRP corrected for pixel size |
 | `fct_hexagon_harmonized_daily` | hexagon x day x sensor, both in MODIS units (VIIRS S-NPP divided by k). Feeds the Compare view, the calendar and the hexagon report |
 | `fct_hexagon_harmonized_monthly` | the one series across the 2012 change: MODIS before 2012-02, VIIRS S-NPP / k after |
-| `fct_area_coverage_monthly` | which area-months were really downloaded; tells "no detection" from "no data". Needs `firms_raw.download_windows` (see above) |
+| `fct_area_coverage_monthly` | which area-months were really downloaded; tells "no detection" from "no data". Needs `firms_raw.download_windows` (see above). A download of the whole world (what the scheduled ingest asks for) covers every known area, a bounding box covers the areas inside it |
 | seed `reliability_model`, `hrm_detection_reliability`, `fct_hexagon_reliability_monthly` | persistence (neighbours of the same sensor within 1.5 km and 1-36 h) and the reliability index: P(an independent sensor confirms the detection), logistic on confidence, persistence and FRP, frozen coefficients (`data_exploration/reliability/`) |
 
 Limits worth knowing: only S-NPP is on the VIIRS side (k was calibrated on it); the k outside the 4 calibrated areas is a
