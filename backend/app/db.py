@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import re
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
@@ -174,16 +176,59 @@ _attached = False
 _attach_lock = threading.Lock()
 
 
-def connect() -> None:
-    """Open the shared in-memory database, load the extensions and attach the lake."""
-    global _con, _attached
-    _con = duckdb.connect()
-    _con.execute(
+def _new_connection() -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect()
+    con.execute(
         "INSTALL spatial; LOAD spatial; INSTALL h3 FROM community; LOAD h3; "
         "INSTALL ducklake; LOAD ducklake; INSTALL sqlite; LOAD sqlite;"
     )
+    return con
+
+
+def _attach(con: duckdb.DuckDBPyConnection, catalog: str) -> None:
+    con.execute(
+        f"ATTACH {_sql_str('ducklake:sqlite:' + catalog)} AS {LAKE_ALIAS} "
+        f"(READ_ONLY, DATA_PATH {_sql_str(lake_path() + '/files/')}, OVERRIDE_DATA_PATH true)"
+    )
+
+
+def connect() -> None:
+    """Open the shared in-memory database, load the extensions and attach the lake."""
+    global _con, _attached
+    _con = _new_connection()
     _attached = False
     _ensure_attached()
+
+
+# What a connection says when the ETL changed the lake under it (a table was rewritten, compacted, or its inlined data moved to
+# another schema version): it still reads the catalog as it was when it attached.
+_STALE = re.compile(r"ducklake_inlined_data|inlined data|No such file|Could not open file|Cannot open file", re.I)
+_STALE_TYPES = (duckdb.CatalogException, duckdb.IOException, duckdb.InvalidInputException)
+_REFRESH_MIN_S = 2.0
+_refreshed_at = 0.0
+
+
+def is_stale_error(exc: BaseException) -> bool:
+    return isinstance(exc, _STALE_TYPES) and bool(_STALE.search(str(exc)))
+
+
+def refresh() -> bool:
+    """Re-attach the lake on a fresh connection, so queries see the catalog as it is now.
+
+    The new connection is fully attached before it replaces the shared one; requests already running keep the old one (not
+    closed: they are still using it). Several failing requests at once refresh once.
+    """
+    global _con, _attached, _refreshed_at
+    with _attach_lock:
+        if time.monotonic() - _refreshed_at < _REFRESH_MIN_S:
+            return True
+        catalog = f"{lake_path()}/catalog.sqlite"
+        if not _catalog_initialized(catalog):
+            return False
+        con = _new_connection()
+        _attach(con, catalog)
+        _con, _attached, _refreshed_at = con, True, time.monotonic()
+    return True
 
 
 def _catalog_initialized(catalog: str) -> bool:
@@ -219,10 +264,7 @@ def _ensure_attached() -> bool:
         return False
     with _attach_lock:
         if not _attached:
-            _con.execute(
-                f"ATTACH {_sql_str('ducklake:sqlite:' + catalog)} AS {LAKE_ALIAS} "
-                f"(READ_ONLY, DATA_PATH {_sql_str(lake_path() + '/files/')}, OVERRIDE_DATA_PATH true)"
-            )
+            _attach(_con, catalog)
             _attached = True
     return True
 
@@ -280,7 +322,37 @@ def exists(cur: duckdb.DuckDBPyConnection, ds: Dataset) -> bool:
     return cur.execute(f"select exists (select 1 from {ds.daily} where {ds.predicate()})").fetchone()[0]
 
 
+_summaries_cache: tuple[int, dict] | None = None  # (lake snapshot, summaries)
+_summaries_lock = threading.Lock()
+
+
+def _lake_snapshot(cur: duckdb.DuckDBPyConnection) -> int | None:
+    """Id of the latest snapshot of the lake (what changes when the ETL writes). None if it can't be read."""
+    try:
+        return cur.execute(f"select max(snapshot_id) from ducklake_snapshots('{LAKE_ALIAS}')").fetchone()[0]
+    except duckdb.Error:
+        return None
+
+
 def hexagon_summaries(cur: duckdb.DuckDBPyConnection) -> dict[DatasetId, tuple[int, date, date]]:
+    """Same as _hexagon_summaries, kept per lake snapshot: it scans the whole daily table (seconds), and the lake only
+    changes when the ETL writes, so the first request after a write pays and the rest are instant."""
+    global _summaries_cache
+    snapshot = _lake_snapshot(cur)
+    cached = _summaries_cache
+    if snapshot is not None and cached is not None and cached[0] == snapshot:
+        return dict(cached[1])
+    with _summaries_lock:  # concurrent first requests wait for one scan instead of each doing their own
+        cached = _summaries_cache
+        if snapshot is not None and cached is not None and cached[0] == snapshot:
+            return dict(cached[1])
+        out = _hexagon_summaries(cur)
+        if snapshot is not None:
+            _summaries_cache = (snapshot, out)
+        return dict(out)
+
+
+def _hexagon_summaries(cur: duckdb.DuckDBPyConnection) -> dict[DatasetId, tuple[int, date, date]]:
     """(fire detections, first date, last date) of every MODIS/VIIRS dataset with data,
     in one pass over the daily metrics (instead of one query per dataset)."""
     if not _attached or not all(t in _tables(cur) for t in HEXAGON_TABLES):

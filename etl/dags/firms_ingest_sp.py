@@ -52,6 +52,8 @@ SP_DEFAULT_START = date(2025, 1, 1)
                           description="Empty = everything FIRMS has published"),
         "chunk_days": Param(30, type="integer", minimum=5, maximum=92,
                             description="Days per load task (one task per chunk)"),
+        "products": Param(None, type=["null", "array"], items={"type": "string"},
+                          description='Empty = all SP products. E.g. ["VIIRS_SNPP_SP"] to load one sensor first (MODIS later)'),
     },
     tags=["firms", "sp", "dlt", "ingest"],
 )
@@ -70,7 +72,13 @@ def firms_ingest_sp():
         last_loaded = last_loaded_dates([p.lower() for p in SP_PRODUCTS])
 
         ranges = {}
+        wanted = {p.upper() for p in (params.get("products") or SP_PRODUCTS)}
+        unknown = wanted - set(SP_PRODUCTS)
+        if unknown:
+            raise ValueError(f"unknown SP products {sorted(unknown)}; choose from {list(SP_PRODUCTS)}")
         for product in SP_PRODUCTS:
+            if product not in wanted:
+                continue
             if forced_start:
                 start = forced_start
             elif product.lower() in last_loaded:

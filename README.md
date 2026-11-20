@@ -4,6 +4,15 @@ NASA Space Apps 2026. NASA FIRMS active-fire detections from **MODIS** and
 **VIIRS**, with the weather around them (NASA POWER: MERRA-2 / GEOS-IT daily),
 ingested into a local lake and shown on a map.
 
+> **Source code:** <https://github.com/CarlosGitto/nasa-space-apps-2026-modis-viirs-harmonization>
+> (day-to-day work happens on the `dev` branch).
+>
+> ```bash
+> git clone git@github.com:CarlosGitto/nasa-space-apps-2026-modis-viirs-harmonization.git
+> # or over HTTPS:
+> git clone https://github.com/CarlosGitto/nasa-space-apps-2026-modis-viirs-harmonization.git
+> ```
+
 ```
 FIRMS API ───────┐
                  ├──▶ etl/ (Airflow: dlt + dbt) ──▶ data/lake (DuckLake) ──▶ backend/ (FastAPI) ──▶ frontend/ (Vue map)

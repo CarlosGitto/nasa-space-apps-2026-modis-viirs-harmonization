@@ -6,6 +6,8 @@
     "sidebar": "Calendario de fuego y filtros",
     "mapArea": "Mapa del período del calendario y línea de tiempo",
     "language": "Idioma",
+    "sourceCode": "Código fuente en GitHub",
+    "opensNewTab": "(se abre en una pestaña nueva)",
     "backendDown": "No se pudieron cargar los datos: {error}",
     "hidePanel": "Ocultar el panel",
     "showPanel": "Mostrar el panel",

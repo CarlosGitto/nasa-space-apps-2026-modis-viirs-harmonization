@@ -13,6 +13,7 @@ import HexagonPanel from './components/hexagon/HexagonPanel.vue'
 import { useFiltersStore } from './stores/filters'
 import { usePrefsStore } from './stores/prefs'
 
+const REPO_URL = 'https://github.com/CarlosGitto/nasa-space-apps-2026-modis-viirs-harmonization'
 const store = useFiltersStore()
 const prefs = usePrefsStore() // applies the saved language and accessibility options to <html>
 const collapsed = computed(() => prefs.sidebarCollapsed)
@@ -44,6 +45,9 @@ onMounted(() => store.loadDatasets())
           <div class="brand">
             <h1>{{ $t('app.title') }}</h1>
             <p>{{ $t('app.subtitle') }}</p>
+            <a class="repo" :href="REPO_URL" target="_blank" rel="noopener noreferrer">
+              {{ $t('app.sourceCode') }}<span class="sr-only"> {{ $t('app.opensNewTab') }}</span>
+            </a>
           </div>
           <div class="prefs">
             <LanguageSwitch />
@@ -123,6 +127,8 @@ onMounted(() => store.loadDatasets())
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 header h1 { margin: 0; font-size: 1.125rem; }
 header p { margin: 2px 0 0; font-size: 0.75rem; color: var(--muted); }
+.repo { display: inline-block; margin-top: 2px; font-size: 0.75rem; color: var(--muted); text-decoration: underline; }
+.repo:hover, .repo:focus-visible { color: inherit; }
 .prefs { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .error { margin: 0; color: var(--danger); font-size: 0.8125rem; }
 .map-area { min-height: 0; display: flex; flex-direction: column; container: map-area / inline-size; }

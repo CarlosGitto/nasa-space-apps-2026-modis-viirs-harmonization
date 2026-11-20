@@ -6,6 +6,8 @@
     "sidebar": "Fire calendar and filters",
     "mapArea": "Map of the calendar's period and timeline",
     "language": "Language",
+    "sourceCode": "Source code on GitHub",
+    "opensNewTab": "(opens in a new tab)",
     "backendDown": "Could not load the data: {error}",
     "hidePanel": "Hide the panel",
     "showPanel": "Show the panel",

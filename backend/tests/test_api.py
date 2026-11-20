@@ -794,3 +794,69 @@ def test_typical_windows_are_whole_other_years():
     assert (date(2023, 2, 28), date(2023, 3, 1)) in _typical_windows(con, "d", date(2024, 2, 29), date(2024, 3, 1))
     # a period longer than a year never overlaps itself
     assert _typical_windows(con, "d", date(2021, 1, 1), date(2022, 6, 30)) == [(date(2023, 1, 1), date(2024, 6, 30))]
+
+
+def test_stale_catalog_is_reattached_and_the_request_retried(client, monkeypatch):
+    """The ETL rewrites a table under the running backend: the query fails once, the backend re-attaches and answers."""
+    real = db.hexagon_summaries
+    calls = {"n": 0}
+
+    def flaky(cur):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise duckdb.CatalogException("Failed to read inlined data from DuckLake: Table ducklake_inlined_data_27_21 does not exist!")
+        return real(cur)
+
+    monkeypatch.setattr(db, "hexagon_summaries", flaky)
+    monkeypatch.setattr(db, "_refreshed_at", 0.0)
+    before = db._con
+    r = client.get("/datasets")
+    assert r.status_code == 200
+    assert calls["n"] == 2
+    assert db._con is not before  # a fresh connection replaced the shared one
+
+
+def test_other_errors_are_not_retried(client, monkeypatch):
+    calls = {"n": 0}
+
+    def broken(cur):
+        calls["n"] += 1
+        raise duckdb.CatalogException("Table with name nope does not exist")
+
+    monkeypatch.setattr(db, "hexagon_summaries", broken)
+    with pytest.raises(duckdb.CatalogException):
+        client.get("/datasets")
+    assert calls["n"] == 1
+
+
+def test_large_responses_are_gzipped(client):
+    """The JSON of the map is big and repetitive: it must travel compressed when the browser accepts it."""
+    plain = client.get("/datasets", headers={"Accept-Encoding": "identity"})
+    zipped = client.get("/datasets", headers={"Accept-Encoding": "gzip"})
+    assert plain.status_code == zipped.status_code == 200
+    assert "content-encoding" not in plain.headers
+    assert len(plain.content) >= 1024, "the test needs a response big enough to be compressed"
+    assert zipped.headers["content-encoding"] == "gzip"
+    assert int(zipped.headers["content-length"]) < len(plain.content)  # httpx decodes the body; the header is the wire size
+    assert zipped.json() == plain.json()
+
+
+def test_dataset_summaries_are_cached_per_lake_snapshot(client, monkeypatch):
+    """/datasets scans the whole daily table: it must do it once per lake snapshot, not on every visit."""
+    monkeypatch.setattr(db, "_summaries_cache", None)
+    scans = {"n": 0}
+    real = db._hexagon_summaries
+
+    def counted(cur):
+        scans["n"] += 1
+        return real(cur)
+
+    monkeypatch.setattr(db, "_hexagon_summaries", counted)
+    first = client.get("/datasets").json()
+    again = client.get("/datasets").json()
+    assert first == again
+    assert scans["n"] == 1
+    # the ETL writes: a new snapshot, so the next visit scans again
+    monkeypatch.setattr(db, "_lake_snapshot", lambda cur: 10**9)
+    client.get("/datasets")
+    assert scans["n"] == 2
